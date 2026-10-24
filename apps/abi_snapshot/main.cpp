@@ -1896,7 +1896,10 @@ std::string BuildSnapshot() {
          {"display_type", offsetof(AnomalyNteDamageEchoRequestV1, display_type)},
          {"reaction_type", offsetof(AnomalyNteDamageEchoRequestV1, reaction_type)},
          {"reaction_display_type",
-             offsetof(AnomalyNteDamageEchoRequestV1, reaction_display_type)}},
+             offsetof(AnomalyNteDamageEchoRequestV1, reaction_display_type)},
+         {"ticks_per_second",
+             offsetof(AnomalyNteDamageEchoRequestV1, ticks_per_second)},
+         {"reserved", offsetof(AnomalyNteDamageEchoRequestV1, reserved)}},
         false);
     AppendStruct(
         output,
@@ -1921,7 +1924,10 @@ std::string BuildSnapshot() {
          {"user", offsetof(AnomalyNteDamageEchoServiceV1, user)},
          {"apply_manual", offsetof(AnomalyNteDamageEchoServiceV1, apply_manual)},
          {"apply_native_dot",
-             offsetof(AnomalyNteDamageEchoServiceV1, apply_native_dot)}},
+             offsetof(AnomalyNteDamageEchoServiceV1, apply_native_dot)},
+         {"dot_count", offsetof(AnomalyNteDamageEchoServiceV1, dot_count)},
+         {"dot_name_at", offsetof(AnomalyNteDamageEchoServiceV1, dot_name_at)},
+         {"select_dot", offsetof(AnomalyNteDamageEchoServiceV1, select_dot)}},
         false);
     AppendStruct(
         output,

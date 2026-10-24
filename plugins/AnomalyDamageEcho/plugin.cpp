@@ -14,10 +14,10 @@
 
 namespace {
 
-constexpr std::uint32_t kMaxTicksPerSecond = 10;
+constexpr std::uint32_t kMaxTicksPerSecond = 1000;
 constexpr std::size_t kMaxTargets = 64;
 constexpr std::size_t kMaxEventsPerUpdate = 128;
-constexpr std::size_t kMaxApplicationsPerUpdate = 8;
+constexpr std::size_t kMaxApplicationsPerUpdate = 64;
 
 constexpr char kPluginId[] = "anomaly.local.damage-echo";
 constexpr char kPluginName[] = "Damage Echo";
@@ -43,6 +43,9 @@ struct SharedState {
     bool enabled{true};
     std::uint32_t mode{};  // 0 = exact HP + damage text, 1 = native DoT GE.
     std::uint32_t ticks_per_second{4};
+    std::uint32_t dot_index{};
+    std::vector<std::string> dot_names;
+    int pending_dot{-1};
     std::unordered_map<std::uint64_t, EchoTarget> targets;
     std::string status{"等待 Game 域伤害事件"};
     std::uint64_t cursor{};
@@ -67,18 +70,19 @@ struct PluginContext {
 }
 
 template <typename Service>
-const Service* QueryService(const AnomalyHostApiV1* host, const char* id) noexcept {
+const Service* QueryService(const AnomalyHostApiV1* host, const char* id,
+                            std::uint32_t version = 1) noexcept {
     if (host == nullptr || host->query_service == nullptr) return nullptr;
     const void* table{};
     const AnomalyStringViewV1 service_id{
         id, std::strlen(id)};
-    if (host->query_service(host->host_context, service_id, 1, &table).code !=
+    if (host->query_service(host->host_context, service_id, version, &table).code !=
             ANOMALY_STATUS_V1_OK ||
         table == nullptr) {
         return nullptr;
     }
     const auto* service = static_cast<const Service*>(table);
-    if (service->struct_size < sizeof(Service) || service->service_version < 1) return nullptr;
+    if (service->struct_size < sizeof(Service) || service->service_version < version) return nullptr;
     return service;
 }
 
@@ -166,6 +170,7 @@ void ApplyTargets(PluginContext& context, double delta_seconds) {
             ++applications;
             AnomalyNteDamageEchoRequestV1 request{};
             FillRequest(target, request);
+            request.ticks_per_second = shared.ticks_per_second;
             AnomalyNteDamageEchoResultV1 result{};
             result.struct_size = sizeof(result);
             const auto status = shared.mode == 0
@@ -210,7 +215,8 @@ void RefreshServices(PluginContext& context) {
     }
     if (context.echo == nullptr) {
         context.echo = QueryService<AnomalyNteDamageEchoServiceV1>(
-            context.host, ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_ID);
+            context.host, ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_ID,
+            ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION);
     }
     if (context.build == nullptr) {
         context.build = QueryService<AnomalyUe5BuildServiceV1>(
@@ -240,12 +246,59 @@ void DrainEvents(PluginContext& context, const AnomalyNteCombatantSnapshotV1& pl
     }
 }
 
+void RefreshDotChoices(PluginContext& context) {
+    if (context.echo == nullptr || context.echo->dot_count == nullptr ||
+        context.echo->dot_name_at == nullptr) return;
+    {
+        std::scoped_lock lock(context.shared.mutex);
+        if (!context.shared.dot_names.empty()) return;
+    }
+    const auto count = context.echo->dot_count(context.echo->user);
+    std::vector<std::string> names;
+    names.reserve((std::min)(count, 64U));
+    for (std::uint32_t index = 0; index < count && index < 64U; ++index) {
+        std::size_t size{};
+        if (context.echo->dot_name_at(context.echo->user, index, nullptr, &size).code !=
+                ANOMALY_STATUS_V1_BUFFER_TOO_SMALL || size == 0 || size > 256) {
+            continue;
+        }
+        std::string name(size, '\0');
+        if (context.echo->dot_name_at(context.echo->user, index, name.data(), &size).code ==
+            ANOMALY_STATUS_V1_OK) {
+            if (const auto end = name.find('\0'); end != std::string::npos) name.resize(end);
+            if (!name.empty()) names.push_back(std::move(name));
+        }
+    }
+    std::scoped_lock lock(context.shared.mutex);
+    context.shared.dot_names = std::move(names);
+    if (context.shared.dot_index >= context.shared.dot_names.size()) {
+        context.shared.dot_index = 0;
+    }
+}
+
 void Update(PluginContext& context, double delta_seconds) {
     if (context.host == nullptr) return;
     context.service_retry += (std::max)(delta_seconds, 0.0);
     if (context.service_retry >= 0.5) {
         context.service_retry = 0.0;
         RefreshServices(context);
+    RefreshDotChoices(context);
+    {
+        int pending = -1;
+        {
+            std::scoped_lock lock(context.shared.mutex);
+            pending = context.shared.pending_dot;
+            context.shared.pending_dot = -1;
+        }
+        if (pending >= 0 && context.echo != nullptr &&
+            context.echo->select_dot != nullptr) {
+            if (context.echo->select_dot(context.echo->user,
+                    static_cast<std::uint32_t>(pending)).code == ANOMALY_STATUS_V1_OK) {
+                std::scoped_lock lock(context.shared.mutex);
+                context.shared.dot_index = static_cast<std::uint32_t>(pending);
+            }
+        }
+    }
     }
     if (context.combat == nullptr || context.echo == nullptr) return;
 
@@ -293,6 +346,8 @@ void Draw(PluginContext& context, const AnomalyUiServiceV1* ui) {
     std::uint32_t rate{};
     std::size_t targets{};
     std::string status;
+    std::vector<std::string> dot_names;
+    std::uint32_t dot_index{};
     {
         std::scoped_lock lock(context.shared.mutex);
         enabled = context.shared.enabled;
@@ -300,6 +355,8 @@ void Draw(PluginContext& context, const AnomalyUiServiceV1* ui) {
         rate = context.shared.ticks_per_second;
         targets = context.shared.targets.size();
         status = context.shared.status;
+        dot_names = context.shared.dot_names;
+        dot_index = context.shared.dot_index;
     }
     const bool visible = ui->begin_window(
         ui->user, View("伤害回响 / Damage Echo"), &context.window_open, 0) != 0;
@@ -326,6 +383,21 @@ void Draw(PluginContext& context, const AnomalyUiServiceV1* ui) {
             context.shared.mode = 1;
             context.shared.targets.clear();
             SetStatus(context.shared, "已切换 B 模式；伤害量由游戏 DoT GE 决定");
+        }
+        if (mode == 1) {
+            char heading[96]{};
+            std::snprintf(heading, sizeof(heading), "通用 DoT（已加载 %zu 项）",
+                dot_names.size());
+            text(heading);
+            for (std::size_t index = 0; index < dot_names.size() && index < 32U; ++index) {
+                const std::string label = (index == dot_index ? "[当前] " : "选择 ") +
+                    dot_names[index];
+                if (ui->button(ui->user, View(label.c_str()), 0.0F, 0.0F) != 0) {
+                    std::scoped_lock lock(context.shared.mutex);
+                    context.shared.pending_dot = static_cast<int>(index);
+                }
+            }
+            if (dot_names.empty()) text("尚未读取到通用 DoT；请进入世界后重试。");
         }
         ui->separator(ui->user);
         float rate_value = static_cast<float>(rate);

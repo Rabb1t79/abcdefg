@@ -752,6 +752,13 @@ struct Ue5NteAdapter::State {
         bool attempted{};
     };
     NativeDotClassCache native_dot_class_cache;
+    struct NativeDotChoice {
+        std::string name;
+        std::uintptr_t gameplay_effect{};
+    };
+    std::vector<NativeDotChoice> native_dot_choices;
+    std::uint32_t selected_native_dot{};
+    std::uint64_t native_dot_choices_generation{};
     struct DamageEchoSession {
         std::array<std::uint8_t, 0x80> parameters{};
         std::uint32_t parms_size{};
@@ -8150,12 +8157,17 @@ struct Ue5NteAdapter::State {
         if (native_dot_class_cache.object_generation != object_generation) {
             native_dot_class_cache = {};
             native_dot_class_cache.object_generation = object_generation;
+            native_dot_choices.clear();
+            native_dot_choices_generation = object_generation;
+            selected_native_dot = 0;
         }
-        if (native_dot_class_cache.attempted) {
-            gameplay_effect = native_dot_class_cache.gameplay_effect_class;
+        if (!native_dot_choices.empty()) {
+            if (selected_native_dot >= native_dot_choices.size()) selected_native_dot = 0;
+            gameplay_effect = native_dot_choices[selected_native_dot].gameplay_effect;
             return gameplay_effect != 0;
         }
         native_dot_class_cache.attempted = true;
+        native_dot_choices.clear();
         const auto& apply_binding = combat_skill_discovery.functions[
             NteIndex(NteFunctionKind::ApplyGameplayEffect)];
         const auto& target_binding = combat_skill_discovery.functions[
@@ -8199,13 +8211,55 @@ struct Ue5NteAdapter::State {
                         !IsClassDerivedFromLocked(candidate, meta_binding->meta_class))) {
                     continue;
                 }
-                native_dot_class_cache.gameplay_effect_class = candidate;
-                gameplay_effect = candidate;
-                return true;
+                native_dot_choices.push_back({name, candidate});
             }
+            if (native_dot_choices.empty()) return false;
+            if (selected_native_dot >= native_dot_choices.size()) selected_native_dot = 0;
+            native_dot_class_cache.gameplay_effect_class =
+                native_dot_choices[selected_native_dot].gameplay_effect;
+            gameplay_effect = native_dot_class_cache.gameplay_effect_class;
+            return true;
         } catch (...) {
         }
         return false;
+    }
+
+    std::uint32_t NativeDotCount() noexcept {
+        std::uintptr_t ignored{};
+        static_cast<void>(FindNativeDotGameplayEffectLocked(ignored));
+        return static_cast<std::uint32_t>(native_dot_choices.size());
+    }
+
+    AnomalyStatusV1 NativeDotNameAt(
+        const std::uint32_t index, char* destination, std::size_t* inout_size) noexcept {
+        if (destination == nullptr || inout_size == nullptr) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+        }
+        std::uintptr_t ignored{};
+        static_cast<void>(FindNativeDotGameplayEffectLocked(ignored));
+        if (index >= native_dot_choices.size()) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND);
+        }
+        const auto& name = native_dot_choices[index].name;
+        const std::size_t required = name.size() + 1U;
+        if (*inout_size < required) {
+            *inout_size = required;
+            return Status(ANOMALY_STATUS_V1_BUFFER_TOO_SMALL);
+        }
+        std::memcpy(destination, name.c_str(), required);
+        *inout_size = required;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 NativeDotSelect(const std::uint32_t index) noexcept {
+        std::uintptr_t ignored{};
+        static_cast<void>(FindNativeDotGameplayEffectLocked(ignored));
+        if (index >= native_dot_choices.size()) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND);
+        }
+        selected_native_dot = index;
+        native_dot_class_cache.gameplay_effect_class = native_dot_choices[index].gameplay_effect;
+        return Status(ANOMALY_STATUS_V1_OK);
     }
 
     AnomalyStatusV1 ApplyManualDamage(
@@ -8572,6 +8626,9 @@ struct Ue5NteAdapter::State {
                     std::array<std::uint8_t, 7> tail{};
                 } modify{};
                 static_assert(sizeof(BufferData) == 0x58);
+                if (request->struct_size >= offsetof(AnomalyNteDamageEchoRequestV1, ticks_per_second) + sizeof(request->ticks_per_second) && request->ticks_per_second > 0) {
+                    modify.period = 1.0F / static_cast<float>((std::min)(request->ticks_per_second, 1000U));
+                }
                 const auto name_offset = Layout(profile, "object.nameOffset", -1);
                 const auto outer_offset = Layout(profile, "object.outer", -1);
                 std::uintptr_t name_owner = gameplay_effect;
@@ -8631,6 +8688,9 @@ struct Ue5NteAdapter::State {
                     std::array<std::uint8_t, 7> tail{};
                 } modify{};
                 static_assert(sizeof(ServerBufferData) == 0x58);
+                if (request->struct_size >= offsetof(AnomalyNteDamageEchoRequestV1, ticks_per_second) + sizeof(request->ticks_per_second) && request->ticks_per_second > 0) {
+                    modify.period = 1.0F / static_cast<float>((std::min)(request->ticks_per_second, 1000U));
+                }
                 const auto name_offset = Layout(profile, "object.nameOffset", -1);
                 const auto outer_offset = Layout(profile, "object.outer", -1);
                 std::uintptr_t name_owner = gameplay_effect;
@@ -14355,7 +14415,9 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             this, DamageChainApplyAddressThunk, DamageChainGateAddressThunk};
         damage_echo_service = {
             sizeof(AnomalyNteDamageEchoServiceV1), ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION,
-            this, DamageEchoManualThunk, DamageEchoNativeDotThunk};
+            this, DamageEchoManualThunk, DamageEchoNativeDotThunk,
+            DamageEchoDotCountThunk, DamageEchoDotNameAtThunk,
+            DamageEchoSelectDotThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -14780,6 +14842,26 @@ private:
         AnomalyNteDamageEchoResultV1* result) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->ApplyNativeDot(request, result)
+                     : StoppedStatus();
+    }
+
+    static std::uint32_t ANOMALY_CALL DamageEchoDotCountThunk(void* user) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->NativeDotCount() : 0U;
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageEchoDotNameAtThunk(
+        void* user, std::uint32_t index, char* destination,
+        std::size_t* inout_size) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->NativeDotNameAt(
+            index, destination, inout_size) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageEchoSelectDotThunk(
+        void* user, std::uint32_t index) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->NativeDotSelect(index)
                      : StoppedStatus();
     }
 

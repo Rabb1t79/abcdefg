@@ -981,7 +981,7 @@ typedef struct AnomalyNteDamageChainServiceV1 {
 // DoT GameplayEffect and reports its active state; the game's own GE formula
 // remains authoritative for that mode.
 #define ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_ID "anomaly.nte.damage-echo"
-#define ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION 1u
+#define ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION 2u
 typedef uint32_t AnomalyNteDamageEchoFlagsV1;
 #define ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE (1u << 0u)
 #define ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL (1u << 1u)
@@ -1003,6 +1003,8 @@ typedef struct AnomalyNteDamageEchoRequestV1 {
     uint32_t display_type;
     uint32_t reaction_type;
     uint32_t reaction_display_type;
+    uint32_t ticks_per_second;
+    uint32_t reserved;
 } AnomalyNteDamageEchoRequestV1;
 
 typedef struct AnomalyNteDamageEchoResultV1 {
@@ -1026,6 +1028,11 @@ typedef struct AnomalyNteDamageEchoServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *apply_native_dot)(
         void* user, const AnomalyNteDamageEchoRequestV1* request,
         AnomalyNteDamageEchoResultV1* result);
+    // V2: enumerate and select the loaded generic DoT GameplayEffect.
+    uint32_t (ANOMALY_CALL *dot_count)(void* user);
+    AnomalyStatusV1 (ANOMALY_CALL *dot_name_at)(
+        void* user, uint32_t index, char* destination, size_t* inout_size);
+    AnomalyStatusV1 (ANOMALY_CALL *select_dot)(void* user, uint32_t index);
 } AnomalyNteDamageEchoServiceV1;
 #ifdef __cplusplus
 }

@@ -52,7 +52,7 @@
     "ANOMALY_NTE_MAP_LANDMARK_V1_WORLD_MAX_UTF8_BYTES": 2048,
     "ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION": 8,
     "ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION": 1,
-    "ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION": 2,
     "ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE": 1,
     "ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL": 2,
     "ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT": 4,
@@ -1583,7 +1583,7 @@
       }
     },
     "AnomalyNteDamageEchoRequestV1": {
-      "size": 64,
+      "size": 72,
       "alignment": 8,
       "offsets": {
         "struct_size": 0,
@@ -1594,7 +1594,9 @@
         "damage_type": 48,
         "display_type": 52,
         "reaction_type": 56,
-        "reaction_display_type": 60
+        "reaction_display_type": 60,
+        "ticks_per_second": 64,
+        "reserved": 68
       }
     },
     "AnomalyNteDamageEchoResultV1": {
@@ -1611,14 +1613,17 @@
       }
     },
     "AnomalyNteDamageEchoServiceV1": {
-      "size": 32,
+      "size": 56,
       "alignment": 8,
       "offsets": {
         "struct_size": 0,
         "service_version": 4,
         "user": 8,
         "apply_manual": 16,
-        "apply_native_dot": 24
+        "apply_native_dot": 24,
+        "dot_count": 32,
+        "dot_name_at": 40,
+        "select_dot": 48
       }
     },
     "AnomalyNtePickupRequestV1": {
@@ -2202,7 +2207,7 @@
     { "id": "anomaly.nte.metrics", "version": 1, "table": "AnomalyNteMetricsServiceV1" },
     { "id": "anomaly.nte.vehicle", "version": 8, "table": "AnomalyNteVehicleServiceV1" },
     { "id": "anomaly.nte.attack-input", "version": 1, "table": "AnomalyNteAttackInputServiceV1" },
-    { "id": "anomaly.nte.damage-echo", "version": 1, "table": "AnomalyNteDamageEchoServiceV1" },
+    { "id": "anomaly.nte.damage-echo", "version": 2, "table": "AnomalyNteDamageEchoServiceV1" },
     { "id": "anomaly.nte.esc-menu-button", "version": 1, "table": "AnomalyNteEscMenuButtonServiceV1" }
   ]
 }
