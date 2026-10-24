@@ -761,6 +761,14 @@ struct Ue5NteAdapter::State {
         bool valid{};
         bool replaying{};
     } damage_echo_session;
+    struct TryActivateSession {
+        std::array<std::uint8_t, 0x20> parameters{};
+        std::uint32_t parms_size{};
+        std::uintptr_t object{};
+        std::uintptr_t function{};
+        std::uint16_t replay_key{1};
+        bool valid{};
+    } try_activate_session;
     struct RawNativeDotBinding {
         std::uintptr_t function{};
         bool attempted{};
@@ -8299,8 +8307,26 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t object, const std::uintptr_t function,
         void* const parameters) noexcept {
         if (!started.load(std::memory_order_acquire) ||
-            object != player_pawn || function == 0 || parameters == nullptr ||
+            function == 0 || parameters == nullptr ||
             damage_echo_session.replaying) {
+            return;
+        }
+        std::string function_name;
+        if (ReadReflectedObjectNameLocked(function, function_name) &&
+            function_name == "ServerTryActivateAbility") {
+            std::uint16_t parms_size{};
+            if (ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"),
+                    parms_size) &&
+                parms_size <= try_activate_session.parameters.size()) {
+                std::memcpy(try_activate_session.parameters.data(), parameters, parms_size);
+                try_activate_session.parms_size = parms_size;
+                try_activate_session.object = object;
+                try_activate_session.function = function;
+                try_activate_session.valid = true;
+            }
+            return;
+        }
+        if (object != player_pawn) {
             return;
         }
         const auto& binding = combat_skill_discovery.functions[
@@ -8396,6 +8422,23 @@ struct Ue5NteAdapter::State {
             return reflected.byte_offset < parameters.size() &&
                 (parameters[reflected.byte_offset] & reflected.field_mask) != 0;
         };
+        if (try_activate_session.valid &&
+            try_activate_session.parms_size >= 0x18U) {
+            std::array<std::uint8_t, 0x20> parameters = try_activate_session.parameters;
+            std::int16_t key = try_activate_session.replay_key++;
+            if (try_activate_session.replay_key == 0) try_activate_session.replay_key = 1;
+            std::memcpy(parameters.data() + 8, &key, sizeof(key));
+            std::int16_t base{};
+            std::memcpy(parameters.data() + 0x0A, &base, sizeof(base));
+            parameters[0x0C] = 0;
+            if (InvokeNativeProcessEventLocked(try_activate_session.object,
+                    try_activate_session.function, parameters.data(),
+                    try_activate_session.parms_size)) {
+                result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED;
+                return Status(ANOMALY_STATUS_V1_OK,
+                    "replayed ServerTryActivateAbility session");
+            }
+        }
         if (damage_echo_session.valid &&
             damage_echo_session.target == victim &&
             damage_echo_session.function != 0 &&
