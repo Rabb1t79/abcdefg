@@ -758,6 +758,8 @@ struct Ue5NteAdapter::State {
         std::uintptr_t gameplay_effect{};
     };
     std::vector<NativeDotChoice> native_dot_choices;
+    std::unordered_map<std::uintptr_t, AnomalyGenerationHandleV1>
+        last_damage_ge_by_victim;
     std::uintptr_t legacy_native_dot{};
     std::uint64_t legacy_native_dot_generation{};
     bool legacy_native_dot_attempted{};
@@ -6113,6 +6115,15 @@ struct Ue5NteAdapter::State {
             damage_capture_drop_count.fetch_add(1, std::memory_order_relaxed);
             return;
         }
+        AnomalyGenerationHandleV1 damage_ge_handle{};
+        if (damage.victim != 0 &&
+            WeakObjectHandleLocked(damage.source_index, damage.source_serial,
+                damage_ge_handle)) {
+            if (last_damage_ge_by_victim.size() < 256U ||
+                last_damage_ge_by_victim.contains(damage.victim)) {
+                last_damage_ge_by_victim[damage.victim] = damage_ge_handle;
+            }
+        }
         const bool critical = damage.critical.critical ||
             DamageTagsContainCriticalLocked(damage.tags);
         const bool critical_valid = damage.critical.valid || critical;
@@ -8597,7 +8608,16 @@ struct Ue5NteAdapter::State {
                 "native DoT target GE binding is unavailable");
         }
         std::uintptr_t gameplay_effect{};
-        if (!FindNativeDotGameplayEffectLocked(gameplay_effect) &&
+        if (const auto captured = last_damage_ge_by_victim.find(victim);
+            captured != last_damage_ge_by_victim.end()) {
+            std::uintptr_t captured_effect{};
+            if (ResolveObjectHandleLocked(captured->second, captured_effect) &&
+                captured_effect != 0) {
+                gameplay_effect = captured_effect;
+            }
+        }
+        if (gameplay_effect == 0 &&
+            !FindNativeDotGameplayEffectLocked(gameplay_effect) &&
             !FindLegacyNativeDotLocked(gameplay_effect)) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "native DoT GameplayEffect is not loaded or not validated");
