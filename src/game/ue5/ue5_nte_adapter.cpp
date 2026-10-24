@@ -8202,7 +8202,9 @@ struct Ue5NteAdapter::State {
                 const bool generic_dot = !exact_dot &&
                     name.find("Dot") != std::string::npos &&
                     name.rfind("Buff_", 0) == 0;
-                if (!exact_dot && !generic_dot) continue;
+                const bool damage_ge = name.rfind("GE_Player_", 0) == 0 &&
+                    name.ends_with("_Damage_C");
+                if (!exact_dot && !generic_dot && !damage_ge) continue;
                 std::uintptr_t meta_class{};
                 std::uintptr_t outer{};
                 std::string meta_name;
@@ -8212,7 +8214,11 @@ struct Ue5NteAdapter::State {
                     !ReadReflectedObjectNameLocked(meta_class, meta_name) ||
                     (meta_name != "Class" && meta_name != "BlueprintGeneratedClass") ||
                     !ReadReflectedObjectNameLocked(outer, outer_name) ||
-                    (!exact_dot && outer_name.rfind("Buff_", 0) != 0) ||
+                    (!exact_dot &&
+                        !(generic_dot && outer_name.rfind("Buff_", 0) == 0) &&
+                        !(damage_ge &&
+                            (outer_name.rfind("GE_", 0) == 0 ||
+                             outer_name.rfind("Buff_", 0) == 0))) ||
                     (meta_binding &&
                         !IsClassDerivedFromLocked(candidate, meta_binding->meta_class))) {
                     continue;
@@ -8220,6 +8226,18 @@ struct Ue5NteAdapter::State {
                 native_dot_choices.push_back({name, candidate});
             }
             if (native_dot_choices.empty()) return false;
+            std::stable_sort(native_dot_choices.begin(), native_dot_choices.end(),
+                [](const NativeDotChoice& left, const NativeDotChoice& right) {
+                    const auto priority = [](const std::string& value) {
+                        if (value == "Buff_NormalFireDot_C") return 0;
+                        if (value.rfind("Buff_", 0) == 0) return 1;
+                        return 2;
+                    };
+                    const int left_priority = priority(left.name);
+                    const int right_priority = priority(right.name);
+                    if (left_priority != right_priority) return left_priority < right_priority;
+                    return left.name < right.name;
+                });
             if (selected_native_dot >= native_dot_choices.size()) selected_native_dot = 0;
             native_dot_class_cache.gameplay_effect_class =
                 native_dot_choices[selected_native_dot].gameplay_effect;
@@ -8265,7 +8283,9 @@ struct Ue5NteAdapter::State {
                 const bool generic_dot = !exact_dot &&
                     name.find("Dot") != std::string::npos &&
                     name.rfind("Buff_", 0) == 0;
-                if (!exact_dot && !generic_dot) continue;
+                const bool damage_ge = name.rfind("GE_Player_", 0) == 0 &&
+                    name.ends_with("_Damage_C");
+                if (!exact_dot && !generic_dot && !damage_ge) continue;
                 std::uintptr_t meta_class{};
                 std::uintptr_t outer{};
                 std::string meta_name;
@@ -8275,7 +8295,11 @@ struct Ue5NteAdapter::State {
                     !ReadReflectedObjectNameLocked(meta_class, meta_name) ||
                     (meta_name != "Class" && meta_name != "BlueprintGeneratedClass") ||
                     !ReadReflectedObjectNameLocked(outer, outer_name) ||
-                    (!exact_dot && outer_name.rfind("Buff_", 0) != 0) ||
+                    (!exact_dot &&
+                        !(generic_dot && outer_name.rfind("Buff_", 0) == 0) &&
+                        !(damage_ge &&
+                            (outer_name.rfind("GE_", 0) == 0 ||
+                             outer_name.rfind("Buff_", 0) == 0))) ||
                     (meta_binding && meta_binding->meta_class != 0 &&
                         !IsClassDerivedFromLocked(candidate, meta_binding->meta_class))) {
                     continue;
