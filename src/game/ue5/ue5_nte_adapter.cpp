@@ -8288,6 +8288,7 @@ struct Ue5NteAdapter::State {
             }
         } catch (...) {
         }
+        legacy_native_dot_attempted = false;
         return false;
     }
 

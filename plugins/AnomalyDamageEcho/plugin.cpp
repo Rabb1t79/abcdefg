@@ -197,7 +197,8 @@ void ApplyTargets(PluginContext& context, double delta_seconds) {
                 remove.push_back(target.victim.id);
                 break;
             }
-            if (++target.failures >= 3) {
+            const std::uint32_t failure_limit = shared.mode == 0 ? 3U : 60U;
+            if (++target.failures >= failure_limit) {
                 remove.push_back(target.victim.id);
                 if (status.message.size != 0 && status.message.data != nullptr) {
                     shared.status.assign(status.message.data, status.message.size);
