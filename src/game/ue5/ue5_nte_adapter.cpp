@@ -8507,7 +8507,7 @@ struct Ue5NteAdapter::State {
             return reflected.byte_offset < parameters.size() &&
                 (parameters[reflected.byte_offset] & reflected.field_mask) != 0;
         };
-        if (attack_rpc_count != 0) {
+        if (native_dot_choices.empty() && attack_rpc_count != 0) {
             const auto& captured = attack_rpcs[(attack_rpc_count - 1U) % attack_rpcs.size()];
             if (captured.valid && captured.function != 0 && captured.parms_size != 0) {
                 attack_rpc_replaying = true;
@@ -8522,7 +8522,7 @@ struct Ue5NteAdapter::State {
                 }
             }
         }
-        if (try_activate_session.valid &&
+        if (native_dot_choices.empty() && try_activate_session.valid &&
             try_activate_session.parms_size >= 0x18U) {
             std::array<std::uint8_t, 0x20> parameters = try_activate_session.parameters;
             std::int16_t key = try_activate_session.replay_key++;
@@ -8539,7 +8539,7 @@ struct Ue5NteAdapter::State {
                     "replayed ServerTryActivateAbility session");
             }
         }
-        if (damage_echo_session.valid &&
+        if (native_dot_choices.empty() && damage_echo_session.valid &&
             damage_echo_session.target == victim &&
             damage_echo_session.function != 0 &&
             damage_echo_session.parms_size >= 4U) {
