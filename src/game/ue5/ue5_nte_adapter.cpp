@@ -1876,7 +1876,9 @@ struct Ue5NteAdapter::State {
     [[nodiscard]] bool NteDamageEchoReflectionReady() const noexcept {
         // A mode only needs HP read/write; damage text and B mode are optional
         // per-call capabilities so one missing UI/GE binding cannot hide A.
-        return NteDamageEchoProfileAvailable() && NteCombatReflectionReady() &&
+        return NteDamageEchoProfileAvailable() &&
+            NteFunctionReady(NteFunctionKind::GetHp) &&
+            NteFunctionReady(NteFunctionKind::GetIsDead) &&
             NteFunctionReady(NteFunctionKind::SetHp);
     }
 
