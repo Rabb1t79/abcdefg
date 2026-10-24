@@ -761,6 +761,16 @@ struct Ue5NteAdapter::State {
         bool valid{};
         bool replaying{};
     } damage_echo_session;
+    struct AttackRpc {
+        std::array<std::uint8_t, 0x100> parameters{};
+        std::uint32_t parms_size{};
+        std::uintptr_t object{};
+        std::uintptr_t function{};
+        bool valid{};
+    };
+    std::array<AttackRpc, 8> attack_rpcs{};
+    std::size_t attack_rpc_count{};
+    bool attack_rpc_replaying{};
     struct TryActivateSession {
         std::array<std::uint8_t, 0x20> parameters{};
         std::uint32_t parms_size{};
@@ -8312,8 +8322,29 @@ struct Ue5NteAdapter::State {
             return;
         }
         std::string function_name;
-        if (ReadReflectedObjectNameLocked(function, function_name) &&
-            function_name == "ServerTryActivateAbility") {
+        if (!ReadReflectedObjectNameLocked(function, function_name)) return;
+        if (!attack_rpc_replaying) {
+            std::uint32_t flags{};
+            std::uint16_t parms_size{};
+            if (ReadValue(*memory, function + Layout(profile, "ufunction.flags"), flags) &&
+                (flags & 0x200U) != 0 &&
+                ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"),
+                    parms_size) &&
+                parms_size > 0 && parms_size <= 0x100U &&
+                (function_name.find("Ability") != std::string::npos ||
+                 function_name.find("Skill") != std::string::npos ||
+                 function_name.find("Damage") != std::string::npos ||
+                 function_name.find("Trigger") != std::string::npos)) {
+                auto& entry = attack_rpcs[attack_rpc_count % attack_rpcs.size()];
+                std::memcpy(entry.parameters.data(), parameters, parms_size);
+                entry.parms_size = parms_size;
+                entry.object = object;
+                entry.function = function;
+                entry.valid = true;
+                ++attack_rpc_count;
+            }
+        }
+        if (function_name == "ServerTryActivateAbility") {
             std::uint16_t parms_size{};
             if (ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"),
                     parms_size) &&
@@ -8422,6 +8453,21 @@ struct Ue5NteAdapter::State {
             return reflected.byte_offset < parameters.size() &&
                 (parameters[reflected.byte_offset] & reflected.field_mask) != 0;
         };
+        if (attack_rpc_count != 0) {
+            const auto& captured = attack_rpcs[(attack_rpc_count - 1U) % attack_rpcs.size()];
+            if (captured.valid && captured.function != 0 && captured.parms_size != 0) {
+                attack_rpc_replaying = true;
+                std::array<std::uint8_t, 0x100> parameters = captured.parameters;
+                const bool invoked = InvokeNativeProcessEventLocked(captured.object,
+                    captured.function, parameters.data(), captured.parms_size);
+                attack_rpc_replaying = false;
+                if (invoked) {
+                    result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED;
+                    return Status(ANOMALY_STATUS_V1_OK,
+                        "replayed captured attack RPC");
+                }
+            }
+        }
         if (try_activate_session.valid &&
             try_activate_session.parms_size >= 0x18U) {
             std::array<std::uint8_t, 0x20> parameters = try_activate_session.parameters;
