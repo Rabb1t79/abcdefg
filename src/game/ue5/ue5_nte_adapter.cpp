@@ -752,6 +752,7 @@ struct Ue5NteAdapter::State {
         bool attempted{};
     };
     NativeDotClassCache native_dot_class_cache;
+    std::uint64_t native_dot_last_scan_ms{};
     struct NativeDotChoice {
         std::string name;
         std::uintptr_t gameplay_effect{};
@@ -8167,11 +8168,26 @@ struct Ue5NteAdapter::State {
             native_dot_choices_generation = object_generation;
             selected_native_dot = 0;
         }
-        if (!native_dot_choices.empty()) {
-            if (selected_native_dot >= native_dot_choices.size()) selected_native_dot = 0;
-            gameplay_effect = native_dot_choices[selected_native_dot].gameplay_effect;
-            return gameplay_effect != 0;
+        const std::uint64_t now_ms = GetTickCount64();
+        bool has_skill_damage_ge = false;
+        for (const auto& choice : native_dot_choices) {
+            if (choice.name.rfind("GE_Player_", 0) == 0 &&
+                choice.name.ends_with("_Damage_C")) {
+                has_skill_damage_ge = true;
+                break;
+            }
         }
+        if (!native_dot_choices.empty()) {
+            if (has_skill_damage_ge ||
+                now_ms - native_dot_last_scan_ms < 2000U) {
+                if (selected_native_dot >= native_dot_choices.size()) selected_native_dot = 0;
+                gameplay_effect = native_dot_choices[selected_native_dot].gameplay_effect;
+                return gameplay_effect != 0;
+            }
+            native_dot_choices.clear();
+            selected_native_dot = 0;
+        }
+        native_dot_last_scan_ms = now_ms;
         native_dot_class_cache.attempted = true;
         native_dot_choices.clear();
         const auto& apply_binding = combat_skill_discovery.functions[
@@ -8759,8 +8775,10 @@ struct Ue5NteAdapter::State {
                     !ReadValue(*memory,
                         name_owner + static_cast<std::uintptr_t>(name_offset),
                         modify.buff_name)) {
-                    return Status(ANOMALY_STATUS_V1_FAILED,
-                        "native DoT GameplayEffect name is unreadable");
+                    // BuffName is optional metadata for the target GE; the GE
+                    // class itself is already supplied. Keep the application
+                    // path alive when the reflected name is unavailable.
+                    modify.buff_name = {};
                 }
                 std::memcpy(parameters.data() + modify_offset,
                     &modify, sizeof(modify));
