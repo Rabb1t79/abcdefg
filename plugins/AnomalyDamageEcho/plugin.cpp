@@ -168,6 +168,10 @@ void ApplyTargets(PluginContext& context, double delta_seconds) {
                applications < kMaxApplicationsPerUpdate) {
             target.accumulator -= interval;
             ++applications;
+            if (shared.mode == 1 && target.native_started) {
+                target.accumulator = 0.0;
+                break;
+            }
             AnomalyNteDamageEchoRequestV1 request{};
             FillRequest(target, request);
             request.ticks_per_second = shared.ticks_per_second;
@@ -175,9 +179,12 @@ void ApplyTargets(PluginContext& context, double delta_seconds) {
             result.struct_size = sizeof(result);
             const auto status = shared.mode == 0
                 ? context.echo->apply_manual(context.echo->user, &request, &result)
-                : context.echo->apply_native_dot(context.echo->user, &request, &result);
+                : shared.mode == 1
+                    ? context.echo->apply_native_dot(context.echo->user, &request, &result)
+                    : context.echo->apply_session(context.echo->user, &request, &result);
             if (status.code == ANOMALY_STATUS_V1_OK) {
                 target.failures = 0;
+                if (shared.mode == 1) target.native_started = true;
                 if ((result.flags & ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD) != 0 ||
                     result.dead != 0) {
                     remove.push_back(target.victim.id);
@@ -384,6 +391,12 @@ void Draw(PluginContext& context, const AnomalyUiServiceV1* ui) {
             context.shared.targets.clear();
             SetStatus(context.shared, "已切换 B 模式；伤害量由游戏 DoT GE 决定");
         }
+        if (ui->button(ui->user, View("C Session 重放（捕获攻击）"), 0.0F, 0.0F) != 0) {
+            std::scoped_lock lock(context.shared.mutex);
+            context.shared.mode = 2;
+            context.shared.targets.clear();
+            SetStatus(context.shared, "已切换 C 模式；只重放捕获到的玩家攻击 session");
+        }
         if (mode == 1) {
             char heading[96]{};
             std::snprintf(heading, sizeof(heading), "通用 DoT（已加载 %zu 项）",
@@ -411,7 +424,7 @@ void Draw(PluginContext& context, const AnomalyUiServiceV1* ui) {
         }
         char line[160]{};
         std::snprintf(line, sizeof(line), "当前模式：%s",
-            mode == 0 ? "A 精确回响" : "B 原生 DoT");
+            mode == 0 ? "A 精确回响" : mode == 1 ? "B 原生 DoT" : "C Session 重放");
         text(line);
         std::snprintf(line, sizeof(line), "活跃目标：%zu", targets);
         text(line);

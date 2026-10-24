@@ -52,7 +52,7 @@
     "ANOMALY_NTE_MAP_LANDMARK_V1_WORLD_MAX_UTF8_BYTES": 2048,
     "ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION": 8,
     "ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION": 1,
-    "ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION": 2,
+    "ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION": 3,
     "ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE": 1,
     "ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL": 2,
     "ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT": 4,
@@ -1613,7 +1613,7 @@
       }
     },
     "AnomalyNteDamageEchoServiceV1": {
-      "size": 56,
+      "size": 64,
       "alignment": 8,
       "offsets": {
         "struct_size": 0,
@@ -1623,7 +1623,8 @@
         "apply_native_dot": 24,
         "dot_count": 32,
         "dot_name_at": 40,
-        "select_dot": 48
+        "select_dot": 48,
+        "apply_session": 56
       }
     },
     "AnomalyNtePickupRequestV1": {
@@ -2207,7 +2208,7 @@
     { "id": "anomaly.nte.metrics", "version": 1, "table": "AnomalyNteMetricsServiceV1" },
     { "id": "anomaly.nte.vehicle", "version": 8, "table": "AnomalyNteVehicleServiceV1" },
     { "id": "anomaly.nte.attack-input", "version": 1, "table": "AnomalyNteAttackInputServiceV1" },
-    { "id": "anomaly.nte.damage-echo", "version": 2, "table": "AnomalyNteDamageEchoServiceV1" },
+    { "id": "anomaly.nte.damage-echo", "version": 3, "table": "AnomalyNteDamageEchoServiceV1" },
     { "id": "anomaly.nte.esc-menu-button", "version": 1, "table": "AnomalyNteEscMenuButtonServiceV1" }
   ]
 }

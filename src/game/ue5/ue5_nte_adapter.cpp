@@ -757,6 +757,9 @@ struct Ue5NteAdapter::State {
         std::uintptr_t gameplay_effect{};
     };
     std::vector<NativeDotChoice> native_dot_choices;
+    std::uintptr_t legacy_native_dot{};
+    std::uint64_t legacy_native_dot_generation{};
+    bool legacy_native_dot_attempted{};
     std::uint32_t selected_native_dot{};
     std::uint64_t native_dot_choices_generation{};
     struct DamageEchoSession {
@@ -1541,7 +1544,7 @@ struct Ue5NteAdapter::State {
                 "HTAbilitySystemComponent", 0x74, apply_gameplay_effect_to_target};
         case NteFunctionKind::ServerActivateGameEffects:
             return {kind, "ServerActivateGameEffectsWithClassByActor",
-                "HTAbilityCharacter", 0x80, server_activate_ge};
+                "HTAbilityCharacter", 0x7C, server_activate_ge};
         case NteFunctionKind::HaveGameplayEffectWithClass:
             return {kind, "K2_HaveGameplayEffectWithClass", "HTAbilityCharacter", 16,
                 have_gameplay_effect};
@@ -8012,7 +8015,8 @@ struct Ue5NteAdapter::State {
             ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE |
             ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL |
             ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT |
-            ANOMALY_NTE_DAMAGE_ECHO_V1_WEAK_UNBALANCE;
+            ANOMALY_NTE_DAMAGE_ECHO_V1_WEAK_UNBALANCE |
+            ANOMALY_NTE_DAMAGE_ECHO_V1_SESSION_REPLAY;
         return (request->flags & ~kAllowedRequestFlags) == 0;
     }
 
@@ -8224,9 +8228,73 @@ struct Ue5NteAdapter::State {
         return false;
     }
 
+    [[nodiscard]] bool FindLegacyNativeDotLocked(std::uintptr_t& gameplay_effect) noexcept {
+        gameplay_effect = 0;
+        if (legacy_native_dot_generation != object_generation) {
+            legacy_native_dot = 0;
+            legacy_native_dot_generation = object_generation;
+            legacy_native_dot_attempted = false;
+        }
+        if (legacy_native_dot_attempted) {
+            gameplay_effect = legacy_native_dot;
+            return gameplay_effect != 0;
+        }
+        legacy_native_dot_attempted = true;
+        const auto& apply_binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::ApplyGameplayEffect)];
+        const auto& target_binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::ApplyGameplayEffectToTarget)];
+        const auto& meta_binding = target_binding ? target_binding : apply_binding;
+        if ((!meta_binding || meta_binding->meta_class == 0) &&
+            !ResolveRawTargetGeBindingLocked()) {
+            return false;
+        }
+        if (object_registry.items == 0) return false;
+        try {
+            for (std::uint32_t index = 0; index < object_registry.count; ++index) {
+                std::uintptr_t candidate{};
+                std::uint32_t serial{};
+                if (!ReadObjectSlot(*memory, object_registry, index, candidate, serial) ||
+                    candidate == 0) continue;
+                std::string name;
+                if (!ReadReflectedObjectNameLocked(candidate, name) ||
+                    !name.ends_with("_C") || name.size() <= 2U) continue;
+                const bool exact_dot = name == "Buff_NormalFireDot_C";
+                const bool generic_dot = !exact_dot &&
+                    name.find("Dot") != std::string::npos &&
+                    name.rfind("Buff_", 0) == 0;
+                if (!exact_dot && !generic_dot) continue;
+                std::uintptr_t meta_class{};
+                std::uintptr_t outer{};
+                std::string meta_name;
+                std::string outer_name;
+                if (!ReadPointerAt(*memory, candidate, Layout(profile, "object.class"), meta_class) ||
+                    !ReadPointerAt(*memory, candidate, Layout(profile, "object.outer"), outer) ||
+                    !ReadReflectedObjectNameLocked(meta_class, meta_name) ||
+                    (meta_name != "Class" && meta_name != "BlueprintGeneratedClass") ||
+                    !ReadReflectedObjectNameLocked(outer, outer_name) ||
+                    (!exact_dot && outer_name.rfind("Buff_", 0) != 0) ||
+                    (meta_binding && meta_binding->meta_class != 0 &&
+                        !IsClassDerivedFromLocked(candidate, meta_binding->meta_class))) {
+                    continue;
+                }
+                legacy_native_dot = candidate;
+                gameplay_effect = candidate;
+                if (native_dot_choices.empty()) {
+                    native_dot_choices.push_back({name, candidate});
+                    selected_native_dot = 0;
+                }
+                return true;
+            }
+        } catch (...) {
+        }
+        return false;
+    }
+
     std::uint32_t NativeDotCount() noexcept {
         std::uintptr_t ignored{};
         static_cast<void>(FindNativeDotGameplayEffectLocked(ignored));
+        if (native_dot_choices.empty()) static_cast<void>(FindLegacyNativeDotLocked(ignored));
         return static_cast<std::uint32_t>(native_dot_choices.size());
     }
 
@@ -8237,6 +8305,7 @@ struct Ue5NteAdapter::State {
         }
         std::uintptr_t ignored{};
         static_cast<void>(FindNativeDotGameplayEffectLocked(ignored));
+        if (native_dot_choices.empty()) static_cast<void>(FindLegacyNativeDotLocked(ignored));
         if (index >= native_dot_choices.size()) {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND);
         }
@@ -8254,6 +8323,7 @@ struct Ue5NteAdapter::State {
     AnomalyStatusV1 NativeDotSelect(const std::uint32_t index) noexcept {
         std::uintptr_t ignored{};
         static_cast<void>(FindNativeDotGameplayEffectLocked(ignored));
+        if (native_dot_choices.empty()) static_cast<void>(FindLegacyNativeDotLocked(ignored));
         if (index >= native_dot_choices.size()) {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND);
         }
@@ -8434,6 +8504,17 @@ struct Ue5NteAdapter::State {
         damage_echo_session.valid = true;
     }
 
+    AnomalyStatusV1 ApplySession(
+        const AnomalyNteDamageEchoRequestV1* request,
+        AnomalyNteDamageEchoResultV1* result) noexcept {
+        if (request == nullptr || result == nullptr) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+        }
+        AnomalyNteDamageEchoRequestV1 copy = *request;
+        copy.flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_SESSION_REPLAY;
+        return ApplyNativeDot(&copy, result);
+    }
+
     AnomalyStatusV1 ApplyNativeDot(
         const AnomalyNteDamageEchoRequestV1* request,
         AnomalyNteDamageEchoResultV1* result) noexcept {
@@ -8473,7 +8554,8 @@ struct Ue5NteAdapter::State {
                 "native DoT target GE binding is unavailable");
         }
         std::uintptr_t gameplay_effect{};
-        if (!FindNativeDotGameplayEffectLocked(gameplay_effect)) {
+        if (!FindNativeDotGameplayEffectLocked(gameplay_effect) &&
+            !FindLegacyNativeDotLocked(gameplay_effect)) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "native DoT GameplayEffect is not loaded or not validated");
         }
@@ -8507,7 +8589,9 @@ struct Ue5NteAdapter::State {
             return reflected.byte_offset < parameters.size() &&
                 (parameters[reflected.byte_offset] & reflected.field_mask) != 0;
         };
-        if (native_dot_choices.empty() && attack_rpc_count != 0) {
+        const bool session_mode =
+            (request->flags & ANOMALY_NTE_DAMAGE_ECHO_V1_SESSION_REPLAY) != 0;
+        if (session_mode && attack_rpc_count != 0) {
             const auto& captured = attack_rpcs[(attack_rpc_count - 1U) % attack_rpcs.size()];
             if (captured.valid && captured.function != 0 && captured.parms_size != 0) {
                 attack_rpc_replaying = true;
@@ -8522,7 +8606,7 @@ struct Ue5NteAdapter::State {
                 }
             }
         }
-        if (native_dot_choices.empty() && try_activate_session.valid &&
+        if (session_mode && try_activate_session.valid &&
             try_activate_session.parms_size >= 0x18U) {
             std::array<std::uint8_t, 0x20> parameters = try_activate_session.parameters;
             std::int16_t key = try_activate_session.replay_key++;
@@ -8539,7 +8623,7 @@ struct Ue5NteAdapter::State {
                     "replayed ServerTryActivateAbility session");
             }
         }
-        if (native_dot_choices.empty() && damage_echo_session.valid &&
+        if (session_mode && damage_echo_session.valid &&
             damage_echo_session.target == victim &&
             damage_echo_session.function != 0 &&
             damage_echo_session.parms_size >= 4U) {
@@ -8572,6 +8656,10 @@ struct Ue5NteAdapter::State {
                         "replayed captured attack session");
                 }
             }
+        }
+        if (session_mode) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "no captured player attack session is available");
         }
         if (query_active()) {
             result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE;
@@ -14417,7 +14505,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             sizeof(AnomalyNteDamageEchoServiceV1), ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION,
             this, DamageEchoManualThunk, DamageEchoNativeDotThunk,
             DamageEchoDotCountThunk, DamageEchoDotNameAtThunk,
-            DamageEchoSelectDotThunk};
+            DamageEchoSelectDotThunk, DamageEchoSessionThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -14862,6 +14950,14 @@ private:
         void* user, std::uint32_t index) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->NativeDotSelect(index)
+                     : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageEchoSessionThunk(
+        void* user, const AnomalyNteDamageEchoRequestV1* request,
+        AnomalyNteDamageEchoResultV1* result) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->ApplySession(request, result)
                      : StoppedStatus();
     }
 

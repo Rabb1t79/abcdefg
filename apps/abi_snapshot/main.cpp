@@ -1927,7 +1927,8 @@ std::string BuildSnapshot() {
              offsetof(AnomalyNteDamageEchoServiceV1, apply_native_dot)},
          {"dot_count", offsetof(AnomalyNteDamageEchoServiceV1, dot_count)},
          {"dot_name_at", offsetof(AnomalyNteDamageEchoServiceV1, dot_name_at)},
-         {"select_dot", offsetof(AnomalyNteDamageEchoServiceV1, select_dot)}},
+         {"select_dot", offsetof(AnomalyNteDamageEchoServiceV1, select_dot)},
+         {"apply_session", offsetof(AnomalyNteDamageEchoServiceV1, apply_session)}},
         false);
     AppendStruct(
         output,

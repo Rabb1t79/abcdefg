@@ -981,7 +981,7 @@ typedef struct AnomalyNteDamageChainServiceV1 {
 // DoT GameplayEffect and reports its active state; the game's own GE formula
 // remains authoritative for that mode.
 #define ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_ID "anomaly.nte.damage-echo"
-#define ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION 2u
+#define ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION 3u
 typedef uint32_t AnomalyNteDamageEchoFlagsV1;
 #define ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE (1u << 0u)
 #define ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL (1u << 1u)
@@ -992,6 +992,7 @@ typedef uint32_t AnomalyNteDamageEchoFlagsV1;
 #define ANOMALY_NTE_DAMAGE_ECHO_V1_DISPLAYED (1u << 10u)
 #define ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED (1u << 11u)
 #define ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE (1u << 12u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_SESSION_REPLAY (1u << 16u)
 
 typedef struct AnomalyNteDamageEchoRequestV1 {
     uint32_t struct_size;
@@ -1033,6 +1034,10 @@ typedef struct AnomalyNteDamageEchoServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *dot_name_at)(
         void* user, uint32_t index, char* destination, size_t* inout_size);
     AnomalyStatusV1 (ANOMALY_CALL *select_dot)(void* user, uint32_t index);
+    // V3: replay the captured player attack session only; never falls back to GE.
+    AnomalyStatusV1 (ANOMALY_CALL *apply_session)(
+        void* user, const AnomalyNteDamageEchoRequestV1* request,
+        AnomalyNteDamageEchoResultV1* result);
 } AnomalyNteDamageEchoServiceV1;
 #ifdef __cplusplus
 }
