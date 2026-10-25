@@ -9194,9 +9194,15 @@ struct Ue5NteAdapter::State {
             if (!dead_after && has_previous && hp_before >= previous_hp - 0.001F) {
                 static char spec_failure[128]{};
                 std::snprintf(spec_failure, sizeof(spec_failure),
-                    "instant effect produced no HP change (t=%u layout=%u n=%u assigned=%d)",
+                    "no HP change (t=%u ui=%d mod=%d mag=%d cal=%d sbc=%d n=%u a=%d)",
                     static_cast<unsigned>(spec_apply.calculation_type),
-                    static_cast<unsigned>(spec_apply.modifier_layout),
+                    static_cast<int>(Layout(profile, "gameplayEffect.uiData", -9)),
+                    static_cast<int>(Layout(profile, "gameplayEffect.modifiers", -9)),
+                    static_cast<int>(Layout(profile, "gameplayModifier.magnitude", -9)),
+                    static_cast<int>(
+                        Layout(profile, "gameplayEffectModifierMagnitude.calculationType", -9)),
+                    static_cast<int>(
+                        Layout(profile, "gameplayEffectModifierMagnitude.setByCaller", -9)),
                     static_cast<unsigned>(spec_apply.modifier_count),
                     spec_apply.assign_function != 0 ? 1 : 0);
                 return Status(ANOMALY_STATUS_V1_FAILED, spec_failure);
