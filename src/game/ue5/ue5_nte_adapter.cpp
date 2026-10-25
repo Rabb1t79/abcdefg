@@ -8238,7 +8238,8 @@ struct Ue5NteAdapter::State {
                     name == "Buff_Tenacity_damage_C" ||
                     name == "Buff_Player_Female051_SkillDamageTrigger_C" ||
                     name == "Buff_Kuhara_Bud_C" ||
-                    name == "Buff_DragonFire_01_C";
+                    name == "Buff_DragonFire_01_C" ||
+                    name == "Buff_Nanally010_Level1_C";
                 if (!exact_dot && !generic_dot && !damage_ge &&
                     !known_damage_buff) {
                     continue;
@@ -8331,7 +8332,8 @@ struct Ue5NteAdapter::State {
                     name == "Buff_Tenacity_damage_C" ||
                     name == "Buff_Player_Female051_SkillDamageTrigger_C" ||
                     name == "Buff_Kuhara_Bud_C" ||
-                    name == "Buff_DragonFire_01_C";
+                    name == "Buff_DragonFire_01_C" ||
+                    name == "Buff_Nanally010_Level1_C";
                 if (!exact_dot && !generic_dot && !damage_ge &&
                     !known_damage_buff) {
                     continue;
