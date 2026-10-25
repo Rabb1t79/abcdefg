@@ -8231,7 +8231,17 @@ struct Ue5NteAdapter::State {
                     name.rfind("Buff_", 0) == 0;
                 const bool damage_ge = name.rfind("GE_Player_", 0) == 0 &&
                     name.ends_with("_Damage_C");
-                if (!exact_dot && !generic_dot && !damage_ge) continue;
+                const bool known_damage_buff =
+                    name == "Buff_Lacrimosa_BranchBurningLife_C" ||
+                    name == "Buff_39_ExDamage_C" ||
+                    name == "Buff_Tenacity_damage_C" ||
+                    name == "Buff_Player_Female051_SkillDamageTrigger_C" ||
+                    name == "Buff_Kuhara_Bud_C" ||
+                    name == "Buff_DragonFire_01_C";
+                if (!exact_dot && !generic_dot && !damage_ge &&
+                    !known_damage_buff) {
+                    continue;
+                }
                 std::uintptr_t meta_class{};
                 std::uintptr_t outer{};
                 std::string meta_name;
@@ -8243,6 +8253,8 @@ struct Ue5NteAdapter::State {
                     !ReadReflectedObjectNameLocked(outer, outer_name) ||
                     (!exact_dot &&
                         !(generic_dot && outer_name.rfind("Buff_", 0) == 0) &&
+                        !(known_damage_buff &&
+                            outer_name.rfind("Buff_", 0) == 0) &&
                         !(damage_ge &&
                             (outer_name.rfind("GE_", 0) == 0 ||
                              outer_name.rfind("Buff_", 0) == 0))) ||
@@ -8312,7 +8324,17 @@ struct Ue5NteAdapter::State {
                     name.rfind("Buff_", 0) == 0;
                 const bool damage_ge = name.rfind("GE_Player_", 0) == 0 &&
                     name.ends_with("_Damage_C");
-                if (!exact_dot && !generic_dot && !damage_ge) continue;
+                const bool known_damage_buff =
+                    name == "Buff_Lacrimosa_BranchBurningLife_C" ||
+                    name == "Buff_39_ExDamage_C" ||
+                    name == "Buff_Tenacity_damage_C" ||
+                    name == "Buff_Player_Female051_SkillDamageTrigger_C" ||
+                    name == "Buff_Kuhara_Bud_C" ||
+                    name == "Buff_DragonFire_01_C";
+                if (!exact_dot && !generic_dot && !damage_ge &&
+                    !known_damage_buff) {
+                    continue;
+                }
                 std::uintptr_t meta_class{};
                 std::uintptr_t outer{};
                 std::string meta_name;
@@ -8324,6 +8346,8 @@ struct Ue5NteAdapter::State {
                     !ReadReflectedObjectNameLocked(outer, outer_name) ||
                     (!exact_dot &&
                         !(generic_dot && outer_name.rfind("Buff_", 0) == 0) &&
+                        !(known_damage_buff &&
+                            outer_name.rfind("Buff_", 0) == 0) &&
                         !(damage_ge &&
                             (outer_name.rfind("GE_", 0) == 0 ||
                              outer_name.rfind("Buff_", 0) == 0))) ||
