@@ -1,4 +1,4 @@
-{
+﻿{
   "schemaVersion": 1,
   "game": "nte",
   "symbols": {
@@ -798,7 +798,10 @@
     "damageTextInfo.displayType": 24,
     "damageTextInfo.reactionType": 68,
     "damageTextInfo.reactionDisplayType": 69,
-    "gameplayEffect.uiData": 768,
+    "gameplayEffect.uiData": 768,"gameplayEffect.modifiers": 584,
+    "gameplayModifier.magnitude": 64,
+    "gameplayEffectModifierMagnitude.calculationType": 0,
+    "gameplayEffectModifierMagnitude.setByCaller": 464,
     "gameplayEffectUIData.description": 40,
     "abilityCharacter.abilitySystemComponent": 2208,
     "abilityCharacter.htAbilitySystemComponent": 2368,

@@ -765,9 +765,13 @@ struct Ue5NteAdapter::State {
         std::uintptr_t make_spec_function{};
         std::uintptr_t make_spec_library{};
         std::uintptr_t apply_spec_function{};
+        std::uintptr_t assign_function{};
         std::uint32_t apply_spec_parms_size{};
+        std::uint8_t calculation_type{};
+        std::array<std::uint8_t, 8> set_by_caller_tag{};
         bool attempted{};
         bool valid{};
+        bool modifier_resolved{};
     } spec_apply;
     std::unordered_map<std::uintptr_t, std::array<std::uint8_t, 16>>
         spec_handle_by_victim;
@@ -8499,7 +8503,8 @@ struct Ue5NteAdapter::State {
     // the spec reference count stable instead of allocating one per application.
     [[nodiscard]] bool ApplyInstantDamageSpecLocked(
         const std::uintptr_t gameplay_effect,
-        const std::uintptr_t victim) noexcept {
+        const std::uintptr_t victim,
+        const float damage) noexcept {
         if (gameplay_effect == 0 || victim == 0 || player_pawn == 0 ||
             !ResolveSpecApplyBindingLocked()) {
             return false;
@@ -8548,6 +8553,67 @@ struct Ue5NteAdapter::State {
                 }
             }
             if (!built) return false;
+        }
+        if (!spec_apply.modifier_resolved) {
+            // DPI-0006 / DPI-0007: the effect magnitude either carries its own value or
+            // expects the caller to supply one. Read the first modifier once per effect
+            // and remember the type; the layout keys are optional and degrade to "unknown".
+            spec_apply.modifier_resolved = true;
+            const auto modifiers = Layout(profile, "gameplayEffect.modifiers", -1);
+            const auto data_offset = Layout(profile, "tarray.data", -1);
+            const auto num_offset = Layout(profile, "tarray.num", -1);
+            const auto magnitude = Layout(profile, "gameplayModifier.magnitude", -1);
+            const auto type_offset =
+                Layout(profile, "gameplayEffectModifierMagnitude.calculationType", -1);
+            const auto caller_offset =
+                Layout(profile, "gameplayEffectModifierMagnitude.setByCaller", -1);
+            if (modifiers >= 0 && data_offset >= 0 && num_offset >= 0 && magnitude >= 0 &&
+                type_offset >= 0 && caller_offset >= 0) {
+                std::uintptr_t items{};
+                std::int32_t count{};
+                if (ReadValue(*memory, gameplay_effect + modifiers + data_offset, items) &&
+                    ReadValue(*memory, gameplay_effect + modifiers + num_offset, count) &&
+                    items != 0 && count > 0) {
+                    std::uint8_t type{};
+                    if (ReadValue(*memory, items + magnitude + type_offset, type)) {
+                        spec_apply.calculation_type = type;
+                        if (type == 3) {
+                            static_cast<void>(ReadValue(*memory,
+                                items + magnitude + caller_offset,
+                                spec_apply.set_by_caller_tag));
+                            static constexpr wchar_t kAssignPath[] =
+                                L"/Script/GameplayAbilities.AbilitySystemBlueprintLibrary."
+                                L"AssignTagSetByCallerMagnitude";
+                            std::uintptr_t assign{};
+                            std::uint8_t assign_parms{};
+                            std::uint16_t assign_size{};
+                            if (FindExactObjectLocked(kAssignPath, assign) && assign != 0 &&
+                                ReadValue(*memory,
+                                    assign + Layout(profile, "ufunction.numParms"),
+                                    assign_parms) &&
+                                ReadValue(*memory,
+                                    assign + Layout(profile, "ufunction.parmsSize"),
+                                    assign_size) &&
+                                assign_parms == 3 && assign_size == 0x30) {
+                                spec_apply.assign_function = assign;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (spec_apply.calculation_type == 3 && spec_apply.assign_function != 0) {
+            std::array<std::uint8_t, 0x30> assign_parameters{};
+            std::memcpy(assign_parameters.data(), handle.data(), handle.size());
+            std::memcpy(assign_parameters.data() + 0x10,
+                spec_apply.set_by_caller_tag.data(),
+                spec_apply.set_by_caller_tag.size());
+            std::memcpy(assign_parameters.data() + 0x18, &damage, sizeof(damage));
+            if (!InvokeNativeProcessEventLocked(spec_apply.make_spec_library,
+                    spec_apply.assign_function, assign_parameters.data(),
+                    assign_parameters.size())) {
+                return false;
+            }
         }
         std::array<std::uint8_t, 0x20> parameters{};
         std::memcpy(parameters.data(), handle.data(), handle.size());
@@ -8911,7 +8977,8 @@ struct Ue5NteAdapter::State {
             // DPI-0013: the class-application path carries no spec, so an instant
             // effect has no source to resolve its magnitude against. Build a spec
             // that names the local player as instigator/causer and apply that.
-            applied = ApplyInstantDamageSpecLocked(gameplay_effect, victim);
+            applied = ApplyInstantDamageSpecLocked(
+                gameplay_effect, victim, static_cast<float>(request->damage));
         }
         if (!applied && (target_binding || raw_target_ge)) {
             std::uintptr_t player_ability_system{};
@@ -9118,8 +9185,12 @@ struct Ue5NteAdapter::State {
             if (instant_last_hp.size() >= 256U && !has_previous) instant_last_hp.clear();
             instant_last_hp[victim] = hp_after;
             if (!dead_after && has_previous && hp_before >= previous_hp - 0.001F) {
-                return Status(ANOMALY_STATUS_V1_FAILED,
-                    "instant effect produced no HP change between applications");
+                static char spec_failure[128]{};
+                std::snprintf(spec_failure, sizeof(spec_failure),
+                    "instant effect produced no HP change (type=%u assigned=%d)",
+                    static_cast<unsigned>(spec_apply.calculation_type),
+                    spec_apply.assign_function != 0 ? 1 : 0);
+                return Status(ANOMALY_STATUS_V1_FAILED, spec_failure);
             }
         }
         return Status(ANOMALY_STATUS_V1_OK);
