@@ -760,6 +760,17 @@ struct Ue5NteAdapter::State {
     std::vector<NativeDotChoice> native_dot_choices;
     std::unordered_map<std::uintptr_t, AnomalyGenerationHandleV1>
         last_damage_ge_by_victim;
+    // DPI-0013 / DPI-0015: spec construction and application entry points.
+    struct SpecApplyBinding {
+        std::uintptr_t make_spec_function{};
+        std::uintptr_t make_spec_library{};
+        std::uintptr_t apply_spec_function{};
+        std::uint32_t apply_spec_parms_size{};
+        bool attempted{};
+        bool valid{};
+    } spec_apply;
+    std::unordered_map<std::uintptr_t, std::array<std::uint8_t, 16>>
+        spec_handle_by_victim;
     std::uintptr_t legacy_native_dot{};
     std::uint64_t legacy_native_dot_generation{};
     bool legacy_native_dot_attempted{};
@@ -8438,6 +8449,114 @@ struct Ue5NteAdapter::State {
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
+    // DPI-0015: both entry points are Blueprint-callable statics, so the receiver of
+    // the make-spec call is the library CDO while the apply call is an ASC instance
+    // method. Parameter sizes are taken from the reflected UFunction, never assumed.
+    [[nodiscard]] bool ResolveSpecApplyBindingLocked() noexcept {
+        if (spec_apply.attempted) return spec_apply.valid;
+        spec_apply.attempted = true;
+        static constexpr wchar_t kMakeSpecFunction[] =
+            L"/Script/GameplayAbilities.AbilitySystemBlueprintLibrary.MakeSpecHandleByClass";
+        static constexpr wchar_t kMakeSpecLibrary[] =
+            L"/Script/GameplayAbilities.Default__AbilitySystemBlueprintLibrary";
+        static constexpr wchar_t kApplySpecFunction[] =
+            L"/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectSpecToTarget";
+        std::uintptr_t function{};
+        std::uintptr_t library{};
+        if (!FindExactObjectLocked(kMakeSpecFunction, function) ||
+            !FindExactObjectLocked(kMakeSpecLibrary, library) ||
+            function == 0 || library == 0) {
+            return false;
+        }
+        std::uint8_t make_parms{};
+        std::uint16_t make_size{};
+        if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), make_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), make_size) ||
+            make_parms != 4 || make_size != 0x30) {
+            return false;
+        }
+        std::uintptr_t apply{};
+        if (!FindExactObjectLocked(kApplySpecFunction, apply) || apply == 0) {
+            return false;
+        }
+        std::uint8_t apply_parms{};
+        std::uint16_t apply_size{};
+        if (!ReadValue(*memory, apply + Layout(profile, "ufunction.numParms"), apply_parms) ||
+            !ReadValue(*memory, apply + Layout(profile, "ufunction.parmsSize"), apply_size) ||
+            apply_parms != 2 || apply_size != 0x20) {
+            return false;
+        }
+        spec_apply.make_spec_function = function;
+        spec_apply.make_spec_library = library;
+        spec_apply.apply_spec_function = apply;
+        spec_apply.apply_spec_parms_size = apply_size;
+        spec_apply.valid = true;
+        return true;
+    }
+
+    // Builds the spec once per victim and reapplies it. Reusing a single handle keeps
+    // the spec reference count stable instead of allocating one per application.
+    [[nodiscard]] bool ApplyInstantDamageSpecLocked(
+        const std::uintptr_t gameplay_effect,
+        const std::uintptr_t victim) noexcept {
+        if (gameplay_effect == 0 || victim == 0 || player_pawn == 0 ||
+            !ResolveSpecApplyBindingLocked()) {
+            return false;
+        }
+        std::uintptr_t source_ability_system{};
+        std::uintptr_t target_ability_system{};
+        if (!CurrentAbilitySystemLocked(player_pawn, source_ability_system) ||
+            source_ability_system == 0 ||
+            !ReadPointerAt(*memory, victim,
+                Layout(profile, "abilityCharacter.htAbilitySystemComponent"),
+                target_ability_system) ||
+            target_ability_system == 0) {
+            return false;
+        }
+        if (spec_handle_by_victim.size() >= 256U && !spec_handle_by_victim.contains(victim)) {
+            spec_handle_by_victim.clear();
+        }
+        auto& handle = spec_handle_by_victim[victim];
+        bool handle_empty = true;
+        for (const auto value : handle) {
+            if (value != 0) {
+                handle_empty = false;
+                break;
+            }
+        }
+        if (handle_empty) {
+            std::array<std::uint8_t, 0x30> parameters{};
+            const std::uintptr_t effect = gameplay_effect;
+            const std::uintptr_t instigator = player_pawn;
+            const float level = 1.0F;
+            std::memcpy(parameters.data() + 0x00, &effect, sizeof(effect));
+            std::memcpy(parameters.data() + 0x08, &instigator, sizeof(instigator));
+            std::memcpy(parameters.data() + 0x10, &instigator, sizeof(instigator));
+            std::memcpy(parameters.data() + 0x18, &level, sizeof(level));
+            if (!InvokeNativeProcessEventLocked(spec_apply.make_spec_library,
+                    spec_apply.make_spec_function, parameters.data(),
+                    parameters.size())) {
+                return false;
+            }
+            std::memcpy(handle.data(), parameters.data() + 0x20, handle.size());
+            bool built = false;
+            for (const auto value : handle) {
+                if (value != 0) {
+                    built = true;
+                    break;
+                }
+            }
+            if (!built) return false;
+        }
+        std::array<std::uint8_t, 0x20> parameters{};
+        std::memcpy(parameters.data(), handle.data(), handle.size());
+        std::memcpy(parameters.data() + 0x10, &target_ability_system,
+            sizeof(target_ability_system));
+        return InvokeNativeProcessEventLocked(source_ability_system,
+            spec_apply.apply_spec_function, parameters.data(),
+            spec_apply.apply_spec_parms_size);
+    }
+
     AnomalyStatusV1 ApplyManualDamage(
         const AnomalyNteDamageEchoRequestV1* request,
         AnomalyNteDamageEchoResultV1* result) noexcept {
@@ -8787,7 +8906,13 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_OK, "native DoT is already active");
         }
         bool applied = false;
-        if (target_binding || raw_target_ge) {
+        if (instant_mode) {
+            // DPI-0013: the class-application path carries no spec, so an instant
+            // effect has no source to resolve its magnitude against. Build a spec
+            // that names the local player as instigator/causer and apply that.
+            applied = ApplyInstantDamageSpecLocked(gameplay_effect, victim);
+        }
+        if (!applied && (target_binding || raw_target_ge)) {
             std::uintptr_t player_ability_system{};
             std::uintptr_t target_ability_system{};
             if (CurrentAbilitySystemLocked(player_pawn, player_ability_system) &&
