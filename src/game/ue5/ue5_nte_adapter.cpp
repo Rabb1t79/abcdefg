@@ -770,6 +770,7 @@ struct Ue5NteAdapter::State {
         std::uint8_t calculation_type{};
         std::uint8_t modifier_layout{};
         std::uint8_t modifier_count{};
+        std::uint8_t modifier_is_class{};
         std::array<std::uint8_t, 8> set_by_caller_tag{};
         bool attempted{};
         bool valid{};
@@ -8561,6 +8562,22 @@ struct Ue5NteAdapter::State {
             // expects the caller to supply one. Read the first modifier once per effect
             // and remember the type; the layout keys are optional and degrade to "unknown".
             spec_apply.modifier_resolved = true;
+            // damageGEDef is a class in the game's damage event; modifier data lives on the
+            // class default object, so resolve the CDO before reading it.
+            std::uintptr_t effect_object = gameplay_effect;
+            std::uintptr_t meta_class{};
+            std::string meta_name;
+            if (ReadPointerAt(*memory, gameplay_effect, Layout(profile, "object.class"),
+                    meta_class) && meta_class != 0 &&
+                ReadReflectedObjectNameLocked(meta_class, meta_name) &&
+                (meta_name == "Class" || meta_name == "BlueprintGeneratedClass")) {
+                std::uintptr_t cdo{};
+                if (ReadPointerAt(*memory, gameplay_effect,
+                        Layout(profile, "uclass.classDefaultObject"), cdo) && cdo != 0) {
+                    effect_object = cdo;
+                    spec_apply.modifier_is_class = 1;
+                }
+            }
             const auto modifiers = Layout(profile, "gameplayEffect.modifiers", -1);
             const auto data_offset = Layout(profile, "tarray.data", -1);
             const auto num_offset = Layout(profile, "tarray.num", -1);
@@ -8574,8 +8591,8 @@ struct Ue5NteAdapter::State {
                 spec_apply.modifier_layout = 1;
                 std::uintptr_t items{};
                 std::int32_t count{};
-                if (ReadValue(*memory, gameplay_effect + modifiers + data_offset, items) &&
-                    ReadValue(*memory, gameplay_effect + modifiers + num_offset, count) &&
+                if (ReadValue(*memory, effect_object + modifiers + data_offset, items) &&
+                    ReadValue(*memory, effect_object + modifiers + num_offset, count) &&
                     count > 0) {
                     spec_apply.modifier_count =
                         count > 255 ? 255U : static_cast<std::uint8_t>(count);
@@ -9194,15 +9211,11 @@ struct Ue5NteAdapter::State {
             if (!dead_after && has_previous && hp_before >= previous_hp - 0.001F) {
                 static char spec_failure[128]{};
                 std::snprintf(spec_failure, sizeof(spec_failure),
-                    "no HP change (t=%u ui=%d mod=%d mag=%d cal=%d sbc=%d n=%u a=%d)",
+                    "no HP change (t=%u ui=%d mod=%d cdo=%u n=%u a=%d)",
                     static_cast<unsigned>(spec_apply.calculation_type),
                     static_cast<int>(Layout(profile, "gameplayEffect.uiData", -9)),
                     static_cast<int>(Layout(profile, "gameplayEffect.modifiers", -9)),
-                    static_cast<int>(Layout(profile, "gameplayModifier.magnitude", -9)),
-                    static_cast<int>(
-                        Layout(profile, "gameplayEffectModifierMagnitude.calculationType", -9)),
-                    static_cast<int>(
-                        Layout(profile, "gameplayEffectModifierMagnitude.setByCaller", -9)),
+                    static_cast<unsigned>(spec_apply.modifier_is_class),
                     static_cast<unsigned>(spec_apply.modifier_count),
                     spec_apply.assign_function != 0 ? 1 : 0);
                 return Status(ANOMALY_STATUS_V1_FAILED, spec_failure);
