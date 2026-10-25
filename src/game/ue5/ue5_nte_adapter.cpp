@@ -8608,16 +8608,7 @@ struct Ue5NteAdapter::State {
                 "native DoT target GE binding is unavailable");
         }
         std::uintptr_t gameplay_effect{};
-        if (const auto captured = last_damage_ge_by_victim.find(victim);
-            captured != last_damage_ge_by_victim.end()) {
-            std::uintptr_t captured_effect{};
-            if (ResolveObjectHandleLocked(captured->second, captured_effect) &&
-                captured_effect != 0) {
-                gameplay_effect = captured_effect;
-            }
-        }
-        if (gameplay_effect == 0 &&
-            !FindNativeDotGameplayEffectLocked(gameplay_effect) &&
+        if (!FindNativeDotGameplayEffectLocked(gameplay_effect) &&
             !FindLegacyNativeDotLocked(gameplay_effect)) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "native DoT GameplayEffect is not loaded or not validated");
