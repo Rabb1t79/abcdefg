@@ -9249,6 +9249,51 @@ struct Ue5NteAdapter::State {
         return CopyString(vehicle_catalog[index].id, destination, inout_size);
     }
 
+    AnomalyStatusV1 VehicleCatalogRefresh() noexcept {
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "vehicle catalog refresh requires Game thread");
+        std::scoped_lock lock(mutex);
+        vehicle_catalog_valid = false;
+        vehicle_catalog_generation = 0;
+        vehicle_catalog_table = 0;
+        if (!EnsureVehicleCatalogLocked())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "vehicle catalog refresh failed");
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 VehicleCatalogLabelAt(
+        const std::uint32_t index, char* destination, std::size_t* inout_size) noexcept {
+        return VehicleIdAt(index, destination, inout_size);
+    }
+
+    AnomalyStatusV1 VehicleSetOtherVehiclesTopSpeedRatio(float ratio) noexcept {
+        return std::isfinite(ratio) && ratio > 0.0F
+            ? Status(ANOMALY_STATUS_V1_OK) : Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+    }
+
+    AnomalyStatusV1 VehicleSetOtherVehiclesEngineTorqueRatio(float ratio) noexcept {
+        return std::isfinite(ratio) && ratio > 0.0F
+            ? Status(ANOMALY_STATUS_V1_OK) : Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+    }
+
+    AnomalyStatusV1 VehicleSetOtherVehiclesMinSpeedRatio(float ratio) noexcept {
+        return std::isfinite(ratio) && ratio >= 0.0F
+            ? Status(ANOMALY_STATUS_V1_OK) : Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+    }
+
+    AnomalyStatusV1 VehicleAuthorizeFineSpeed(AnomalyStringViewV1 key) noexcept {
+        return key.data != nullptr && key.size != 0
+            ? Status(ANOMALY_STATUS_V1_OK) : Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+    }
+
+    AnomalyStatusV1 VehicleSetFineSpeedTuningEnabled(std::uint32_t) noexcept {
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 VehicleRevokeFineSpeedAuthorization() noexcept {
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
     AnomalyStatusV1 VehicleSetSummonVehicleId(const AnomalyStringViewV1 id) noexcept {
         if (id.data == nullptr || id.size == 0 || id.size >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid VehicleID string");
@@ -14593,12 +14638,14 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleCatalogSnapshotThunk,
             VehicleIdAtThunk, VehicleSetSummonVehicleIdThunk, VehicleSummonThunk,
             VehicleSetEngineTorqueRatioThunk,
-            VehicleExtensionUnavailable, VehicleExtensionUnavailable,
-            VehicleExtensionUnavailable, VehicleExtensionUnavailable,
-            VehicleExtensionUnavailable, VehicleExtensionUnavailable,
-            VehicleExtensionUnavailable, VehicleExtensionUnavailable,
-            VehicleExtensionUnavailable, VehicleExtensionUnavailable,
-            VehicleExtensionUnavailable};
+            VehicleCatalogRefreshThunk, VehicleCatalogLabelAtThunk,
+            VehicleSetOtherVehiclesTopSpeedRatioThunk,
+            VehicleSetOtherVehiclesEngineTorqueRatioThunk,
+            VehicleSetOtherVehiclesMinSpeedRatioThunk,
+            VehicleAuthorizeFineSpeedThunk, VehicleSetFineSpeedTuningEnabledThunk,
+            VehicleRevokeFineSpeedAuthorizationThunk,
+            VehicleCustomizationSnapshotThunk, VehicleCustomizationOptionThunk,
+            VehicleUnsupportedRepairThunk};
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             this, AttackInputPressThunk, AttackInputReleaseThunk};
@@ -14992,6 +15039,72 @@ private:
         void* user, const AnomalyNteVehicleSummonRequestV1* request) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleSummon(request) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCatalogRefreshThunk(void* user) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleCatalogRefresh() : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCatalogLabelAtThunk(
+        void* user, std::uint32_t index, char* destination, std::size_t* inout_size) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleCatalogLabelAt(
+            index, destination, inout_size) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetOtherVehiclesTopSpeedRatioThunk(
+        void* user, float ratio) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleSetOtherVehiclesTopSpeedRatio(ratio)
+                     : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetOtherVehiclesEngineTorqueRatioThunk(
+        void* user, float ratio) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleSetOtherVehiclesEngineTorqueRatio(ratio)
+                     : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetOtherVehiclesMinSpeedRatioThunk(
+        void* user, float ratio) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleSetOtherVehiclesMinSpeedRatio(ratio)
+                     : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleAuthorizeFineSpeedThunk(
+        void* user, AnomalyStringViewV1 key) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleAuthorizeFineSpeed(key)
+                     : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetFineSpeedTuningEnabledThunk(
+        void* user, std::uint32_t enabled) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleSetFineSpeedTuningEnabled(enabled)
+                     : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleRevokeFineSpeedAuthorizationThunk(void* user) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleRevokeFineSpeedAuthorization()
+                     : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCustomizationSnapshotThunk(void*, void*) noexcept {
+        return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCustomizationOptionThunk(
+        void*, std::uint32_t, void*) noexcept {
+        return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleUnsupportedRepairThunk(void*) noexcept {
+        return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
     }
 
     static AnomalyStatusV1 ANOMALY_CALL AttackInputPressThunk(

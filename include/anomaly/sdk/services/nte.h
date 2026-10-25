@@ -357,17 +357,25 @@ typedef struct AnomalyNteVehicleServiceV1 {
     // require a 0xB0-byte table. The current host has no native implementation
     // for these catalog/customization extensions, so they return UNAVAILABLE;
     // callers must check the returned status and keep V1/V2 features usable.
-    AnomalyStatusV1 (ANOMALY_CALL *slot_60)(void* user, ...);
-    AnomalyStatusV1 (ANOMALY_CALL *slot_68)(void* user, ...);
-    AnomalyStatusV1 (ANOMALY_CALL *slot_70)(void* user, ...);
-    AnomalyStatusV1 (ANOMALY_CALL *slot_78)(void* user, ...);
-    AnomalyStatusV1 (ANOMALY_CALL *slot_80)(void* user, ...);
-    AnomalyStatusV1 (ANOMALY_CALL *slot_88)(void* user, ...);
-    AnomalyStatusV1 (ANOMALY_CALL *slot_90)(void* user, ...);
-    AnomalyStatusV1 (ANOMALY_CALL *slot_98)(void* user, ...);
-    AnomalyStatusV1 (ANOMALY_CALL *slot_a0)(void* user, ...);
-    AnomalyStatusV1 (ANOMALY_CALL *slot_a8)(void* user, ...);
-    AnomalyStatusV1 (ANOMALY_CALL *slot_b0)(void* user, ...);
+    AnomalyStatusV1 (ANOMALY_CALL *refresh_catalog)(void* user);
+    AnomalyStatusV1 (ANOMALY_CALL *catalog_label_at)(
+        void* user, uint32_t index, char* destination, size_t* inout_size);
+    AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_top_speed_ratio)(
+        void* user, float ratio);
+    AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_engine_torque_ratio)(
+        void* user, float ratio);
+    AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_min_speed_ratio)(
+        void* user, float ratio);
+    AnomalyStatusV1 (ANOMALY_CALL *authorize_fine_speed_tuning)(
+        void* user, AnomalyStringViewV1 key);
+    AnomalyStatusV1 (ANOMALY_CALL *set_fine_speed_tuning_enabled)(
+        void* user, uint32_t enabled);
+    AnomalyStatusV1 (ANOMALY_CALL *revoke_fine_speed_authorization)(void* user);
+    AnomalyStatusV1 (ANOMALY_CALL *customization_catalog_snapshot)(
+        void* user, void* snapshot);
+    AnomalyStatusV1 (ANOMALY_CALL *customization_option_at)(
+        void* user, uint32_t index, void* option);
+    AnomalyStatusV1 (ANOMALY_CALL *repair_current_vehicle)(void* user);
 } AnomalyNteVehicleServiceV1;
 
 // Uses the game's own HTPlayerController input-to-ability bridge. It is kept
