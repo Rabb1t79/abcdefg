@@ -771,6 +771,7 @@ struct Ue5NteAdapter::State {
     } spec_apply;
     std::unordered_map<std::uintptr_t, std::array<std::uint8_t, 16>>
         spec_handle_by_victim;
+    std::unordered_map<std::uintptr_t, float> instant_last_hp;
     std::uintptr_t legacy_native_dot{};
     std::uint64_t legacy_native_dot_generation{};
     bool legacy_native_dot_attempted{};
@@ -9107,10 +9108,19 @@ struct Ue5NteAdapter::State {
             result->dead = dead_after ? 1U : 0U;
             if (dead_after) result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD;
         }
-        if (instant_mode && !dead_after &&
-            result->hp_after >= hp_before - 0.001F) {
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                "instant DamageGEDef was accepted but produced no HP change");
+        if (instant_mode) {
+            // The effect resolves through the ability system, so the victim HP is not
+            // updated synchronously. Compare against the previous application instead
+            // of within this call, which would always observe an unchanged value.
+            const auto previous = instant_last_hp.find(victim);
+            const bool has_previous = previous != instant_last_hp.end();
+            const float previous_hp = has_previous ? previous->second : 0.0F;
+            if (instant_last_hp.size() >= 256U && !has_previous) instant_last_hp.clear();
+            instant_last_hp[victim] = hp_after;
+            if (!dead_after && has_previous && hp_before >= previous_hp - 0.001F) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "instant effect produced no HP change between applications");
+            }
         }
         return Status(ANOMALY_STATUS_V1_OK);
     }
