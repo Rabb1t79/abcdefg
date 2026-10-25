@@ -779,6 +779,10 @@ struct Ue5NteAdapter::State {
     std::unordered_map<std::uintptr_t, std::array<std::uint8_t, 16>>
         spec_handle_by_victim;
     std::unordered_map<std::uintptr_t, float> instant_last_hp;
+    std::uintptr_t refresh_binding_function{};
+    std::uintptr_t refresh_binding_library{};
+    bool refresh_binding_attempted{};
+    bool refresh_binding_valid{};
     std::uintptr_t legacy_native_dot{};
     std::uint64_t legacy_native_dot_generation{};
     bool legacy_native_dot_attempted{};
@@ -8648,6 +8652,51 @@ struct Ue5NteAdapter::State {
             spec_apply.apply_spec_parms_size);
     }
 
+    // DPI-0014: refreshes the duration of an already active effect and can add stacks.
+    // Used to keep a native DoT alive past its authored duration and let it grow.
+    [[nodiscard]] bool RefreshActiveNativeDotLocked(
+        const std::uintptr_t victim,
+        const std::uintptr_t gameplay_effect,
+        const std::uintptr_t target_ability_system) noexcept {
+        if (refresh_binding_attempted) {
+            if (!refresh_binding_valid) return false;
+        } else {
+            refresh_binding_attempted = true;
+            static constexpr wchar_t kFunction[] =
+                L"/Script/HTGame.HTAbilitySystemBlueprintLibrary."
+                L"RefreshActiveGameplayEffectDuration";
+            static constexpr wchar_t kLibrary[] =
+                L"/Script/HTGame.Default__HTAbilitySystemBlueprintLibrary";
+            std::uintptr_t function{};
+            std::uintptr_t library{};
+            std::uint8_t num_parms{};
+            std::uint16_t parms_size{};
+            if (!FindExactObjectLocked(kFunction, function) ||
+                !FindExactObjectLocked(kLibrary, library) || function == 0 ||
+                library == 0 ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+                num_parms != 7 || parms_size != 0x39) {
+                return false;
+            }
+            refresh_binding_function = function;
+            refresh_binding_library = library;
+            refresh_binding_valid = true;
+        }
+        (void)victim;
+        std::array<std::uint8_t, 0x40> parameters{};
+        const std::uint32_t stack = 1U;
+        const std::uintptr_t instigator = player_pawn;
+        std::memcpy(parameters.data() + 0x00, &target_ability_system,
+            sizeof(target_ability_system));
+        std::memcpy(parameters.data() + 0x08, &gameplay_effect, sizeof(gameplay_effect));
+        std::memcpy(parameters.data() + 0x10, &stack, sizeof(stack));
+        std::memcpy(parameters.data() + 0x20, &instigator, sizeof(instigator));
+        std::memcpy(parameters.data() + 0x28, &instigator, sizeof(instigator));
+        return InvokeNativeProcessEventLocked(refresh_binding_library,
+            refresh_binding_function, parameters.data(), 0x39);
+    }
+
     AnomalyStatusV1 ApplyManualDamage(
         const AnomalyNteDamageEchoRequestV1* request,
         AnomalyNteDamageEchoResultV1* result) noexcept {
@@ -8989,6 +9038,16 @@ struct Ue5NteAdapter::State {
         }
         if (!instant_mode && query_active()) {
             result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE;
+            // Keep the effect alive past its authored duration and let it grow, so the
+            // maintenance loop extends instead of idling.
+            std::uintptr_t active_target_asc{};
+            if (ReadPointerAt(*memory, victim,
+                    Layout(profile, "abilityCharacter.htAbilitySystemComponent"),
+                    active_target_asc) &&
+                active_target_asc != 0 &&
+                RefreshActiveNativeDotLocked(victim, gameplay_effect, active_target_asc)) {
+                result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED;
+            }
             bool dead{};
             static_cast<void>(InvokeNteBoolReturnLocked(
                 NteFunctionKind::GetIsDead, victim, dead));
