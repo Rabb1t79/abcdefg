@@ -821,6 +821,7 @@ struct Ue5NteAdapter::State {
     } vehicle_bindings;
     struct VehicleCatalogEntry {
         std::string id;
+        std::string label;
         std::uint32_t name_comparison_index{};
         std::uint32_t name_number{};
         std::uintptr_t row{};
@@ -7791,6 +7792,11 @@ struct Ue5NteAdapter::State {
             if (!ReadPointerAt(*memory, table, Layout(profile, "dataTable.rowStruct"), row_struct) ||
                 !ReadReflectedObjectNameLocked(row_struct, row_struct_name) ||
                 row_struct_name != "VehicleData") return false;
+            ReflectedPropertyInfo vehicle_name_property;
+            const bool has_vehicle_name = FindReflectedPropertyLocked(
+                row_struct, "Name", vehicle_name_property, true) &&
+                vehicle_name_property.type == "TextProperty" &&
+                vehicle_name_property.offset >= 0;
             ReflectedPropertyInfo vehicle_id_property;
             if (!FindReflectedPropertyLocked(row_struct, "VehicleID", vehicle_id_property, true) ||
                 vehicle_id_property.type != "NameProperty" ||
@@ -7829,7 +7835,14 @@ struct Ue5NteAdapter::State {
                     id.empty() || !ContainsVehicleToken(id) || id.size() >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
                     continue;
                 }
-                next.push_back({std::move(id), comparison_index, number, row});
+                std::string label;
+                if (has_vehicle_name &&
+                    !ResolveFTextLocked(row + static_cast<std::uintptr_t>(
+                        vehicle_name_property.offset), label)) {
+                    label.clear();
+                }
+                if (label.empty()) label = id;
+                next.push_back({std::move(id), std::move(label), comparison_index, number, row});
             }
             std::ranges::sort(next, {}, &VehicleCatalogEntry::id);
             next.erase(std::unique(next.begin(), next.end(), [](const auto& lhs, const auto& rhs) {
@@ -9248,7 +9261,7 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "vehicle catalog is unavailable");
         if (index >= vehicle_catalog.size())
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle catalog index is out of range");
-        return CopyString(vehicle_catalog[index].id, destination, inout_size);
+        return CopyString(vehicle_catalog[index].label, destination, inout_size);
     }
 
     AnomalyStatusV1 VehicleCatalogRefresh() noexcept {
