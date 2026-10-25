@@ -8030,7 +8030,8 @@ struct Ue5NteAdapter::State {
             ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL |
             ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT |
             ANOMALY_NTE_DAMAGE_ECHO_V1_WEAK_UNBALANCE |
-            ANOMALY_NTE_DAMAGE_ECHO_V1_SESSION_REPLAY;
+            ANOMALY_NTE_DAMAGE_ECHO_V1_SESSION_REPLAY |
+            ANOMALY_NTE_DAMAGE_ECHO_V1_INSTANT_DAMAGE;
         return (request->flags & ~kAllowedRequestFlags) == 0;
     }
 
@@ -8631,8 +8632,18 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "native DoT target GE binding is unavailable");
         }
+        const bool instant_mode =
+            (request->flags & ANOMALY_NTE_DAMAGE_ECHO_V1_INSTANT_DAMAGE) != 0;
         std::uintptr_t gameplay_effect{};
-        if (!FindNativeDotGameplayEffectLocked(gameplay_effect) &&
+        if (instant_mode) {
+            const auto captured = last_damage_ge_by_victim.find(victim);
+            if (captured == last_damage_ge_by_victim.end() ||
+                !ResolveObjectHandleLocked(captured->second, gameplay_effect) ||
+                gameplay_effect == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "no captured DamageGEDef is available for this victim");
+            }
+        } else if (!FindNativeDotGameplayEffectLocked(gameplay_effect) &&
             !FindLegacyNativeDotLocked(gameplay_effect)) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "native DoT GameplayEffect is not loaded or not validated");
@@ -8739,7 +8750,7 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "no captured player attack session is available");
         }
-        if (query_active()) {
+        if (!instant_mode && query_active()) {
             result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE;
             bool dead{};
             static_cast<void>(InvokeNteBoolReturnLocked(
@@ -8815,14 +8826,23 @@ struct Ue5NteAdapter::State {
                     // path alive when the reflected name is unavailable.
                     modify.buff_name = {};
                 }
+                if (instant_mode) {
+                    modify = {};
+                }
                 std::memcpy(parameters.data() + modify_offset,
                     &modify, sizeof(modify));
-                parameters[event_offset] = 1U; // BUFF_EVENT_BEGIN
+                parameters[event_offset] = instant_mode ? 0U : 1U; // NONE / BEGIN
                 if (prediction_offset < parameters.size()) {
-                    parameters[prediction_offset] =
-                        static_cast<std::uint8_t>(
-                            (parameters[prediction_offset] & ~prediction_mask) |
-                            prediction_mask);
+                    if (instant_mode) {
+                        parameters[prediction_offset] =
+                            static_cast<std::uint8_t>(
+                                parameters[prediction_offset] & ~prediction_mask);
+                    } else {
+                        parameters[prediction_offset] =
+                            static_cast<std::uint8_t>(
+                                (parameters[prediction_offset] & ~prediction_mask) |
+                                prediction_mask);
+                    }
                 }
                 if (target_binding) {
                     applied = InvokeNteFunctionLocked(
@@ -8934,6 +8954,11 @@ struct Ue5NteAdapter::State {
         if (InvokeNteBoolReturnLocked(NteFunctionKind::GetIsDead, victim, dead_after)) {
             result->dead = dead_after ? 1U : 0U;
             if (dead_after) result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD;
+        }
+        if (instant_mode && !dead_after &&
+            result->hp_after >= hp_before - 0.001F) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "instant DamageGEDef was accepted but produced no HP change");
         }
         return Status(ANOMALY_STATUS_V1_OK);
     }

@@ -993,6 +993,7 @@ typedef uint32_t AnomalyNteDamageEchoFlagsV1;
 #define ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED (1u << 11u)
 #define ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE (1u << 12u)
 #define ANOMALY_NTE_DAMAGE_ECHO_V1_SESSION_REPLAY (1u << 16u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_INSTANT_DAMAGE (1u << 17u)
 
 typedef struct AnomalyNteDamageEchoRequestV1 {
     uint32_t struct_size;
