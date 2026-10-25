@@ -768,6 +768,8 @@ struct Ue5NteAdapter::State {
         std::uintptr_t assign_function{};
         std::uint32_t apply_spec_parms_size{};
         std::uint8_t calculation_type{};
+        std::uint8_t modifier_layout{};
+        std::uint8_t modifier_count{};
         std::array<std::uint8_t, 8> set_by_caller_tag{};
         bool attempted{};
         bool valid{};
@@ -8569,11 +8571,16 @@ struct Ue5NteAdapter::State {
                 Layout(profile, "gameplayEffectModifierMagnitude.setByCaller", -1);
             if (modifiers >= 0 && data_offset >= 0 && num_offset >= 0 && magnitude >= 0 &&
                 type_offset >= 0 && caller_offset >= 0) {
+                spec_apply.modifier_layout = 1;
                 std::uintptr_t items{};
                 std::int32_t count{};
                 if (ReadValue(*memory, gameplay_effect + modifiers + data_offset, items) &&
                     ReadValue(*memory, gameplay_effect + modifiers + num_offset, count) &&
-                    items != 0 && count > 0) {
+                    count > 0) {
+                    spec_apply.modifier_count =
+                        count > 255 ? 255U : static_cast<std::uint8_t>(count);
+                }
+                if (items != 0 && count > 0) {
                     std::uint8_t type{};
                     if (ReadValue(*memory, items + magnitude + type_offset, type)) {
                         spec_apply.calculation_type = type;
@@ -9187,8 +9194,10 @@ struct Ue5NteAdapter::State {
             if (!dead_after && has_previous && hp_before >= previous_hp - 0.001F) {
                 static char spec_failure[128]{};
                 std::snprintf(spec_failure, sizeof(spec_failure),
-                    "instant effect produced no HP change (type=%u assigned=%d)",
+                    "instant effect produced no HP change (t=%u layout=%u n=%u assigned=%d)",
                     static_cast<unsigned>(spec_apply.calculation_type),
+                    static_cast<unsigned>(spec_apply.modifier_layout),
+                    static_cast<unsigned>(spec_apply.modifier_count),
                     spec_apply.assign_function != 0 ? 1 : 0);
                 return Status(ANOMALY_STATUS_V1_FAILED, spec_failure);
             }
