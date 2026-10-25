@@ -333,6 +333,27 @@ typedef struct AnomalyNteVehicleSummonRequestV1 {
     double world_position[3];
 } AnomalyNteVehicleSummonRequestV1;
 
+#define ANOMALY_NTE_VEHICLE_CUSTOMIZATION_LABEL_MAX_UTF8_BYTES 128u
+typedef struct AnomalyNteVehicleCustomizationCatalogSnapshotV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint64_t sequence;
+    uint32_t entry_count;
+    uint32_t reserved;
+} AnomalyNteVehicleCustomizationCatalogSnapshotV1;
+typedef struct AnomalyNteVehicleCustomizationOptionV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint32_t kind;
+    uint32_t module_type;
+    char option_id[ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES + 1u];
+    char label[ANOMALY_NTE_VEHICLE_CUSTOMIZATION_LABEL_MAX_UTF8_BYTES + 1u];
+} AnomalyNteVehicleCustomizationOptionV1;
+typedef struct AnomalyNteVehicleModuleSelectionV1 {
+    uint32_t struct_size;
+    uint32_t module_type;
+    AnomalyStringViewV1 module_id;
+} AnomalyNteVehicleModuleSelectionV1;
 typedef struct AnomalyNteVehicleServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
     AnomalyStatusV1 (ANOMALY_CALL *snapshot)(
@@ -372,9 +393,9 @@ typedef struct AnomalyNteVehicleServiceV1 {
         void* user, uint32_t enabled);
     AnomalyStatusV1 (ANOMALY_CALL *revoke_fine_speed_authorization)(void* user);
     AnomalyStatusV1 (ANOMALY_CALL *customization_catalog_snapshot)(
-        void* user, void* snapshot);
+        void* user, AnomalyNteVehicleCustomizationCatalogSnapshotV1* snapshot);
     AnomalyStatusV1 (ANOMALY_CALL *customization_option_at)(
-        void* user, uint32_t index, void* option);
+        void* user, uint32_t index, AnomalyNteVehicleCustomizationOptionV1* option);
     AnomalyStatusV1 (ANOMALY_CALL *repair_current_vehicle)(void* user);
 } AnomalyNteVehicleServiceV1;
 
