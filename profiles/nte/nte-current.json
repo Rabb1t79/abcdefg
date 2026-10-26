@@ -799,7 +799,7 @@
     "damageTextInfo.reactionType": 68,
     "damageTextInfo.reactionDisplayType": 69,
     "gameplayEffect.uiData": 768,"gameplayEffect.modifiers": 584,
-    "gameplayModifier.magnitude": 64,
+    "gameplayEffect.executions": 600, "gameplayEffectExecution.calculationClass": 0,"gameplayModifier.magnitude": 64,
     "gameplayEffectModifierMagnitude.calculationType": 0,
     "gameplayEffectModifierMagnitude.setByCaller": 464,
     "gameplayEffectUIData.description": 40,

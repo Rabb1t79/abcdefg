@@ -1,4 +1,4 @@
-#include "anomaly/ue5_nte_adapter.hpp"
+﻿#include "anomaly/ue5_nte_adapter.hpp"
 #include "anomaly/nte_damage_capture.hpp"
 #include "anomaly/nte_vehicle.hpp"
 #include "anomaly/nte_monster_names.hpp"
@@ -771,6 +771,7 @@ struct Ue5NteAdapter::State {
         std::uint8_t modifier_layout{};
         std::uint8_t modifier_count{};
         std::uint8_t modifier_is_class{};
+        char execution_name[48]{};
         std::array<std::uint8_t, 8> set_by_caller_tag{};
         bool attempted{};
         bool valid{};
@@ -1356,10 +1357,10 @@ struct Ue5NteAdapter::State {
         float camera_horizontal_fov{};
         bool partial{};
     };
-    // FName 鐨?comparison index 鍦ㄨ繘绋嬪唴绋冲畾锛屽悓涓€ name_id 姘歌繙瀵瑰簲鍚屼竴涓瓧绗︿覆銆?
-    // 鍏ㄥ叧鍗?actor 鎵弿浼氫负姣忎釜 actor 瑙ｆ瀽涓€娆″疄浣撳悕锛堟暟鍗冩锛夛紝閫愭瑙ｇ爜瀹藉瓧绗﹀悕
-    // 鐨勪唬浠疯涓€绉掍互涓婏紱璁板繂鍖栧悗鍙湁棣栨鎵弿闇€瑕佺湡姝ｈВ鐮併€傚け璐ョ粨鏋滀笉缂撳瓨锛?
-    // 鍥犱负閭ｉ€氬父鎰忓懗鐫€甯冨眬灏氭湭灏辩华锛屼箣鍚庣殑鎵弿搴斿綋閲嶈瘯銆?
+    // FName 閻?comparison index 閸︺劏绻樼粙瀣敶缁嬪啿鐣鹃敍灞芥倱娑撯偓 name_id 濮樻瓕绻欑€电懓绨查崥灞肩娑擃亜鐡х粭锔胯閵?
+    // 閸忋劌鍙ч崡?actor 閹殿偅寮挎导姘礋濮ｅ繋閲?actor 鐟欙絾鐎芥稉鈧▎鈥崇杽娴ｆ挸鎮曢敍鍫熸殶閸楀啯顐奸敍澶涚礉闁劖顐肩憴锝囩垳鐎硅棄鐡х粭锕€鎮?
+    // 閻ㄥ嫪鍞禒鐤洣娑撯偓缁夋帊浜掓稉濠忕幢鐠佹澘绻傞崠鏍ф倵閸欘亝婀佹＃鏍偧閹殿偅寮块棁鈧憰浣烘埂濮濓綀袙閻降鈧倸銇戠拹銉х波閺嬫粈绗夌紓鎾崇摠閿?
+    // 閸ョ姳璐熼柇锝夆偓姘埗閹板繐鎳楅惈鈧敮鍐ㄧ湰鐏忔碍婀亸杈╁崕閿涘奔绠ｉ崥搴ｆ畱閹殿偅寮挎惔鏂跨秼闁插秷鐦妴?
     mutable std::unordered_map<std::uint32_t, std::string> name_snapshot_cache;
     std::shared_ptr<const EntityFrameCache> entity_frame_cache;
     std::shared_ptr<const EntityFrameCache> previous_entity_frame_cache;
@@ -1368,8 +1369,8 @@ struct Ue5NteAdapter::State {
     std::shared_ptr<const EntityFrameCache> actor_frame_cache;
     std::uint64_t actor_generation{};
     std::uint64_t actor_world_generation{};
-    // 鍏ㄩ儴鍏冲崱 actor 蹇収鎸?tick 鑺傛祦閲嶆壂锛氬彧鍦?World 鍙樺寲鏃跺埛鏂颁細璁╁揩鐓ф案涔呭喕缁擄紝
-    // 姝绘帀鐨?actor 鐣欏湪鍒楄〃閲屻€佹柊鐢熸垚鐨?actor 姘歌繙涓嶅彲瑙侊紙澶т笘鐣屽叏绋嬫槸鍚屼竴涓?World锛夈€?
+    // 閸忋劑鍎撮崗鍐插幢 actor 韫囶偆鍙庨幐?tick 閼哄倹绁﹂柌宥嗗閿涙艾褰ч崷?World 閸欐ê瀵查弮璺哄煕閺傞绱扮拋鈺佹彥閻撗勬娑斿懎鍠曠紒鎿勭礉
+    // 濮濈粯甯€閻?actor 閻ｆ瑥婀崚妤勩€冮柌灞烩偓浣规煀閻㈢喐鍨氶惃?actor 濮樻瓕绻欐稉宥呭讲鐟欎緤绱欐径褌绗橀悾灞藉弿缁嬪妲搁崥灞肩娑?World閿涘鈧?
     std::uint64_t actor_attempt_sequence{};
     std::uint64_t snapshot_tick_count{};
     std::uint64_t latest_snapshot_cost_micros{};
@@ -6666,10 +6667,10 @@ struct Ue5NteAdapter::State {
         return value;
     }
 
-    // 浠呬緵鍏ㄩ噺鎵弿浣跨敤锛欶Name 鐨?comparison index 鍦ㄨ繘绋嬪唴绋冲畾锛屽悓涓€ name_id 姘歌繙瀵瑰簲
-    // 鍚屼竴涓瓧绗︿覆锛屽洜姝ゆ妸瑙ｇ爜缁撴灉璁颁笅鏉ャ€傚叏鍏冲崱鎵弿浼氫负姣忎釜 actor 瑙ｆ瀽涓€娆″疄浣撳悕
-    // 锛堟暟鍗冧釜浜掍笉鐩稿悓鐨?name_id锛夛紝閫愭瑙ｇ爜瀹藉瓧绗﹀悕鐨勬€讳唬浠疯秴杩囦竴绉掞紱璁板繂鍖栦箣鍚庡彧鏈?
-    // 棣栨鎵弿闇€瑕佺湡姝ｈВ鐮併€傚け璐ョ粨鏋滀笉缂撳瓨锛岄偅閫氬父鎰忓懗鐫€甯冨眬灏氭湭灏辩华锛屽簲褰撻噸璇曘€?
+    // 娴犲懍绶甸崗銊╁櫤閹殿偅寮挎担璺ㄦ暏閿涙Name 閻?comparison index 閸︺劏绻樼粙瀣敶缁嬪啿鐣鹃敍灞芥倱娑撯偓 name_id 濮樻瓕绻欑€电懓绨?
+    // 閸氬奔绔存稉顏勭摟缁楋缚瑕嗛敍灞芥礈濮濄倖濡哥憴锝囩垳缂佹挻鐏夌拋棰佺瑓閺夈儯鈧倸鍙忛崗鍐插幢閹殿偅寮挎导姘礋濮ｅ繋閲?actor 鐟欙絾鐎芥稉鈧▎鈥崇杽娴ｆ挸鎮?
+    // 閿涘牊鏆熼崡鍐ч嚋娴滄帊绗夐惄绋挎倱閻?name_id閿涘绱濋柅鎰偧鐟欙絿鐖滅€硅棄鐡х粭锕€鎮曢惃鍕偓璁冲敩娴犵柉绉存潻鍥︾缁夋帪绱辩拋鏉跨箓閸栨牔绠ｉ崥搴″涧閺?
+    // 妫ｆ牗顐奸幍顐ｅ伎闂団偓鐟曚胶婀″锝埿掗惍浣碘偓鍌氥亼鐠愩儳绮ㄩ弸婊€绗夌紓鎾崇摠閿涘矂鍋呴柅姘埗閹板繐鎳楅惈鈧敮鍐ㄧ湰鐏忔碍婀亸杈╁崕閿涘苯绨茶ぐ鎾诲櫢鐠囨洏鈧?
     std::string ResolveNameForScanLocked(std::uint32_t name_id) const {
         if (name_id == 0) return {};
         if (const auto cached = name_snapshot_cache.find(name_id);
@@ -8602,6 +8603,29 @@ struct Ue5NteAdapter::State {
                     spec_apply.modifier_count =
                         count > 255 ? 255U : static_cast<std::uint8_t>(count);
                 }
+                // Record which execution class the effect declares; that class decides
+                // what the applied effect needs in order to settle.
+                const auto executions = Layout(profile, "gameplayEffect.executions", -1);
+                const auto calc_offset =
+                    Layout(profile, "gameplayEffectExecution.calculationClass", -1);
+                if (executions >= 0 && calc_offset >= 0) {
+                    std::uintptr_t exec_items{};
+                    std::int32_t exec_count{};
+                    if (ReadValue(*memory, effect_object + executions + data_offset, exec_items) &&
+                        ReadValue(*memory, effect_object + executions + num_offset, exec_count) &&
+                        exec_items != 0 && exec_count > 0) {
+                        std::uintptr_t calc_class{};
+                        if (ReadValue(*memory, exec_items + calc_offset, calc_class) &&
+                            calc_class != 0) {
+                            std::string calc_name;
+                            if (ReadReflectedObjectNameLocked(calc_class, calc_name)) {
+                                std::snprintf(spec_apply.execution_name,
+                                    sizeof(spec_apply.execution_name), "%s",
+                                    calc_name.c_str());
+                            }
+                        }
+                    }
+                }
                 if (items != 0 && count > 0) {
                     std::uint8_t type{};
                     if (ReadValue(*memory, items + magnitude + type_offset, type)) {
@@ -9339,15 +9363,15 @@ struct Ue5NteAdapter::State {
             if (instant_last_hp.size() >= 256U && !has_previous) instant_last_hp.clear();
             instant_last_hp[victim] = hp_after;
             if (!dead_after && has_previous && hp_before >= previous_hp - 0.001F) {
-                static char spec_failure[128]{};
+                static char spec_failure[192]{};
                 std::snprintf(spec_failure, sizeof(spec_failure),
-                    "no HP change (t=%u ui=%d mod=%d cdo=%u n=%u a=%d)",
+                    "no HP change (t=%u mod=%d cdo=%u n=%u a=%d ex=%s)",
                     static_cast<unsigned>(spec_apply.calculation_type),
-                    static_cast<int>(Layout(profile, "gameplayEffect.uiData", -9)),
                     static_cast<int>(Layout(profile, "gameplayEffect.modifiers", -9)),
                     static_cast<unsigned>(spec_apply.modifier_is_class),
                     static_cast<unsigned>(spec_apply.modifier_count),
-                    spec_apply.assign_function != 0 ? 1 : 0);
+                    spec_apply.assign_function != 0 ? 1 : 0,
+                    spec_apply.execution_name);
                 return Status(ANOMALY_STATUS_V1_FAILED, spec_failure);
             }
         }
@@ -16527,8 +16551,8 @@ struct Ue5NteAdapter::State::ProcessEventServiceEndpoint final {
         std::shared_ptr<State> state_;
     };
 
-    // 鍙妸瀹夸富宸叉湁鐨?ProcessEvent 璋冪敤閫氶亾鏆撮湶鎴愭湇鍔★紱璇硶鏍￠獙銆佺嚎绋嬮棬鎺т笌 SEH 閮藉湪
-    // InvokeProcessEventGuarded 鍐呭畬鎴愶紝鏈嚱鏁颁笉鏂板浠讳綍璋冪敤璇箟銆?
+    // 閸欘亝濡哥€瑰じ瀵屽鍙夋箒閻?ProcessEvent 鐠嬪啰鏁ら柅姘朵壕閺嗘挳婀堕幋鎰箛閸斺槄绱辩拠顓熺《閺嶏繝鐛欓妴浣哄殠缁嬪妫幒褌绗?SEH 闁棄婀?
+    // InvokeProcessEventGuarded 閸愬懎鐣幋鎰剁礉閺堫剙鍤遍弫棰佺瑝閺傛澘顤冩禒璁崇秿鐠嬪啰鏁ょ拠顓濈疅閵?
     static AnomalyStatusV1 ANOMALY_CALL InvokeThunk(void* const user, const std::uintptr_t object,
                                                     const std::uintptr_t function,
                                                     void* const parameters,
