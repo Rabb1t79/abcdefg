@@ -766,6 +766,8 @@ struct Ue5NteAdapter::State {
         std::uintptr_t make_spec_library{};
         std::uintptr_t apply_spec_function{};
         std::uintptr_t assign_function{};
+        std::uintptr_t make_context_function{};
+        std::uintptr_t make_outgoing_function{};
         std::uint32_t apply_spec_parms_size{};
         std::uint8_t calculation_type{};
         std::uint8_t modifier_layout{};
@@ -776,6 +778,7 @@ struct Ue5NteAdapter::State {
         bool attempted{};
         bool valid{};
         bool modifier_resolved{};
+        std::uint8_t spec_via_outgoing{};
     } spec_apply;
     std::unordered_map<std::uintptr_t, std::array<std::uint8_t, 16>>
         spec_handle_by_victim;
@@ -1357,10 +1360,10 @@ struct Ue5NteAdapter::State {
         float camera_horizontal_fov{};
         bool partial{};
     };
-    // FName 閻?comparison index 閸︺劏绻樼粙瀣敶缁嬪啿鐣鹃敍灞芥倱娑撯偓 name_id 濮樻瓕绻欑€电懓绨查崥灞肩娑擃亜鐡х粭锔胯閵?
-    // 閸忋劌鍙ч崡?actor 閹殿偅寮挎导姘礋濮ｅ繋閲?actor 鐟欙絾鐎芥稉鈧▎鈥崇杽娴ｆ挸鎮曢敍鍫熸殶閸楀啯顐奸敍澶涚礉闁劖顐肩憴锝囩垳鐎硅棄鐡х粭锕€鎮?
-    // 閻ㄥ嫪鍞禒鐤洣娑撯偓缁夋帊浜掓稉濠忕幢鐠佹澘绻傞崠鏍ф倵閸欘亝婀佹＃鏍偧閹殿偅寮块棁鈧憰浣烘埂濮濓綀袙閻降鈧倸銇戠拹銉х波閺嬫粈绗夌紓鎾崇摠閿?
-    // 閸ョ姳璐熼柇锝夆偓姘埗閹板繐鎳楅惈鈧敮鍐ㄧ湰鐏忔碍婀亸杈╁崕閿涘奔绠ｉ崥搴ｆ畱閹殿偅寮挎惔鏂跨秼闁插秷鐦妴?
+    // FName 闁?comparison index 闁革负鍔忕换妯肩矙鐎ｎ亜鏁剁紒瀣暱閻ｉ箖鏁嶇仦鑺ュ€卞☉鎾亾 name_id 婵ɑ鐡曠换娆戔偓鐢垫嚀缁ㄦ煡宕ョ仦鑲╊伇濞戞搩浜滈悺褏绮敂鑳洬闁?
+    // 闁稿繈鍔岄崣褔宕?actor 闁规鍋呭鎸庡濮橆偉绀嬫慨锝呯箣闁?actor 閻熸瑱绲鹃悗鑺ョ▔閳ь剙鈻庨垾宕囨澖濞达絾鎸搁幃鏇㈡晬閸喐娈堕柛妤€鍟濂告晬婢舵稓绀夐梺顐ｅ姈椤愯偐鎲撮敐鍥╁灣閻庣妫勯悺褏绮敃鈧幃?
+    // 闁汇劌瀚崬顒佺閻ゎ垼娲ｅ☉鎾亾缂佸甯婃禍鎺撶▔婵犲繒骞㈤悹浣规緲缁诲倿宕犻弽褎鍊甸柛娆樹簼濠€浣癸純閺嶎煈鍋ч柟娈垮亝瀵潡妫侀埀顒傛啺娴ｇ儤鍩傛慨婵撶秬琚欓柣顔婚檷閳ь剙鍊搁妵鎴犳嫻閵壯呮尝闁哄绮堢粭澶岀磽閹惧磭鎽犻柨?
+    // 闁搞儳濮崇拹鐔兼焽閿濆鍋撳顒傚煑闁规澘绻愰幊妤呮儓閳ь剛鏁崘銊ф拱閻忓繑纰嶅﹢顓犱焊鏉堚晛宕曢柨娑樺缁狅綁宕ユ惔锝嗙暠闁规鍋呭鎸庢償閺傝法绉奸梺鎻掔Х閻︻垶濡?
     mutable std::unordered_map<std::uint32_t, std::string> name_snapshot_cache;
     std::shared_ptr<const EntityFrameCache> entity_frame_cache;
     std::shared_ptr<const EntityFrameCache> previous_entity_frame_cache;
@@ -1369,8 +1372,8 @@ struct Ue5NteAdapter::State {
     std::shared_ptr<const EntityFrameCache> actor_frame_cache;
     std::uint64_t actor_generation{};
     std::uint64_t actor_world_generation{};
-    // 閸忋劑鍎撮崗鍐插幢 actor 韫囶偆鍙庨幐?tick 閼哄倹绁﹂柌宥嗗閿涙艾褰ч崷?World 閸欐ê瀵查弮璺哄煕閺傞绱扮拋鈺佹彥閻撗勬娑斿懎鍠曠紒鎿勭礉
-    // 濮濈粯甯€閻?actor 閻ｆ瑥婀崚妤勩€冮柌灞烩偓浣规煀閻㈢喐鍨氶惃?actor 濮樻瓕绻欐稉宥呭讲鐟欎緤绱欐径褌绗橀悾灞藉弿缁嬪妲搁崥灞肩娑?World閿涘鈧?
+    // 闁稿繈鍔戦崕鎾礂閸愭彃骞?actor 闊浂鍋嗛崣搴ㄥ箰?tick 闁煎搫鍊圭粊锕傛煂瀹ュ棗顥囬柨娑欒壘瑜把囧捶?World 闁告瑦锚鐎垫煡寮捄鍝勭厱闁哄倿顣︾槐鎵媼閳轰焦褰ラ柣鎾楀嫭顢嶅☉鏂挎噹閸犳洜绱掗幙鍕
+    // 婵繄绮敮鈧柣?actor 闁伙絾鐟ュ﹢顏堝礆濡ゅ嫨鈧啴鏌岀仦鐑╁亾娴ｈ鐓€闁汇垻鍠愰崹姘舵儍?actor 婵ɑ鐡曠换娆愮▔瀹ュ懎璁查悷娆庣筏缁辨瑦寰勮缁楁﹢鎮剧仦钘夊伎缂佸顑嗗Σ鎼佸触鐏炶偐顏卞☉?World闁挎稑顦埀?
     std::uint64_t actor_attempt_sequence{};
     std::uint64_t snapshot_tick_count{};
     std::uint64_t latest_snapshot_cost_micros{};
@@ -6667,10 +6670,10 @@ struct Ue5NteAdapter::State {
         return value;
     }
 
-    // 娴犲懍绶甸崗銊╁櫤閹殿偅寮挎担璺ㄦ暏閿涙Name 閻?comparison index 閸︺劏绻樼粙瀣敶缁嬪啿鐣鹃敍灞芥倱娑撯偓 name_id 濮樻瓕绻欑€电懓绨?
-    // 閸氬奔绔存稉顏勭摟缁楋缚瑕嗛敍灞芥礈濮濄倖濡哥憴锝囩垳缂佹挻鐏夌拋棰佺瑓閺夈儯鈧倸鍙忛崗鍐插幢閹殿偅寮挎导姘礋濮ｅ繋閲?actor 鐟欙絾鐎芥稉鈧▎鈥崇杽娴ｆ挸鎮?
-    // 閿涘牊鏆熼崡鍐ч嚋娴滄帊绗夐惄绋挎倱閻?name_id閿涘绱濋柅鎰偧鐟欙絿鐖滅€硅棄鐡х粭锕€鎮曢惃鍕偓璁冲敩娴犵柉绉存潻鍥︾缁夋帪绱辩拋鏉跨箓閸栨牔绠ｉ崥搴″涧閺?
-    // 妫ｆ牗顐奸幍顐ｅ伎闂団偓鐟曚胶婀″锝埿掗惍浣碘偓鍌氥亼鐠愩儳绮ㄩ弸婊€绗夌紓鎾崇摠閿涘矂鍋呴柅姘埗閹板繐鎳楅惈鈧敮鍐ㄧ湰鐏忔碍婀亸杈╁崕閿涘苯绨茶ぐ鎾诲櫢鐠囨洏鈧?
+    // 濞寸姴鎳嶇欢鐢稿礂閵娾晛娅ら柟娈垮亝瀵寧鎷呯捄銊︽殢闁挎稒顑慛ame 闁?comparison index 闁革负鍔忕换妯肩矙鐎ｎ亜鏁剁紒瀣暱閻ｉ箖鏁嶇仦鑺ュ€卞☉鎾亾 name_id 婵ɑ鐡曠换娆戔偓鐢垫嚀缁?
+    // 闁告艾濂旂粩瀛樼▔椤忓嫮鎽熺紒妤嬬細鐟曞棝鏁嶇仦鑺ョ婵縿鍊栨俊鍝ユ喆閿濆洨鍨崇紓浣规尰閻忓鎷嬫０浣虹憮闁哄鍎埀顒€鍊搁崣蹇涘礂閸愭彃骞㈤柟娈垮亝瀵寧瀵煎顐ョ婵絽绻嬮柌?actor 閻熸瑱绲鹃悗鑺ョ▔閳ь剙鈻庨垾宕囨澖濞达絾鎸搁幃?
+    // 闁挎稑鐗婇弳鐔煎础閸愌囧殝濞存粍甯婄粭澶愭儎缁嬫寧鍊遍柣?name_id闁挎稑顧€缁辨繈鏌呴幇顓у仹閻熸瑱绲块悥婊呪偓纭呮閻⊙呯箔閿曗偓閹洟鎯冮崟顑藉亾鐠佸啿鏁╁ù鐘垫焿缁夊瓨娼婚崶锔绢伇缂佸甯槐杈╂媼閺夎法绠撻柛鏍ㄧ墧缁狅綁宕ユ惔鈥虫锭闁?
+    // 濡絾鐗楅濂稿箥椤愶絽浼庨梻鍥ｅ亾閻熸洑鑳跺﹢鈥愁潰閿濆熆鎺楁儘娴ｇ鍋撻崒姘ヤ杭閻犳劑鍎崇划銊╁几濠娾偓缁楀绱撻幘宕囨憼闁挎稑鐭傞崑鍛存焻濮橆剛鍩楅柟鏉跨箰閹虫鎯堥埀顒傛暜閸愩劎婀伴悘蹇旂濠€顓犱焊鏉堚晛宕曢柨娑樿嫰缁ㄨ尪銇愰幘璇叉閻犲洦娲忛埀?
     std::string ResolveNameForScanLocked(std::uint32_t name_id) const {
         if (name_id == 0) return {};
         if (const auto cached = name_snapshot_cache.find(name_id);
@@ -8500,7 +8503,31 @@ struct Ue5NteAdapter::State {
             apply_parms != 2 || apply_size != 0x20) {
             return false;
         }
-        spec_apply.make_spec_function = function;
+        static constexpr wchar_t kMakeContext[] =
+            L"/Script/GameplayAbilities.AbilitySystemComponent.MakeEffectContext";
+        static constexpr wchar_t kMakeOutgoing[] =
+            L"/Script/GameplayAbilities.AbilitySystemComponent.MakeOutgoingSpec";
+        std::uintptr_t make_context{};
+        std::uintptr_t make_outgoing{};
+        if (FindExactObjectLocked(kMakeContext, make_context) && make_context != 0 &&
+            FindExactObjectLocked(kMakeOutgoing, make_outgoing) && make_outgoing != 0) {
+            std::uint8_t ctx_parms{};
+            std::uint8_t out_parms{};
+            std::uint16_t ctx_size{};
+            std::uint16_t out_size{};
+            if (ReadValue(*memory, make_context + Layout(profile, "ufunction.numParms"),
+                    ctx_parms) &&
+                ReadValue(*memory, make_context + Layout(profile, "ufunction.parmsSize"),
+                    ctx_size) &&
+                ReadValue(*memory, make_outgoing + Layout(profile, "ufunction.numParms"),
+                    out_parms) &&
+                ReadValue(*memory, make_outgoing + Layout(profile, "ufunction.parmsSize"),
+                    out_size) &&
+                ctx_parms == 0 && ctx_size == 0x10 && out_parms == 3 && out_size == 0x38) {
+                spec_apply.make_context_function = make_context;
+                spec_apply.make_outgoing_function = make_outgoing;
+            }
+        }        spec_apply.make_spec_function = function;
         spec_apply.make_spec_library = library;
         spec_apply.apply_spec_function = apply;
         spec_apply.apply_spec_parms_size = apply_size;
@@ -8540,25 +8567,56 @@ struct Ue5NteAdapter::State {
             }
         }
         if (handle_empty) {
-            std::array<std::uint8_t, 0x30> parameters{};
-            const std::uintptr_t effect = gameplay_effect;
-            const std::uintptr_t instigator = player_pawn;
-            const float level = 1.0F;
-            std::memcpy(parameters.data() + 0x00, &effect, sizeof(effect));
-            std::memcpy(parameters.data() + 0x08, &instigator, sizeof(instigator));
-            std::memcpy(parameters.data() + 0x10, &instigator, sizeof(instigator));
-            std::memcpy(parameters.data() + 0x18, &level, sizeof(level));
-            if (!InvokeNativeProcessEventLocked(spec_apply.make_spec_library,
-                    spec_apply.make_spec_function, parameters.data(),
-                    parameters.size())) {
-                return false;
-            }
-            std::memcpy(handle.data(), parameters.data() + 0x20, handle.size());
             bool built = false;
-            for (const auto value : handle) {
-                if (value != 0) {
-                    built = true;
-                    break;
+            // MakeOutgoingSpec performs the attribute-capture initialisation that an
+            // execution calculation depends on; the library helper does not. Prefer it
+            // whenever both entry points resolved.
+            if (spec_apply.make_context_function != 0 &&
+                spec_apply.make_outgoing_function != 0) {
+                std::array<std::uint8_t, 0x10> context{};
+                if (InvokeNativeProcessEventLocked(source_ability_system,
+                        spec_apply.make_context_function, context.data(),
+                        context.size())) {
+                    std::array<std::uint8_t, 0x38> outgoing{};
+                    const std::uintptr_t effect = gameplay_effect;
+                    const float level = 1.0F;
+                    std::memcpy(outgoing.data() + 0x00, &effect, sizeof(effect));
+                    std::memcpy(outgoing.data() + 0x08, &level, sizeof(level));
+                    std::memcpy(outgoing.data() + 0x10, context.data(), context.size());
+                    if (InvokeNativeProcessEventLocked(source_ability_system,
+                            spec_apply.make_outgoing_function, outgoing.data(),
+                            outgoing.size())) {
+                        std::memcpy(handle.data(), outgoing.data() + 0x28, handle.size());
+                        for (const auto value : handle) {
+                            if (value != 0) {
+                                built = true;
+                                break;
+                            }
+                        }
+                        if (built) spec_apply.spec_via_outgoing = 1;
+                    }
+                }
+            }
+            if (!built) {
+                std::array<std::uint8_t, 0x30> parameters{};
+                const std::uintptr_t effect = gameplay_effect;
+                const std::uintptr_t instigator = player_pawn;
+                const float level = 1.0F;
+                std::memcpy(parameters.data() + 0x00, &effect, sizeof(effect));
+                std::memcpy(parameters.data() + 0x08, &instigator, sizeof(instigator));
+                std::memcpy(parameters.data() + 0x10, &instigator, sizeof(instigator));
+                std::memcpy(parameters.data() + 0x18, &level, sizeof(level));
+                if (!InvokeNativeProcessEventLocked(spec_apply.make_spec_library,
+                        spec_apply.make_spec_function, parameters.data(),
+                        parameters.size())) {
+                    return false;
+                }
+                std::memcpy(handle.data(), parameters.data() + 0x20, handle.size());
+                for (const auto value : handle) {
+                    if (value != 0) {
+                        built = true;
+                        break;
+                    }
                 }
             }
             if (!built) return false;
@@ -9365,7 +9423,7 @@ struct Ue5NteAdapter::State {
             if (!dead_after && has_previous && hp_before >= previous_hp - 0.001F) {
                 static char spec_failure[192]{};
                 std::snprintf(spec_failure, sizeof(spec_failure),
-                    "no HP change (t=%u mod=%d cdo=%u n=%u a=%d ex=%s)",
+                    "no HP change (t=%u mod=%d cdo=%u n=%u a=%d out=%u ex=%s)",
                     static_cast<unsigned>(spec_apply.calculation_type),
                     static_cast<int>(Layout(profile, "gameplayEffect.modifiers", -9)),
                     static_cast<unsigned>(spec_apply.modifier_is_class),
@@ -16551,8 +16609,8 @@ struct Ue5NteAdapter::State::ProcessEventServiceEndpoint final {
         std::shared_ptr<State> state_;
     };
 
-    // 閸欘亝濡哥€瑰じ瀵屽鍙夋箒閻?ProcessEvent 鐠嬪啰鏁ら柅姘朵壕閺嗘挳婀堕幋鎰箛閸斺槄绱辩拠顓熺《閺嶏繝鐛欓妴浣哄殠缁嬪妫幒褌绗?SEH 闁棄婀?
-    // InvokeProcessEventGuarded 閸愬懎鐣幋鎰剁礉閺堫剙鍤遍弫棰佺瑝閺傛澘顤冩禒璁崇秿鐠嬪啰鏁ょ拠顓濈疅閵?
+    // 闁告瑯浜濇俊鍝モ偓鐟般仒鐎靛苯顔忛崣澶嬬畳闁?ProcessEvent 閻犲鍟伴弫銈夋焻濮樻湹澹曢柡鍡樻尦濠€鍫曞箣閹邦厽绠涢柛鏂烘缁辫京鎷犻鐔恒€婇柡宥忕節閻涙瑩濡存担鍝勬疇缂佸顑夊Λ顒勫箳瑜岀粭?SEH 闂侇喛妫勫﹢?
+    // InvokeProcessEventGuarded 闁告劕鎳庨悾顒勫箣閹板墎绀夐柡鍫墮閸ら亶寮０浣虹憹闁哄倹婢橀·鍐╃鐠佸磭绉块悹瀣暟閺併倗鎷犻婵堢枀闁?
     static AnomalyStatusV1 ANOMALY_CALL InvokeThunk(void* const user, const std::uintptr_t object,
                                                     const std::uintptr_t function,
                                                     void* const parameters,
