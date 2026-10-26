@@ -11296,13 +11296,15 @@ struct Ue5NteAdapter::State {
     }
 
     AnomalyStatusV1 VehicleSetTopSpeedRatio(float ratio) noexcept {
-        if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 10.0F)
-            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be 0.05..10.0");
+        if (!std::isfinite(ratio))
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be finite");
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle mutation must run on Game thread");
         std::scoped_lock lock(mutex);
-        // The caller-facing slider is the only source of this value; the range check above is the
-        // whole contract, and MakeVehicleSpeedFieldTargets clamps the factor to its supported ceiling.
+        // The vehicle panel slider spans 0..100 while Anomaly's factor model only supports
+        // 0.5..10, so clamp instead of rejecting: every slider position then maps onto the
+        // supported band and the caller never sees a dead range.
+        ratio = std::clamp(ratio, 0.5F, 10.0F);
         if (!RefreshVehicleLocked())
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
         if (vehicle_is_water) {
