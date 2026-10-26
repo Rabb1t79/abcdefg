@@ -783,6 +783,7 @@ struct Ue5NteAdapter::State {
     std::uintptr_t refresh_binding_library{};
     bool refresh_binding_attempted{};
     bool refresh_binding_valid{};
+    std::uint32_t refresh_diag{};
     std::uintptr_t legacy_native_dot{};
     std::uint64_t legacy_native_dot_generation{};
     bool legacy_native_dot_attempted{};
@@ -8671,12 +8672,27 @@ struct Ue5NteAdapter::State {
             std::uintptr_t library{};
             std::uint8_t num_parms{};
             std::uint16_t parms_size{};
-            if (!FindExactObjectLocked(kFunction, function) ||
-                !FindExactObjectLocked(kLibrary, library) || function == 0 ||
-                library == 0 ||
-                !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
-                !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
-                num_parms != 7 || parms_size != 0x39) {
+            if (!FindExactObjectLocked(kFunction, function) || function == 0) {
+                refresh_diag = 1;
+                return false;
+            }
+            if (!FindExactObjectLocked(kLibrary, library) || library == 0) {
+                refresh_diag = 2;
+                return false;
+            }
+            if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"),
+                    num_parms) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"),
+                    parms_size)) {
+                refresh_diag = 3;
+                return false;
+            }
+            if (num_parms != 7) {
+                refresh_diag = 4;
+                return false;
+            }
+            if (parms_size != 0x39) {
+                refresh_diag = 5;
                 return false;
             }
             refresh_binding_function = function;
@@ -8693,8 +8709,10 @@ struct Ue5NteAdapter::State {
         std::memcpy(parameters.data() + 0x10, &stack, sizeof(stack));
         std::memcpy(parameters.data() + 0x20, &instigator, sizeof(instigator));
         std::memcpy(parameters.data() + 0x28, &instigator, sizeof(instigator));
-        return InvokeNativeProcessEventLocked(refresh_binding_library,
+        const bool refreshed = InvokeNativeProcessEventLocked(refresh_binding_library,
             refresh_binding_function, parameters.data(), 0x39);
+        refresh_diag = refreshed ? 0U : 6U;
+        return refreshed;
     }
 
     AnomalyStatusV1 ApplyManualDamage(
@@ -9299,6 +9317,13 @@ struct Ue5NteAdapter::State {
                     spec_apply.assign_function != 0 ? 1 : 0);
                 return Status(ANOMALY_STATUS_V1_FAILED, spec_failure);
             }
+        }
+        if (refresh_diag != 0) {
+            // Surface why the maintenance refresh cannot run; the plugin logs this text.
+            static char refresh_note[48]{};
+            std::snprintf(refresh_note, sizeof(refresh_note), "refresh diag=%u",
+                static_cast<unsigned>(refresh_diag));
+            return Status(ANOMALY_STATUS_V1_OK, refresh_note);
         }
         return Status(ANOMALY_STATUS_V1_OK);
     }
