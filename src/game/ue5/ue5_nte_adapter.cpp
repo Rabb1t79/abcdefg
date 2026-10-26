@@ -9369,23 +9369,13 @@ struct Ue5NteAdapter::State {
             selected_native_dot = 0;
         }
         const std::uint64_t now_ms = GetTickCount64();
-        bool has_skill_damage_ge = false;
-        for (const auto& choice : native_dot_choices) {
-            if (choice.name.rfind("GE_Player_", 0) == 0 &&
-                choice.name.ends_with("_Damage_C")) {
-                has_skill_damage_ge = true;
-                break;
-            }
-        }
         if (!native_dot_choices.empty()) {
-            if (has_skill_damage_ge ||
-                now_ms - native_dot_last_scan_ms < 2000U) {
-                if (selected_native_dot >= native_dot_choices.size()) selected_native_dot = 0;
-                gameplay_effect = native_dot_choices[selected_native_dot].gameplay_effect;
-                return gameplay_effect != 0;
-            }
-            native_dot_choices.clear();
-            selected_native_dot = 0;
+            // Cache the choice list for the whole object generation. Rescanning the
+            // registry whenever the list lacked a skill damage effect made every
+            // maintenance tick walk every object and produced a visible hitch.
+            if (selected_native_dot >= native_dot_choices.size()) selected_native_dot = 0;
+            gameplay_effect = native_dot_choices[selected_native_dot].gameplay_effect;
+            return gameplay_effect != 0;
         }
         native_dot_last_scan_ms = now_ms;
         native_dot_class_cache.attempted = true;
