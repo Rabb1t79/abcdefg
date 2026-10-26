@@ -799,7 +799,7 @@
     "damageTextInfo.reactionType": 68,
     "damageTextInfo.reactionDisplayType": 69,
     "gameplayEffect.uiData": 768,"gameplayEffect.modifiers": 584,
-    "gameplayEffect.executions": 600, "effectContext.instigator": 8, "effectContext.effectCauser": 16, "effectContext.instigatorAsc": 52, "effectContext.abilityLevel": 40,"gameplayEffectExecution.calculationClass": 0,"gameplayModifier.magnitude": 64,
+    "gameplayEffect.executions": 600, "effectContext.instigator": 8, "effectContext.effectCauser": 16, "effectContext.instigatorAsc": 52, "effectContext.abilityLevel": 40,"effectContext.sourceObject": 44, "gameplayEffectExecution.calculationClass": 0,"gameplayModifier.magnitude": 64,
     "gameplayEffectModifierMagnitude.calculationType": 0,
     "gameplayEffectModifierMagnitude.setByCaller": 464,
     "gameplayEffectUIData.description": 40,

@@ -8636,6 +8636,25 @@ struct Ue5NteAdapter::State {
                                 context_object + level_offset, &ability_level,
                                 sizeof(ability_level)));
                         }
+                        // SourceObject is also a weak object pointer; the source ability
+                        // system is the object the effect originates from.
+                        const auto source_offset = Layout(profile, "effectContext.sourceObject", -1);
+                        AnomalyGenerationHandleV1 source_handle{};
+                        if (source_offset >= 0 &&
+                            ObjectHandleLocked(source_ability_system, source_handle)) {
+                            const auto source_index = static_cast<std::int32_t>(
+                                source_handle.id & 0xFFFFFFFFULL) - 1;
+                            const auto source_serial = static_cast<std::int32_t>(
+                                source_handle.id >> 32U);
+                            if (source_index >= 0 && source_serial > 0) {
+                                static_cast<void>(memory->Write(
+                                    context_object + source_offset + weak_index,
+                                    &source_index, sizeof(source_index)));
+                                static_cast<void>(memory->Write(
+                                    context_object + source_offset + weak_serial,
+                                    &source_serial, sizeof(source_serial)));
+                            }
+                        }
                     }
                     std::array<std::uint8_t, 0x38> outgoing{};
                     const std::uintptr_t effect = gameplay_effect;
