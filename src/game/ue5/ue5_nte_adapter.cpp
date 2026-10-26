@@ -1,4 +1,4 @@
-﻿#include "anomaly/ue5_nte_adapter.hpp"
+#include "anomaly/ue5_nte_adapter.hpp"
 #include "anomaly/nte_damage_capture.hpp"
 #include "anomaly/nte_vehicle.hpp"
 #include "anomaly/nte_monster_names.hpp"
@@ -8648,9 +8648,37 @@ struct Ue5NteAdapter::State {
         std::memcpy(parameters.data(), handle.data(), handle.size());
         std::memcpy(parameters.data() + 0x10, &target_ability_system,
             sizeof(target_ability_system));
-        return InvokeNativeProcessEventLocked(source_ability_system,
+        // Replicate the capture the game performs around its own damage application: the
+        // source ability system carries the transient attacker/effect pair that a damage
+        // execution reads while the spec is applied.
+        const auto causer_offset =
+            Layout(profile, "abilitySystem.currentDamageCauserOrInstigator", -1);
+        const auto effect_offset =
+            Layout(profile, "abilitySystem.currentDamageGameplayEffect", -1);
+        std::uintptr_t saved_causer{};
+        std::uintptr_t saved_effect{};
+        bool patched = false;
+        if (causer_offset >= 0 && effect_offset >= 0) {
+            if (ReadValue(*memory, source_ability_system + causer_offset, saved_causer) &&
+                ReadValue(*memory, source_ability_system + effect_offset, saved_effect)) {
+                std::uintptr_t causer = player_pawn;
+                std::uintptr_t effect = gameplay_effect;
+                patched = memory->Write(source_ability_system + causer_offset, &causer,
+                              sizeof(causer)) &&
+                    memory->Write(source_ability_system + effect_offset, &effect,
+                        sizeof(effect));
+            }
+        }
+        const bool applied = InvokeNativeProcessEventLocked(source_ability_system,
             spec_apply.apply_spec_function, parameters.data(),
             spec_apply.apply_spec_parms_size);
+        if (patched) {
+            static_cast<void>(memory->Write(source_ability_system + causer_offset,
+                &saved_causer, sizeof(saved_causer)));
+            static_cast<void>(memory->Write(source_ability_system + effect_offset,
+                &saved_effect, sizeof(saved_effect)));
+        }
+        return applied;
     }
 
     // DPI-0014: refreshes the duration of an already active effect and can add stacks.
