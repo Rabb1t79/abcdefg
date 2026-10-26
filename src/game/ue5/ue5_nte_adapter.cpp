@@ -9036,6 +9036,26 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "no captured player attack session is available");
         }
+        if (!instant_mode) {
+            // Refresh before probing the active state: that probe has been observed to
+            // report absence while the effect is still running, which left the
+            // maintenance path with nothing to extend.
+            std::uintptr_t probe_target_asc{};
+            if (ReadPointerAt(*memory, victim,
+                    Layout(profile, "abilityCharacter.htAbilitySystemComponent"),
+                    probe_target_asc) &&
+                probe_target_asc != 0 &&
+                RefreshActiveNativeDotLocked(victim, gameplay_effect, probe_target_asc)) {
+                result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE |
+                    ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED;
+                bool refreshed_dead{};
+                static_cast<void>(InvokeNteBoolReturnLocked(
+                    NteFunctionKind::GetIsDead, victim, refreshed_dead));
+                result->dead = refreshed_dead ? 1U : 0U;
+                if (refreshed_dead) result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD;
+                return Status(ANOMALY_STATUS_V1_OK, "native DoT refreshed");
+            }
+        }
         if (!instant_mode && query_active()) {
             result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE;
             // Keep the effect alive past its authored duration and let it grow, so the
