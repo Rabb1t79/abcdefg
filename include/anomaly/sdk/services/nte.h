@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "anomaly/sdk/base.h"
 #define ANOMALY_NTE_BUILD_SERVICE_V1_ID "anomaly.nte.build"
 #define ANOMALY_NTE_BUILD_SERVICE_V1_VERSION 1u
@@ -293,9 +293,9 @@ typedef struct AnomalyNteNavigationServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *stop_movement)(void* user);
 } AnomalyNteNavigationServiceV1;
 
-// Host 管理的 UE5 载具桥接接口：V2 增加实时目录和位置/归属召唤，V3 增加目录刷新和显示标签，
-// V4 增加对非玩家载具实例的批量速率与扭矩控制。插件 ABI 不暴露 UE 对象指针；反射读取与修改
-// 均受边界约束，并且只允许在 Game 线程执行。
+// Host 绠＄悊鐨?UE5 杞藉叿妗ユ帴鎺ュ彛锛歏2 澧炲姞瀹炴椂鐩綍鍜屼綅缃?褰掑睘鍙敜锛孷3 澧炲姞鐩綍鍒锋柊鍜屾樉绀烘爣绛撅紝
+// V4 澧炲姞瀵归潪鐜╁杞藉叿瀹炰緥鐨勬壒閲忛€熺巼涓庢壄鐭╂帶鍒躲€傛彃浠?ABI 涓嶆毚闇?UE 瀵硅薄鎸囬拡锛涘弽灏勮鍙栦笌淇敼
+// 鍧囧彈杈圭晫绾︽潫锛屽苟涓斿彧鍏佽鍦?Game 绾跨▼鎵ц銆?
 typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_V1_VALID (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_V1_HAS_SPEED (1u << 1u)
@@ -399,8 +399,8 @@ typedef struct AnomalyNteVehicleServiceV1 {
     // followed by VehicleID, while RowName remains the canonical internal selection key.
     AnomalyStatusV1 (ANOMALY_CALL *catalog_label_at)(
         void* user, uint32_t index, char* destination, size_t* inout_size);
-    // V4：批量控制已加载关卡中的 HTWheeledVehicleBase 实例，排除本地玩家当前驾驶的载具。
-    // 两个回调只能在 Game 线程运行，且会在修改前校验实时 Actor 与运动组件实例。
+    // V4锛氭壒閲忔帶鍒跺凡鍔犺浇鍏冲崱涓殑 HTWheeledVehicleBase 瀹炰緥锛屾帓闄ゆ湰鍦扮帺瀹跺綋鍓嶉┚椹剁殑杞藉叿銆?
+    // 涓や釜鍥炶皟鍙兘鍦?Game 绾跨▼杩愯锛屼笖浼氬湪淇敼鍓嶆牎楠屽疄鏃?Actor 涓庤繍鍔ㄧ粍浠跺疄渚嬨€?
     AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_top_speed_ratio)(void* user, float ratio);
     AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_engine_torque_ratio)(void* user, float ratio);
     // V4 tail extension: configure the minimum user-facing speed factor for non-player instances only.
@@ -1032,6 +1032,71 @@ typedef struct AnomalyNteMetricsServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *snapshot)(void* user,
         AnomalyNteSnapshotMetricsV1* metrics);
 } AnomalyNteMetricsServiceV1;
+
+#define ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_ID "anomaly.nte.damage-echo"
+#define ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION 3u
+typedef uint32_t AnomalyNteDamageEchoFlagsV1;
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE (1u << 0u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL (1u << 1u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT (1u << 2u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_WEAK_UNBALANCE (1u << 3u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_KILLED (1u << 8u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD (1u << 9u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_DISPLAYED (1u << 10u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED (1u << 11u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE (1u << 12u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_SESSION_REPLAY (1u << 16u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_INSTANT_DAMAGE (1u << 17u)
+
+typedef struct AnomalyNteDamageEchoRequestV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    AnomalyGenerationHandleV1 world;
+    AnomalyGenerationHandleV1 victim;
+    int64_t damage;
+    uint32_t damage_type;
+    uint32_t display_type;
+    uint32_t reaction_type;
+    uint32_t reaction_display_type;
+    uint32_t ticks_per_second;
+    // Strength multiplier in percent for the applied effect. 0 keeps the authored
+    // value (equivalent to 100). Occupies the previously reserved slot, so the
+    // structure layout is unchanged for existing consumers.
+    uint32_t strength_percent;
+} AnomalyNteDamageEchoRequestV1;
+
+typedef struct AnomalyNteDamageEchoResultV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    double hp_before;
+    double hp_after;
+    int64_t applied_damage;
+    uint32_t dead;
+    uint32_t reserved;
+} AnomalyNteDamageEchoResultV1;
+
+typedef struct AnomalyNteDamageEchoServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    // Game callback domain only. lowers HP and optionally displays the hit.
+    AnomalyStatusV1 (ANOMALY_CALL *apply_manual)(
+        void* user, const AnomalyNteDamageEchoRequestV1* request,
+        AnomalyNteDamageEchoResultV1* result);
+    // Game callback domain only. Applies/refreshes the validated native DoT GE.
+    // The request damage is retained for reporting, not used as the GE magnitude.
+    AnomalyStatusV1 (ANOMALY_CALL *apply_native_dot)(
+        void* user, const AnomalyNteDamageEchoRequestV1* request,
+        AnomalyNteDamageEchoResultV1* result);
+    // V2: enumerate and select the loaded generic DoT GameplayEffect.
+    uint32_t (ANOMALY_CALL *dot_count)(void* user);
+    AnomalyStatusV1 (ANOMALY_CALL *dot_name_at)(
+        void* user, uint32_t index, char* destination, size_t* inout_size);
+    AnomalyStatusV1 (ANOMALY_CALL *select_dot)(void* user, uint32_t index);
+    // V3: replay the captured player attack session only; never falls back to GE.
+    AnomalyStatusV1 (ANOMALY_CALL *apply_session)(
+        void* user, const AnomalyNteDamageEchoRequestV1* request,
+        AnomalyNteDamageEchoResultV1* result);
+} AnomalyNteDamageEchoServiceV1;
+
 #ifdef __cplusplus
 }
 #endif
