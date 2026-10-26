@@ -11147,11 +11147,14 @@ struct Ue5NteAdapter::State {
         const float configured_multiplier,
         VehicleSpeedFieldBaseline& targets,
         const float minimum_multiplier = 0.50F) const noexcept {
-        // Original Anomaly code used a 0.6024x lower floor. The authorized current-vehicle
-        // fine-tuning policy explicitly supports 0.50x; other-vehicle callers pass their own floor.
-        // Effective TopSpeedRatio still derives from the captured baseline TopSpeedInKmH (or 70 if unset).
-        // Torque scale remains max(speedRatio * 2, 2), and RPM scale remains speedRatio.
-        constexpr float kAnomalyMultiplierCeiling = 10.0F;
+        // The multiplier is the panel's "速度倍率": 1.0 keeps the vehicle stock and the factor
+        // scales the captured stock top speed, matching the host lineage's 0.05..100 contract.
+        // The derived native TopSpeedRatio equals the factor, and the physical cap fields
+        // (MaxLinearVelocity / TopSpeed / bEnableTopSpeedLimit) are raised with it so the engine
+        // model can actually reach the requested speed. Torque stays within the 20x bound the
+        // torque API publishes; RPM follows the factor.
+        constexpr float kAnomalyMultiplierCeiling = 100.0F;
+        constexpr float kAnomalyTorqueScaleCeiling = 20.0F;
         const float multiplier_floor = std::clamp(minimum_multiplier, 0.05F, kAnomalyMultiplierCeiling);
         constexpr float kAnomalyBaseSpeedKmh = 70.0F;
         constexpr float kAnomalyMinValidField = 0.6024F;
@@ -11163,14 +11166,15 @@ struct Ue5NteAdapter::State {
         constexpr float kMinimumEffectiveRatio = 0.0000001F;
         constexpr float kMaximumEffectiveRatio = 2000.0F;
         if (!baseline.valid || !std::isfinite(configured_multiplier) ||
-            configured_multiplier < 0.05F || configured_multiplier > 20.0F) return false;
+            configured_multiplier < 0.05F ||
+            configured_multiplier > kAnomalyMultiplierCeiling) return false;
 
         const float multiplier = (std::min)(kAnomalyMultiplierCeiling,
             (std::max)(multiplier_floor, configured_multiplier));
-        const float target_speed_kmh = multiplier * kAnomalyBaseSpeedKmh;
         const float baseline_speed_kmh = baseline.top_speed_kmh > kAnomalyMinValidField
             ? baseline.top_speed_kmh : kAnomalyBaseSpeedKmh;
-        const float speed_ratio = target_speed_kmh / baseline_speed_kmh;
+        const float target_speed_kmh = baseline_speed_kmh * multiplier;
+        const float speed_ratio = multiplier;
         if (!std::isfinite(target_speed_kmh) || !std::isfinite(speed_ratio) ||
             speed_ratio < kMinimumEffectiveRatio || speed_ratio > kMaximumEffectiveRatio) return false;
 
@@ -11182,7 +11186,7 @@ struct Ue5NteAdapter::State {
             ? baseline.comfort_max_engine_torque : base_engine_torque;
         const float base_comfort_rpm = baseline.comfort_max_engine_rpm > kAnomalyMinValidField
             ? baseline.comfort_max_engine_rpm : base_engine_rpm;
-        const float torque_scale = (std::max)(speed_ratio * 2.0F, 2.0F);
+        const float torque_scale = std::clamp(multiplier * 2.0F, 2.0F, kAnomalyTorqueScaleCeiling);
 
         targets = baseline;
         targets.max_linear_velocity = target_speed_kmh / 3.6F;
@@ -11301,10 +11305,9 @@ struct Ue5NteAdapter::State {
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle mutation must run on Game thread");
         std::scoped_lock lock(mutex);
-        // The vehicle panel slider spans 0..100 while Anomaly's factor model only supports
-        // 0.5..10, so clamp instead of rejecting: every slider position then maps onto the
-        // supported band and the caller never sees a dead range.
-        ratio = std::clamp(ratio, 0.5F, 10.0F);
+        // The panel slider spans 0..100 and 1.0 means "stock", so clamp into the supported
+        // 0.05..100 band instead of rejecting: no slider position is dead.
+        ratio = std::clamp(ratio, 0.05F, 100.0F);
         if (!RefreshVehicleLocked())
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
         if (vehicle_is_water) {
