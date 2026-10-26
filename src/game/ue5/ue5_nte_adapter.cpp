@@ -1,4 +1,4 @@
-﻿#include "anomaly/ue5_nte_adapter.hpp"
+#include "anomaly/ue5_nte_adapter.hpp"
 #include "anomaly/nte_damage_capture.hpp"
 #include "anomaly/nte_vehicle.hpp"
 #include "anomaly/nte_monster_names.hpp"
@@ -9640,8 +9640,8 @@ struct Ue5NteAdapter::State {
     }
 
     AnomalyStatusV1 VehicleSetTopSpeedRatio(float ratio) noexcept {
-        if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
-            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be 0.05..20.0");
+        if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 100.0F)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be 0.05..100.0");
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle mutation must run on Game thread");
         std::scoped_lock lock(mutex);
@@ -9833,13 +9833,21 @@ struct Ue5NteAdapter::State {
     }
 
     AnomalyStatusV1 VehicleCustomizationCatalogSnapshot(
+        const AnomalyStringViewV1 vehicle_row_id,
         AnomalyNteVehicleCustomizationCatalogSnapshotV1* snapshot) noexcept {
         if (snapshot == nullptr || snapshot->struct_size < sizeof(*snapshot))
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid customization snapshot");
         std::scoped_lock lock(mutex);
-        const std::string selected = selected_summon_vehicle_id.empty()
-            ? (vehicle_catalog.empty() ? std::string{} : vehicle_catalog.front().id)
-            : selected_summon_vehicle_id;
+        std::string selected;
+        if (vehicle_row_id.data != nullptr && vehicle_row_id.size != 0) {
+            if (vehicle_row_id.size >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES)
+                return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid vehicle row id");
+            selected.assign(vehicle_row_id.data, vehicle_row_id.size);
+        } else {
+            selected = selected_summon_vehicle_id.empty()
+                ? (vehicle_catalog.empty() ? std::string{} : vehicle_catalog.front().id)
+                : selected_summon_vehicle_id;
+        }
         if (!EnsureVehicleCustomizationCatalogLocked(selected))
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "customization catalog is unavailable");
         snapshot->struct_size = sizeof(*snapshot);
@@ -9851,13 +9859,21 @@ struct Ue5NteAdapter::State {
     }
 
     AnomalyStatusV1 VehicleCustomizationOptionAt(
+        const AnomalyStringViewV1 vehicle_row_id,
         const std::uint32_t index, AnomalyNteVehicleCustomizationOptionV1* option) noexcept {
         if (option == nullptr || option->struct_size < sizeof(*option))
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid customization option");
         std::scoped_lock lock(mutex);
-        const std::string selected = selected_summon_vehicle_id.empty()
-            ? (vehicle_catalog.empty() ? std::string{} : vehicle_catalog.front().id)
-            : selected_summon_vehicle_id;
+        std::string selected;
+        if (vehicle_row_id.data != nullptr && vehicle_row_id.size != 0) {
+            if (vehicle_row_id.size >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES)
+                return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid vehicle row id");
+            selected.assign(vehicle_row_id.data, vehicle_row_id.size);
+        } else {
+            selected = selected_summon_vehicle_id.empty()
+                ? (vehicle_catalog.empty() ? std::string{} : vehicle_catalog.front().id)
+                : selected_summon_vehicle_id;
+        }
         if (!EnsureVehicleCustomizationCatalogLocked(selected))
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "customization catalog is unavailable");
         if (index >= vehicle_customization_options.size())
@@ -15701,17 +15717,23 @@ private:
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleCustomizationSnapshotThunk(
-        void* user, AnomalyNteVehicleCustomizationCatalogSnapshotV1* snapshot) noexcept {
+        void* user, AnomalyStringViewV1 vehicle_row_id,
+        AnomalyNteVehicleCustomizationCatalogSnapshotV1* snapshot) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? static_cast<State*>(lease.User())->VehicleCustomizationCatalogSnapshot(snapshot)
-                     : StoppedStatus();
+        return lease
+            ? static_cast<State*>(lease.User())->VehicleCustomizationCatalogSnapshot(
+                  vehicle_row_id, snapshot)
+            : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleCustomizationOptionThunk(
-        void* user, std::uint32_t index, AnomalyNteVehicleCustomizationOptionV1* option) noexcept {
+        void* user, AnomalyStringViewV1 vehicle_row_id, std::uint32_t index,
+        AnomalyNteVehicleCustomizationOptionV1* option) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? static_cast<State*>(lease.User())->VehicleCustomizationOptionAt(index, option)
-                     : StoppedStatus();
+        return lease
+            ? static_cast<State*>(lease.User())->VehicleCustomizationOptionAt(
+                  vehicle_row_id, index, option)
+            : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleUnsupportedRepairThunk(void*) noexcept {

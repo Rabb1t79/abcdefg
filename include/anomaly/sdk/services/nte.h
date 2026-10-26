@@ -392,10 +392,14 @@ typedef struct AnomalyNteVehicleServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *set_fine_speed_tuning_enabled)(
         void* user, uint32_t enabled);
     AnomalyStatusV1 (ANOMALY_CALL *revoke_fine_speed_authorization)(void* user);
+    // The customization catalog is addressed by the vehicle row id. An empty id keeps
+    // the behaviour of using the currently selected summon vehicle.
     AnomalyStatusV1 (ANOMALY_CALL *customization_catalog_snapshot)(
-        void* user, AnomalyNteVehicleCustomizationCatalogSnapshotV1* snapshot);
+        void* user, AnomalyStringViewV1 vehicle_row_id,
+        AnomalyNteVehicleCustomizationCatalogSnapshotV1* snapshot);
     AnomalyStatusV1 (ANOMALY_CALL *customization_option_at)(
-        void* user, uint32_t index, AnomalyNteVehicleCustomizationOptionV1* option);
+        void* user, AnomalyStringViewV1 vehicle_row_id, uint32_t index,
+        AnomalyNteVehicleCustomizationOptionV1* option);
     AnomalyStatusV1 (ANOMALY_CALL *repair_current_vehicle)(void* user);
 } AnomalyNteVehicleServiceV1;
 
