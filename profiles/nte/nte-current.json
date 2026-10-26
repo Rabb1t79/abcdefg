@@ -463,6 +463,14 @@
       "ue5.GameTick",
       "ue5.FNamePool",
       "ue5.GObjects"
+    ],
+    "nte.damage-echo": [
+      "ue5.GWorld",
+      "ue5.GameTick",
+      "ue5.FNamePool",
+      "ue5.GObjects",
+      "ue5.ProcessEvent",
+      "ue5.StaticFindObject"
     ]
   },
   "optionalFeatures": [
@@ -485,7 +493,8 @@
     "nte.skill-invocation",
     "ue5.streaming-source",
     "nte.vehicle",
-    "nte.attack-input"
+    "nte.attack-input",
+    "nte.damage-echo"
   ],
   "featureLayoutValidators": {
     "ue5.ftext": [
@@ -554,6 +563,9 @@
     ],
     "nte.attack-input": [
       "nte-attack-input-layout-v1"
+    ],
+    "nte.damage-echo": [
+      "nte-damage-echo-abi-v1"
     ]
   },
   "featureDependencies": {
@@ -650,6 +662,11 @@
       "nte.player",
       "ue5.names",
       "ue5.objects",
+      "ue5.process-event"
+    ],
+    "nte.damage-echo": [
+      "nte.combat",
+      "ue5.object-find",
       "ue5.process-event"
     ]
   },
@@ -755,6 +772,19 @@
     "activeGameplayEffects.items": 304,
     "abilitySystem.currentDamageCauserOrInstigator": 9064,
     "abilitySystem.currentDamageGameplayEffect": 9072,
+    "abilityCharacter.htAbilitySystemComponent": 2368,
+    "attributeComponent.hpCurrent": 6712,
+    "gameplayEffect.modifiers": 584,
+    "gameplayModifier.magnitude": 64,
+    "gameplayEffectModifierMagnitude.calculationType": 0,
+    "gameplayEffectModifierMagnitude.setByCaller": 464,
+    "gameplayEffect.executions": 600,
+    "gameplayEffectExecution.calculationClass": 0,
+    "effectContext.instigator": 8,
+    "effectContext.effectCauser": 16,
+    "effectContext.instigatorAsc": 52,
+    "effectContext.abilityLevel": 40,
+    "effectContext.sourceObject": 44,
     "gameData.abilityDataAsset": 952,
     "abilityData.skillDamageDataTable": 1112,
     "skillDamage.gaName": 24,

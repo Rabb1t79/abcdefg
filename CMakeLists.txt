@@ -1262,6 +1262,11 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/NteTeleport/manifest.json
         PACKAGE_NAME NteTeleport
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteTeleport")
+    anomaly_add_plugin(anomaly_builtin_damage_echo
+        SOURCES plugins/AnomalyDamageEcho/plugin.cpp
+        MANIFEST plugins/AnomalyDamageEcho/manifest.json
+        PACKAGE_NAME AnomalyDamageEcho
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/AnomalyDamageEcho")
     anomaly_add_plugin(anomaly_builtin_nte_movement_hold TEST_PLUGIN
         SOURCES plugins/NteMovementHold/plugin.cpp
         MANIFEST plugins/NteMovementHold/manifest.json
@@ -1525,7 +1530,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         anomaly_builtin_clone_enter anomaly_builtin_nte_quick_ultimate
         anomaly_builtin_nte_free_fly anomaly_builtin_skin_changer anomaly_builtin_ui_buttons
         anomaly_builtin_dll_loader anomaly_builtin_hifi_vehicle_music
-        anomaly_builtin_model_scale)
+        anomaly_builtin_model_scale anomaly_builtin_damage_echo)
     if(ANOMALY_BUILD_TEST_PLUGINS)
         list(APPEND ANOMALY_BUILTIN_PLUGIN_TARGETS
             anomaly_builtin_nte_movement_hold
@@ -1547,6 +1552,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         target_compile_options(anomaly_builtin_skin_changer PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_ui_buttons PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_hifi_vehicle_music PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_damage_echo PRIVATE /utf-8)
     endif()
     add_dependencies(anomaly_test_host ${ANOMALY_BUILTIN_PLUGIN_TARGETS})
     if(TARGET anomaly-platform-preview)
@@ -1583,6 +1589,7 @@ anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_navigation NteNavmeshD
 anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_pickup_demo NtePickupDemo)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_entity_esp EntityESP)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_pink_paw_heist_esp PinkPawHeistESP)
+anomaly_stage_platform_preview_plugin(anomaly_builtin_damage_echo AnomalyDamageEcho)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_fake_uid FakeUID)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_camera_tools CameraTools)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_camera_blur_fix CameraBlurFix)

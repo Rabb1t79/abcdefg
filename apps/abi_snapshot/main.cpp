@@ -342,6 +342,30 @@ std::string BuildSnapshot() {
     AppendUnsigned(output, ANOMALY_NTE_PICKUP_V1_CHECKING_FLAG);
     output.append(",\n    \"ANOMALY_NTE_PICKUP_V1_HAS_UNCONFIRMED\": ");
     AppendUnsigned(output, ANOMALY_NTE_PICKUP_V1_HAS_UNCONFIRMED);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_WEAK_UNBALANCE\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_WEAK_UNBALANCE);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_KILLED\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_KILLED);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_DISPLAYED\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_DISPLAYED);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_SESSION_REPLAY\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_SESSION_REPLAY);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_INSTANT_DAMAGE\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_INSTANT_DAMAGE);
     output.append(",\n    \"ANOMALY_NTE_UI_BUTTON_REASON_V1_NONE\": ");
     AppendUnsigned(output, ANOMALY_NTE_UI_BUTTON_REASON_V1_NONE);
     output.append(",\n    \"ANOMALY_NTE_UI_BUTTON_REASON_V1_COLLAPSED_SELF\": ");
@@ -1271,7 +1295,8 @@ std::string BuildSnapshot() {
          {"end_tab_item", offsetof(AnomalyUiServiceV1, end_tab_item)},
          {"end_tab_bar", offsetof(AnomalyUiServiceV1, end_tab_bar)},
          {"text_wrapped", offsetof(AnomalyUiServiceV1, text_wrapped)},
-         {"begin_child_auto_fit_y", offsetof(AnomalyUiServiceV1, begin_child_auto_fit_y)}},
+         {"begin_child_auto_fit_y", offsetof(AnomalyUiServiceV1, begin_child_auto_fit_y)},
+         {"slider_float_enabled", offsetof(AnomalyUiServiceV1, slider_float_enabled)}},
         false);
     AppendStruct(
         output,
@@ -1917,6 +1942,52 @@ std::string BuildSnapshot() {
          {"user", offsetof(AnomalyNteAttackInputServiceV1, user)},
          {"press", offsetof(AnomalyNteAttackInputServiceV1, press)},
          {"release", offsetof(AnomalyNteAttackInputServiceV1, release)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageEchoRequestV1",
+        sizeof(AnomalyNteDamageEchoRequestV1),
+        alignof(AnomalyNteDamageEchoRequestV1),
+        {{"struct_size", offsetof(AnomalyNteDamageEchoRequestV1, struct_size)},
+         {"flags", offsetof(AnomalyNteDamageEchoRequestV1, flags)},
+         {"world", offsetof(AnomalyNteDamageEchoRequestV1, world)},
+         {"victim", offsetof(AnomalyNteDamageEchoRequestV1, victim)},
+         {"damage", offsetof(AnomalyNteDamageEchoRequestV1, damage)},
+         {"damage_type", offsetof(AnomalyNteDamageEchoRequestV1, damage_type)},
+         {"display_type", offsetof(AnomalyNteDamageEchoRequestV1, display_type)},
+         {"reaction_type", offsetof(AnomalyNteDamageEchoRequestV1, reaction_type)},
+         {"reaction_display_type",
+          offsetof(AnomalyNteDamageEchoRequestV1, reaction_display_type)},
+         {"ticks_per_second", offsetof(AnomalyNteDamageEchoRequestV1, ticks_per_second)},
+         {"strength_percent", offsetof(AnomalyNteDamageEchoRequestV1, strength_percent)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageEchoResultV1",
+        sizeof(AnomalyNteDamageEchoResultV1),
+        alignof(AnomalyNteDamageEchoResultV1),
+        {{"struct_size", offsetof(AnomalyNteDamageEchoResultV1, struct_size)},
+         {"flags", offsetof(AnomalyNteDamageEchoResultV1, flags)},
+         {"hp_before", offsetof(AnomalyNteDamageEchoResultV1, hp_before)},
+         {"hp_after", offsetof(AnomalyNteDamageEchoResultV1, hp_after)},
+         {"applied_damage", offsetof(AnomalyNteDamageEchoResultV1, applied_damage)},
+         {"dead", offsetof(AnomalyNteDamageEchoResultV1, dead)},
+         {"reserved", offsetof(AnomalyNteDamageEchoResultV1, reserved)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageEchoServiceV1",
+        sizeof(AnomalyNteDamageEchoServiceV1),
+        alignof(AnomalyNteDamageEchoServiceV1),
+        {{"struct_size", offsetof(AnomalyNteDamageEchoServiceV1, struct_size)},
+         {"service_version", offsetof(AnomalyNteDamageEchoServiceV1, service_version)},
+         {"user", offsetof(AnomalyNteDamageEchoServiceV1, user)},
+         {"apply_manual", offsetof(AnomalyNteDamageEchoServiceV1, apply_manual)},
+         {"apply_native_dot", offsetof(AnomalyNteDamageEchoServiceV1, apply_native_dot)},
+         {"dot_count", offsetof(AnomalyNteDamageEchoServiceV1, dot_count)},
+         {"dot_name_at", offsetof(AnomalyNteDamageEchoServiceV1, dot_name_at)},
+         {"select_dot", offsetof(AnomalyNteDamageEchoServiceV1, select_dot)},
+         {"apply_session", offsetof(AnomalyNteDamageEchoServiceV1, apply_session)}},
         false);
     AppendStruct(
         output,
@@ -2571,6 +2642,8 @@ std::string BuildSnapshot() {
         ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION, "AnomalyNteVehicleServiceV1", false);
     AppendService(output, ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID,
         ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION, "AnomalyNteAttackInputServiceV1", false);
+    AppendService(output, ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_ID,
+        ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION, "AnomalyNteDamageEchoServiceV1", false);
     AppendService(output, ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_ID,
         ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_VERSION,
         "AnomalyNteEscMenuButtonServiceV1", true);
