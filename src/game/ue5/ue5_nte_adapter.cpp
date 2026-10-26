@@ -8577,6 +8577,66 @@ struct Ue5NteAdapter::State {
                 if (InvokeNativeProcessEventLocked(source_ability_system,
                         spec_apply.make_context_function, context.data(),
                         context.size())) {
+                    // Populate the context the same way an ability would: the damage
+                    // execution reads the instigator/causer pair and the owning ability
+                    // system from it. Both are weak object pointers (index + serial).
+                    const auto instigator_offset = Layout(profile, "effectContext.instigator", -1);
+                    const auto causer_offset = Layout(profile, "effectContext.effectCauser", -1);
+                    const auto asc_offset = Layout(profile, "effectContext.instigatorAsc", -1);
+                    const auto level_offset = Layout(profile, "effectContext.abilityLevel", -1);
+                    const auto weak_index = Layout(profile, "weakObject.index", -1);
+                    const auto weak_serial = Layout(profile, "weakObject.serial", -1);
+                    std::uintptr_t context_object{};
+                    std::memcpy(&context_object, context.data(), sizeof(context_object));
+                    if (context_object != 0 &&
+                        ReadableRange(*memory, context_object,
+                            static_cast<std::size_t>(instigator_offset < 0 ? 0 : instigator_offset) +
+                                0x10U) &&
+                        instigator_offset >= 0 && causer_offset >= 0 && weak_index >= 0 &&
+                        weak_serial >= 0) {
+                        AnomalyGenerationHandleV1 pawn_handle{};
+                        if (ObjectHandleLocked(player_pawn, pawn_handle)) {
+                            const auto index = static_cast<std::int32_t>(
+                                pawn_handle.id & 0xFFFFFFFFULL) - 1;
+                            const auto serial = static_cast<std::int32_t>(
+                                pawn_handle.id >> 32U);
+                            if (index >= 0 && serial > 0) {
+                                static_cast<void>(memory->Write(
+                                    context_object + instigator_offset + weak_index,
+                                    &index, sizeof(index)));
+                                static_cast<void>(memory->Write(
+                                    context_object + instigator_offset + weak_serial,
+                                    &serial, sizeof(serial)));
+                                static_cast<void>(memory->Write(
+                                    context_object + causer_offset + weak_index,
+                                    &index, sizeof(index)));
+                                static_cast<void>(memory->Write(
+                                    context_object + causer_offset + weak_serial,
+                                    &serial, sizeof(serial)));
+                            }
+                        }
+                        AnomalyGenerationHandleV1 asc_handle{};
+                        if (asc_offset >= 0 && ObjectHandleLocked(source_ability_system, asc_handle)) {
+                            const auto asc_index = static_cast<std::int32_t>(
+                                asc_handle.id & 0xFFFFFFFFULL) - 1;
+                            const auto asc_serial = static_cast<std::int32_t>(
+                                asc_handle.id >> 32U);
+                            if (asc_index >= 0 && asc_serial > 0) {
+                                static_cast<void>(memory->Write(
+                                    context_object + asc_offset + weak_index,
+                                    &asc_index, sizeof(asc_index)));
+                                static_cast<void>(memory->Write(
+                                    context_object + asc_offset + weak_serial,
+                                    &asc_serial, sizeof(asc_serial)));
+                            }
+                        }
+                        if (level_offset >= 0) {
+                            const std::int32_t ability_level = 1;
+                            static_cast<void>(memory->Write(
+                                context_object + level_offset, &ability_level,
+                                sizeof(ability_level)));
+                        }
+                    }
                     std::array<std::uint8_t, 0x38> outgoing{};
                     const std::uintptr_t effect = gameplay_effect;
                     const float level = 1.0F;
@@ -9428,7 +9488,8 @@ struct Ue5NteAdapter::State {
                     static_cast<int>(Layout(profile, "gameplayEffect.modifiers", -9)),
                     static_cast<unsigned>(spec_apply.modifier_is_class),
                     static_cast<unsigned>(spec_apply.modifier_count),
-                    spec_apply.assign_function != 0 ? 1 : 0,
+                    static_cast<unsigned>(spec_apply.assign_function != 0 ? 1 : 0),
+                    static_cast<unsigned>(spec_apply.spec_via_outgoing),
                     spec_apply.execution_name);
                 return Status(ANOMALY_STATUS_V1_FAILED, spec_failure);
             }
@@ -9726,7 +9787,9 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "vehicle catalog is unavailable");
         if (index >= vehicle_catalog.size())
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle catalog index is out of range");
-        return CopyString(vehicle_catalog[index].label, destination, inout_size);
+        // This entry point carries the DT_VehicleData row name; the display label has its
+        // own accessor. Returning the label here made every selection fail the id lookup.
+        return CopyString(vehicle_catalog[index].id, destination, inout_size);
     }
 
     AnomalyStatusV1 VehicleCatalogRefresh() noexcept {
@@ -9743,7 +9806,16 @@ struct Ue5NteAdapter::State {
 
     AnomalyStatusV1 VehicleCatalogLabelAt(
         const std::uint32_t index, char* destination, std::size_t* inout_size) noexcept {
-        return VehicleIdAt(index, destination, inout_size);
+        if (inout_size == nullptr)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "catalog string size is null");
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "vehicle catalog read requires Game thread");
+        std::scoped_lock lock(mutex);
+        if (!EnsureVehicleCatalogLocked())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "vehicle catalog is unavailable");
+        if (index >= vehicle_catalog.size())
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle catalog index is out of range");
+        return CopyString(vehicle_catalog[index].label, destination, inout_size);
     }
 
     [[nodiscard]] bool EnsureVehicleCustomizationCatalogLocked(
