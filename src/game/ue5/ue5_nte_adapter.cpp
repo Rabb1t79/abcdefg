@@ -1,4 +1,4 @@
-#include "anomaly/ue5_nte_adapter.hpp"
+﻿#include "anomaly/ue5_nte_adapter.hpp"
 #include "anomaly/nte_damage_capture.hpp"
 #include "anomaly/nte_vehicle.hpp"
 #include "anomaly/nte_monster_names.hpp"
@@ -1356,10 +1356,10 @@ struct Ue5NteAdapter::State {
         float camera_horizontal_fov{};
         bool partial{};
     };
-    // FName 的 comparison index 在进程内稳定，同一 name_id 永远对应同一个字符串。
-    // 全关卡 actor 扫描会为每个 actor 解析一次实体名（数千次），逐次解码宽字符名
-    // 的代价要一秒以上；记忆化后只有首次扫描需要真正解码。失败结果不缓存，
-    // 因为那通常意味着布局尚未就绪，之后的扫描应当重试。
+    // FName 鐨?comparison index 鍦ㄨ繘绋嬪唴绋冲畾锛屽悓涓€ name_id 姘歌繙瀵瑰簲鍚屼竴涓瓧绗︿覆銆?
+    // 鍏ㄥ叧鍗?actor 鎵弿浼氫负姣忎釜 actor 瑙ｆ瀽涓€娆″疄浣撳悕锛堟暟鍗冩锛夛紝閫愭瑙ｇ爜瀹藉瓧绗﹀悕
+    // 鐨勪唬浠疯涓€绉掍互涓婏紱璁板繂鍖栧悗鍙湁棣栨鎵弿闇€瑕佺湡姝ｈВ鐮併€傚け璐ョ粨鏋滀笉缂撳瓨锛?
+    // 鍥犱负閭ｉ€氬父鎰忓懗鐫€甯冨眬灏氭湭灏辩华锛屼箣鍚庣殑鎵弿搴斿綋閲嶈瘯銆?
     mutable std::unordered_map<std::uint32_t, std::string> name_snapshot_cache;
     std::shared_ptr<const EntityFrameCache> entity_frame_cache;
     std::shared_ptr<const EntityFrameCache> previous_entity_frame_cache;
@@ -1368,8 +1368,8 @@ struct Ue5NteAdapter::State {
     std::shared_ptr<const EntityFrameCache> actor_frame_cache;
     std::uint64_t actor_generation{};
     std::uint64_t actor_world_generation{};
-    // 全部关卡 actor 快照按 tick 节流重扫：只在 World 变化时刷新会让快照永久冻结，
-    // 死掉的 actor 留在列表里、新生成的 actor 永远不可见（大世界全程是同一个 World）。
+    // 鍏ㄩ儴鍏冲崱 actor 蹇収鎸?tick 鑺傛祦閲嶆壂锛氬彧鍦?World 鍙樺寲鏃跺埛鏂颁細璁╁揩鐓ф案涔呭喕缁擄紝
+    // 姝绘帀鐨?actor 鐣欏湪鍒楄〃閲屻€佹柊鐢熸垚鐨?actor 姘歌繙涓嶅彲瑙侊紙澶т笘鐣屽叏绋嬫槸鍚屼竴涓?World锛夈€?
     std::uint64_t actor_attempt_sequence{};
     std::uint64_t snapshot_tick_count{};
     std::uint64_t latest_snapshot_cost_micros{};
@@ -6666,10 +6666,10 @@ struct Ue5NteAdapter::State {
         return value;
     }
 
-    // 仅供全量扫描使用：FName 的 comparison index 在进程内稳定，同一 name_id 永远对应
-    // 同一个字符串，因此把解码结果记下来。全关卡扫描会为每个 actor 解析一次实体名
-    // （数千个互不相同的 name_id），逐次解码宽字符名的总代价超过一秒；记忆化之后只有
-    // 首次扫描需要真正解码。失败结果不缓存，那通常意味着布局尚未就绪，应当重试。
+    // 浠呬緵鍏ㄩ噺鎵弿浣跨敤锛欶Name 鐨?comparison index 鍦ㄨ繘绋嬪唴绋冲畾锛屽悓涓€ name_id 姘歌繙瀵瑰簲
+    // 鍚屼竴涓瓧绗︿覆锛屽洜姝ゆ妸瑙ｇ爜缁撴灉璁颁笅鏉ャ€傚叏鍏冲崱鎵弿浼氫负姣忎釜 actor 瑙ｆ瀽涓€娆″疄浣撳悕
+    // 锛堟暟鍗冧釜浜掍笉鐩稿悓鐨?name_id锛夛紝閫愭瑙ｇ爜瀹藉瓧绗﹀悕鐨勬€讳唬浠疯秴杩囦竴绉掞紱璁板繂鍖栦箣鍚庡彧鏈?
+    // 棣栨鎵弿闇€瑕佺湡姝ｈВ鐮併€傚け璐ョ粨鏋滀笉缂撳瓨锛岄偅閫氬父鎰忓懗鐫€甯冨眬灏氭湭灏辩华锛屽簲褰撻噸璇曘€?
     std::string ResolveNameForScanLocked(std::uint32_t name_id) const {
         if (name_id == 0) return {};
         if (const auto cached = name_snapshot_cache.find(name_id);
@@ -9147,6 +9147,9 @@ struct Ue5NteAdapter::State {
                 if (request->struct_size >= offsetof(AnomalyNteDamageEchoRequestV1, ticks_per_second) + sizeof(request->ticks_per_second) && request->ticks_per_second > 0) {
                     modify.period = 1.0F / static_cast<float>((std::min)(request->ticks_per_second, 1000U));
                 }
+                // 0 keeps the authored strength; otherwise the caller scales it in percent.
+                modify.strength_multiplier =
+                    request->strength_percent > 0U ? static_cast<float>(request->strength_percent) / 100.0F : 1.0F;
                 const auto name_offset = Layout(profile, "object.nameOffset", -1);
                 const auto outer_offset = Layout(profile, "object.outer", -1);
                 std::uintptr_t name_owner = gameplay_effect;
@@ -9220,6 +9223,8 @@ struct Ue5NteAdapter::State {
                 if (request->struct_size >= offsetof(AnomalyNteDamageEchoRequestV1, ticks_per_second) + sizeof(request->ticks_per_second) && request->ticks_per_second > 0) {
                     modify.period = 1.0F / static_cast<float>((std::min)(request->ticks_per_second, 1000U));
                 }
+                modify.strength_multiplier =
+                    request->strength_percent > 0U ? static_cast<float>(request->strength_percent) / 100.0F : 1.0F;
                 const auto name_offset = Layout(profile, "object.nameOffset", -1);
                 const auto outer_offset = Layout(profile, "object.outer", -1);
                 std::uintptr_t name_owner = gameplay_effect;
@@ -16494,8 +16499,8 @@ struct Ue5NteAdapter::State::ProcessEventServiceEndpoint final {
         std::shared_ptr<State> state_;
     };
 
-    // 只把宿主已有的 ProcessEvent 调用通道暴露成服务；语法校验、线程门控与 SEH 都在
-    // InvokeProcessEventGuarded 内完成，本函数不新增任何调用语义。
+    // 鍙妸瀹夸富宸叉湁鐨?ProcessEvent 璋冪敤閫氶亾鏆撮湶鎴愭湇鍔★紱璇硶鏍￠獙銆佺嚎绋嬮棬鎺т笌 SEH 閮藉湪
+    // InvokeProcessEventGuarded 鍐呭畬鎴愶紝鏈嚱鏁颁笉鏂板浠讳綍璋冪敤璇箟銆?
     static AnomalyStatusV1 ANOMALY_CALL InvokeThunk(void* const user, const std::uintptr_t object,
                                                     const std::uintptr_t function,
                                                     void* const parameters,

@@ -1035,7 +1035,10 @@ typedef struct AnomalyNteDamageEchoRequestV1 {
     uint32_t reaction_type;
     uint32_t reaction_display_type;
     uint32_t ticks_per_second;
-    uint32_t reserved;
+    // Strength multiplier in percent for the applied effect. 0 keeps the authored
+    // value (equivalent to 100). Occupies the previously reserved slot, so the
+    // structure layout is unchanged for existing consumers.
+    uint32_t strength_percent;
 } AnomalyNteDamageEchoRequestV1;
 
 typedef struct AnomalyNteDamageEchoResultV1 {
