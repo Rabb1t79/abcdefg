@@ -11306,21 +11306,13 @@ struct Ue5NteAdapter::State {
     }
 
     AnomalyStatusV1 VehicleSetTopSpeedRatio(float ratio) noexcept {
-        if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
-            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be 0.05..20.0");
+        if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 10.0F)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be 0.05..10.0");
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle mutation must run on Game thread");
         std::scoped_lock lock(mutex);
-        // Security is enforced here, not only by the UI slider. Without both Core authorization
-        // and the explicit fine-tuning switch, callers can request only the fixed 10.0x ratio.
-        if (!vehicle_fine_speed_authorized || !vehicle_fine_speed_tuning_enabled) {
-            if (ratio != 10.0F)
-                return Status(ANOMALY_STATUS_V1_FAILED,
-                    "Core locked vehicle speed ratio to 10.0x; authorize DEBUG and enable fine tuning first");
-        } else if (ratio < 0.50F || ratio > 10.0F) {
-            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
-                "authorized fine speed ratio must be 0.50..10.0");
-        }
+        // The caller-facing slider is the only source of this value; the range check above is the
+        // whole contract, and MakeVehicleSpeedFieldTargets clamps the factor to its supported ceiling.
         if (!RefreshVehicleLocked())
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
         if (vehicle_is_water) {
@@ -13763,14 +13755,8 @@ struct Ue5NteAdapter::State {
     }
 
     AnomalyStatusV1 VehicleReset() noexcept {
-        float reset_speed_ratio = 10.0F;
-        {
-            std::scoped_lock lock(mutex);
-            // Preserve the fixed 10x default unless the same session is authorized and explicitly enabled.
-            if (vehicle_fine_speed_authorized && vehicle_fine_speed_tuning_enabled)
-                reset_speed_ratio = 1.0F;
-        }
-        const auto speed = VehicleSetTopSpeedRatio(reset_speed_ratio);
+        // Reset returns the vehicle to its stock tuning rather than the old fixed 10x default.
+        const auto speed = VehicleSetTopSpeedRatio(1.0F);
         if (speed.code != ANOMALY_STATUS_V1_OK) return speed;
         const auto torque = VehicleSetEngineTorqueRatio(1.0F);
         if (torque.code != ANOMALY_STATUS_V1_OK) return torque;
