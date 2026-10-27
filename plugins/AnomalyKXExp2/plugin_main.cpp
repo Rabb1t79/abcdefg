@@ -258,6 +258,7 @@ AnomalyStatusV1 ANOMALY_CALL on_load(const AnomalyHostApiV1* host, void** out) {
     ++g_load_count;
     if (!host || !out) return fail(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "host is invalid");
     *out = nullptr;
+    PushLog("on_load: begin");
 
     auto* ctx = new Ctx{};
     ctx->host = host;
@@ -1651,7 +1652,6 @@ static int g_fn_sel = -1;
 // 闂佸湱绮敮濠傗枎閵忋倕绀冮柛娑卞枟閿涘鐓崶顭戞缂佽鲸鐟╅幃娆掋亹閹哄棗浜?GE 闂佸搫鍟崕濂稿吹濠婂牆绀夐柕濞垮妽鐎氬綊鏌涢弮鍌毿＄紒鏂款嚟閹澘鐣濈€ｎ剛顦?
 static char g_log[32][96];
 static int g_log_n = 0;
-static FILE* g_log_file = nullptr;
 static char g_log_path[MAX_PATH] = {0};
 
 static void PushLog(const char* text) {
@@ -1663,29 +1663,24 @@ static void PushLog(const char* text) {
         for (int i = 1; i < 32; ++i) std::memcpy(g_log[i - 1], g_log[i], sizeof(g_log[0]));
         std::snprintf(g_log[31], sizeof(g_log[0]), "%s", text);
     }
-    // 闂佸憡鑹鹃張顒€顪冮崒娑欎氦闁芥ê顦～锝夋煕閹烘柨顣奸柣鏍х埣楠炲绠涢弴鐔虹崶閻?kx_log.txt闂佹寧绋戦悧鍛矚閼哥數顩查幖杈剧秵閻庤尙绱掗幑鎰《缂併劏娉曞☉鐢割敊濞嗘儳娈洪梺鍛婄懄閻楊厾妲?
-    // 日志文件保持打开：原来每行 GetModuleFileNameA + fopen/fclose，密集扫描时开销很大。
-    if (g_log_file == nullptr) {
-        if (g_log_path[0] == 0) {
-            char path[MAX_PATH] = {0};
-            if (GetModuleFileNameA(nullptr, path, MAX_PATH) == 0) return;
-            char* slash = std::strrchr(path, '\\');
-            if (slash == nullptr) return;
-            *slash = 0;
-            std::snprintf(g_log_path, sizeof(g_log_path), "%s\\kx_log.txt", path);
-        }
-        g_log_file = std::fopen(g_log_path, "a");
-        if (g_log_file == nullptr) return;
-        std::setvbuf(g_log_file, nullptr, _IOLBF, 4096);
+    if (g_log_path[0] == 0) {
+        char path[MAX_PATH] = {0};
+        if (GetModuleFileNameA(nullptr, path, MAX_PATH) == 0) return;
+        char* slash = std::strrchr(path, '\\');
+        if (slash == nullptr) return;
+        *slash = 0;
+        std::snprintf(g_log_path, sizeof(g_log_path), "%s\\kx_log.txt", path);
     }
-    std::fprintf(g_log_file, "%s\n", text);
+    // 每行开关文件：常开句柄会让热重载后的新 generation（以及外部工具）打不开日志；
+    // 现在扫描已删除、日志量很小，开关一次的开销可以接受。
+    FILE* fp = std::fopen(g_log_path, "a");
+    if (fp == nullptr) return;
+    std::fprintf(fp, "%s\n", text);
+    std::fclose(fp);
 }
 
 static void CloseLogFile() {
-    if (g_log_file != nullptr) {
-        std::fclose(g_log_file);
-        g_log_file = nullptr;
-    }
+    // 日志改为每行开关，无需在卸载时关闭句柄。
 }
 
 void ProbeFunctionsService() {
