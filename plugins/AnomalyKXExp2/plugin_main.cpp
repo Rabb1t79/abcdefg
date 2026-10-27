@@ -103,10 +103,15 @@ Ctx* g_ctx = nullptr;
 const void* LazyService(const void** slot, const char* id, uint32_t min_version);
 void TryQueryIsGM();
 static void PushLog(const char* text);
+static void CloseLogFile();
 static std::uint64_t NowMs();
 void RegisterDamageConfigSchema();
 void LoadDamageConfig();
-void TickConfigSave();
+void SaveDamageConfig();
+void StartConfigSaveThread();
+void StopConfigSaveThread();
+static std::uintptr_t ResolvePlayerPawn();
+static std::uint64_t g_cfg_save_due_ms = 0;
 void DrawCaptureUi(const AnomalyUiServiceV1* ui);
 void ReleaseCaptureSubscription();
 void ReleaseExecThunk();
@@ -275,6 +280,7 @@ AnomalyStatusV1 ANOMALY_CALL on_load(const AnomalyHostApiV1* host, void** out) {
 
     RegisterDamageConfigSchema();
     LoadDamageConfig();
+    StartConfigSaveThread();
 
     void* unused = nullptr;
     ChronosLoad(host, &unused);
@@ -290,10 +296,16 @@ AnomalyStatusV1 ANOMALY_CALL on_start(void* ctx) { return ctx ? ok() : fail(ANOM
 AnomalyStatusV1 ANOMALY_CALL on_stop(void* ctx, uint32_t) { if (!ctx) return ok(); return ok(); }
 void ANOMALY_CALL on_unload(void* ctx) {
     if (ctx == nullptr) return;
+    StopConfigSaveThread();
+    if (g_cfg_save_due_ms != 0) {
+        g_cfg_save_due_ms = 0;
+        SaveDamageConfig();
+    }
     StopHeartbeat();
     ReleaseCaptureSubscription();
     ReleaseExecThunk();
     ReleaseHooks();
+    CloseLogFile();
     if (ctx == g_ctx) g_ctx = nullptr;
     delete static_cast<Ctx*>(ctx);
 }
@@ -308,7 +320,6 @@ void ANOMALY_CALL on_update(void*, double) {
     TickReverseScan();
     TickWorldScan();
     TickRepeat();
-    TickConfigSave();
     if ((++n % 30) == 0) TickFeatures();
 }
 // 缂備焦鍔栭〃鍛般亹濞戞瑧鈻旈幖娣灩娴犳ê霉閻樻彃顣冲┑顔芥倐楠炩偓濞撴艾锕︾粈鍕煕濞嗘ê鐏￠悗鍨⒐缁嬪﹪宕ㄩ鐑嗗殭闂?anomaly.config闂?
@@ -333,7 +344,6 @@ static int g_damage_schema_ok = 0;
 static int g_cfg_seen_damage = -1;
 static int g_cfg_seen_chain = -1;
 static int g_cfg_seen_replay = -1;
-static std::uint64_t g_cfg_save_due_ms = 0;
 
 static const AnomalyConfigServiceV1* DamageConfigService() {
     if (g_ctx == nullptr || g_ctx->config == nullptr) return nullptr;
@@ -460,14 +470,37 @@ void SaveDamageConfig() {
     g_ui_dirty = false;
 }
 
-// 勾选/次数变化后 400ms 落盘（on_draw 只置时间戳，真正的写盘放在 on_update）。
-void TickConfigSave() {
-    if (g_cfg_save_due_ms == 0 || NowMs() < g_cfg_save_due_ms) return;
-    g_cfg_save_due_ms = 0;
-    SaveDamageConfig();
-    g_cfg_seen_damage = g_ui_state.damage;
-    g_cfg_seen_chain = g_ui_state.chain;
-    g_cfg_seen_replay = static_cast<int>(g_ui_state.replay);
+// 勾选/次数变化后 400ms 落盘。宿主禁止在 game/render 回调里做 plugin state I/O
+// （InvokeStateIoService → IsSynchronousStateIoForbidden），所以写盘放在插件自己的
+// worker 线程里；on_draw 只置时间戳。
+static HANDLE g_cfg_thread = nullptr;
+static volatile LONG g_cfg_stop = 0;
+
+static DWORD WINAPI ConfigSaveThreadProc(LPVOID) {
+    while (g_cfg_stop == 0) {
+        Sleep(200);
+        if (g_cfg_save_due_ms == 0 || NowMs() < g_cfg_save_due_ms) continue;
+        g_cfg_save_due_ms = 0;
+        SaveDamageConfig();
+        g_cfg_seen_damage = g_ui_state.damage;
+        g_cfg_seen_chain = g_ui_state.chain;
+        g_cfg_seen_replay = static_cast<int>(g_ui_state.replay);
+    }
+    return 0;
+}
+
+void StartConfigSaveThread() {
+    if (g_cfg_thread != nullptr) return;
+    g_cfg_stop = 0;
+    g_cfg_thread = CreateThread(nullptr, 0, ConfigSaveThreadProc, nullptr, 0, nullptr);
+}
+
+void StopConfigSaveThread() {
+    if (g_cfg_thread == nullptr) return;
+    g_cfg_stop = 1;
+    WaitForSingleObject(g_cfg_thread, 3000);
+    CloseHandle(g_cfg_thread);
+    g_cfg_thread = nullptr;
 }
 
 
@@ -1606,6 +1639,8 @@ static int g_fn_sel = -1;
 // 闂佸湱绮敮濠傗枎閵忋倕绀冮柛娑卞枟閿涘鐓崶顭戞缂佽鲸鐟╅幃娆掋亹閹哄棗浜?GE 闂佸搫鍟崕濂稿吹濠婂牆绀夐柕濞垮妽鐎氬綊鏌涢弮鍌毿＄紒鏂款嚟閹澘鐣濈€ｎ剛顦?
 static char g_log[32][96];
 static int g_log_n = 0;
+static FILE* g_log_file = nullptr;
+static char g_log_path[MAX_PATH] = {0};
 
 static void PushLog(const char* text) {
     if (text == nullptr) return;
@@ -1617,19 +1652,27 @@ static void PushLog(const char* text) {
         std::snprintf(g_log[31], sizeof(g_log[0]), "%s", text);
     }
     // 闂佸憡鑹鹃張顒€顪冮崒娑欎氦闁芥ê顦～锝夋煕閹烘柨顣奸柣鏍х埣楠炲绠涢弴鐔虹崶閻?kx_log.txt闂佹寧绋戦悧鍛矚閼哥數顩查幖杈剧秵閻庤尙绱掗幑鎰《缂併劏娉曞☉鐢割敊濞嗘儳娈洪梺鍛婄懄閻楊厾妲?
-    char path[MAX_PATH] = {0};
-    if (GetModuleFileNameA(nullptr, path, MAX_PATH) != 0) {
-        char* slash = std::strrchr(path, '\\');
-        if (slash != nullptr) {
+    // 日志文件保持打开：原来每行 GetModuleFileNameA + fopen/fclose，密集扫描时开销很大。
+    if (g_log_file == nullptr) {
+        if (g_log_path[0] == 0) {
+            char path[MAX_PATH] = {0};
+            if (GetModuleFileNameA(nullptr, path, MAX_PATH) == 0) return;
+            char* slash = std::strrchr(path, '\\');
+            if (slash == nullptr) return;
             *slash = 0;
-            char file[MAX_PATH + 32];
-            std::snprintf(file, sizeof(file), "%s\\kx_log.txt", path);
-            FILE* fp = std::fopen(file, "a");
-            if (fp != nullptr) {
-                std::fprintf(fp, "%s\n", text);
-                std::fclose(fp);
-            }
+            std::snprintf(g_log_path, sizeof(g_log_path), "%s\\kx_log.txt", path);
         }
+        g_log_file = std::fopen(g_log_path, "a");
+        if (g_log_file == nullptr) return;
+        std::setvbuf(g_log_file, nullptr, _IOLBF, 4096);
+    }
+    std::fprintf(g_log_file, "%s\n", text);
+}
+
+static void CloseLogFile() {
+    if (g_log_file != nullptr) {
+        std::fclose(g_log_file);
+        g_log_file = nullptr;
     }
 }
 
@@ -4212,7 +4255,7 @@ static void ConsumePendingCapture() {
 // 涔嬫墍浠ラ渶瑕佸畠锛氳矾绾?A 鐨勮闃呮椿鐫€锛坧e: total 鍦ㄦ定锛変絾 caphit 涓€鐩存槸 0锛岃鏄庢父鎴忔牴鏈?
 // 涓嶈蛋閭?8 涓?Apply* UFunction 鏉ユ寕浼ゅ銆傚洖璋冮噷鍙啓涓や釜鎸囬拡锛堜笉纰板涓绘湇鍔★級锛?
 // 瑙﹀彂鐐圭敤瀹夸富鑷繁鐨勪激瀹充簨浠舵祦锛圕haracterOnDamaged 閽╁瓙锛夛紝鍚嶅瓧鍦?on_draw 閲岃В鏋愩€?
-static constexpr int kPeRing = 4096;
+static constexpr int kPeRing = 256;
 static std::uintptr_t g_pe_ring_fn[kPeRing];
 static std::uintptr_t g_pe_ring_obj[kPeRing];
 static unsigned long long g_pe_ring_seq = 0;
@@ -4253,15 +4296,28 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
             return;
         }
     }
+    const std::uintptr_t local = ResolvePlayerPawn();
+    const std::uintptr_t attacker = ActorFromDamageHandle(ev.attacker);
+    // 攻击者就是本地玩家时，顺手刷新施法 ASC。这是"换地图/换角色后不用手动刷新"的关键：
+    // 旧版靠 MonScan 写 g_player_asc 且不再校验，多玩家场景会串到别的玩家身上。
+    if (local >= 0x10000 && attacker == local) {
+        std::uintptr_t src_asc = 0;
+        if (ue::Reader::SafePtr(attacker + 0x940, &src_asc) && AscLooksLikeAsc(src_asc) &&
+            src_asc != g_player_asc) {
+            g_player_asc = src_asc;
+            g_player_pawn = local;
+        }
+    }
     const std::uintptr_t victim = ActorFromDamageHandle(ev.victim);
     if (victim < 0x10000) return;
-    if (victim == g_player_pawn || victim == g_player_pawn_ref) return;
+    if (victim == local || victim == g_player_pawn || victim == g_player_pawn_ref) return;
     std::uintptr_t asc = 0;
     if (!ue::Reader::SafePtr(victim + 0x940, &asc) || !AscLooksLikeAsc(asc))
         asc = FindAscInActor(victim);
-    if (asc < 0x10000) return;
+    if (asc < 0x10000) return;              // 建筑 / 载具 / 没有 ASC 的普通 NPC
+    if (asc == g_player_asc) return;        // 不把玩家自己当回放目标
     const std::uintptr_t ge = LastDamageGeClass(asc);
-    if (ge < 0x10000) return;
+    if (ge < 0x10000) return;               // 目标身上没有伤害 GE（普通 NPC 等）
     float hp = 0.0f;
     if (!ReadAscHP(asc, &hp) || hp <= 0.0f) return;
     char name[48] = {0};
@@ -4444,8 +4500,10 @@ static void CensusTick() {
 // 鈫?ULocalPlayer鈫扨layerController(0x30) 鈫?AController::Pawn(0x308)銆?
 // 涓嶄緷璧?g_pc_inst / g_player_asc锛堣繖涓や釜鍦ㄩ儴鍒嗕細璇濋噷鏄┖锛屽鑷?token 涓庢柦鍔犻兘澶辫触锛夈€?
 static std::uintptr_t ResolvePlayerPawn() {
-    std::uintptr_t world = g_gworld_ptr;
-    if (world < 0x10000) world = (g_world_fixed >= 0x10000) ? g_world_fixed : ReadWorldFresh();
+    // 优先读实时 GWorld：g_gworld_ptr 是 TickFeatures 每 30 帧刷一次的缓存，
+    // 换地图后的半秒里可能还指着旧世界，会解析出旧 pawn。
+    std::uintptr_t world = ReadWorldFresh();
+    if (world < 0x10000) world = g_gworld_ptr;
     if (world < 0x10000) return 0;
     __try {
         const std::uintptr_t gi = *reinterpret_cast<std::uintptr_t*>(world + 0x230);
@@ -5499,6 +5557,9 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     }
     if (g_apply_hook_enabled) InstallApplyHook();
     else ReleaseHooks();
+    // 目标识别完全由伤害事件驱动：不再自动扫描全场对象（1690 个 actor/轮，每轮都要调
+    // 宿主 resolve_utf8，是卡顿和"多玩家场景串 ASC"的来源）。这里只维护订阅开关。
+    g_cap_on = (g_ui_state.damage != 0) ? 1 : 0;
     // Gate 闂?Apply 闂佸憡鍔曢幊姗€宕曠€靛憡瀚柛鎰典簼閺嗗繘鏌?x7682F55闂佹寧绋戦¨鈧紒杈ㄧ箖缁嬪寮捄銊︽緰濠电偞娼欓鍡樼閼恒儳鈻?true闂佹寧绋戦張顒€螞閵堝鍋戞い鎺戝€昏ぐ灞角庨崶锝呭⒉濞寸厧鎳橀弻宀冪疀閵壯冭€挎繛?Apply 闂佸憡鑹鹃悧鍡涙嚐閻斿摜鈻旈柛婵嗗缁€瀣槈閹绢垰浜鹃梺鍦焾閸婂潡骞?
     ProbeFunctionsService();
     DumpDamageChain512();
@@ -5525,9 +5586,6 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     ConsumePendingCapture();
     ConsumeEcsCapture();
     CensusTick();
-    AutoTargetTick();
-    TickMonsterScan();
-    MonTrackTick();      // 兜底：伤害事件没解码出 victim 时，按候选怪 HP 下降补一次
     ReplayTick();
     if (g_ui_state.damage != 0 && (g_draw_count % 300) == 0) {
         char gb[160];
@@ -5537,7 +5595,7 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
         PushLog(gb);
     }
     TickApplyCaptureReplay();
-    if (g_cap_on != 0 && (g_draw_count % 120) == 0) {
+    if (g_cap_on != 0 && (g_draw_count % 600) == 0) {
         char peel[128];
         int pn = 0;
         peel[0] = 0;
