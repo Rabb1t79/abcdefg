@@ -150,6 +150,7 @@ std::uintptr_t PlayerAscForApply();
 void MonTrackTick();
 void StopHeartbeat();
 static bool AscLooksLikeAsc(std::uintptr_t asc);
+static bool AscStillValid(std::uintptr_t asc);
 static std::uintptr_t FindAscInActor(std::uintptr_t act);
 static std::uintptr_t g_gec_ufn = 0;
 static std::uintptr_t g_gea_ufn = 0;
@@ -4283,6 +4284,32 @@ static std::uintptr_t ActorFromDamageHandle(AnomalyGenerationHandleV1 handle) {
     return actor >= 0x10000 ? actor : 0;
 }
 
+// 武装失败原因诊断（前 10 次）：v=victim actor, asc=解析出的 ASC, ge=LastDamageGEDef 的类,
+// hp=读到的当前 HP。只在真的没武装时打一行，不会刷屏。
+static void PendArm(std::uintptr_t victim, std::uintptr_t asc, std::uint64_t victim_id);
+static int g_arm_diag = 0;
+static void ArmDiag(const char* why, std::uintptr_t victim, std::uintptr_t asc,
+                    std::uintptr_t ge, float hp) {
+    if (g_arm_diag >= 10) return;
+    ++g_arm_diag;
+    char b[192];
+    std::snprintf(b, sizeof(b), "arm[%d]: %s v=0x%llX asc=0x%llX ge=0x%llX hp=%.0f",
+                  g_arm_diag, why, (unsigned long long)victim, (unsigned long long)asc,
+                  (unsigned long long)ge, hp);
+    PushLog(b);
+}
+
+// 放宽 ASC 校验后（+0x940 用 HP 布局兜底）必须再验一次 GE 类名，防止把某个
+// 恰好长得像 HP 的组件当成 ASC、再拿垃圾指针去 apply。
+static bool GeNameLooksValid(std::uintptr_t ge) {
+    char name[64] = {0};
+    ObjectNameUtf8(ge, name, sizeof(name));
+    if (name[0] == 0) return false;
+    return std::strstr(name, "GE_") != nullptr ||
+           std::strstr(name, "GameplayEffect") != nullptr ||
+           std::strstr(name, "Damage") != nullptr;
+}
+
 // 事件驱动武装（KB 11.10 的第 1、2 条）：这一击打中谁，就取谁的
 // LastDamageGEDef(0x2378) → +0x10 的 UClass 作为回放 GE，连同当前 HP 记进回放表。
 // 自喂（回放自己造成的伤害）由 ReplayArm 的「同一 victim + 同一 GE」短路挡掉。
@@ -4319,23 +4346,89 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
         }
     }
     const std::uintptr_t victim = ActorFromDamageHandle(ev.victim);
-    if (victim < 0x10000) return;
-    if (victim == local || victim == g_player_pawn || victim == g_player_pawn_ref) return;
+    if (victim < 0x10000) { ArmDiag("no-victim", 0, 0, 0, 0.0f); return; }
+    if (victim == local || victim == g_player_pawn || victim == g_player_pawn_ref) {
+        ArmDiag("self", victim, 0, 0, 0.0f);
+        return;
+    }
     std::uintptr_t asc = 0;
     if (!ue::Reader::SafePtr(victim + 0x940, &asc) || !AscLooksLikeAsc(asc))
         asc = FindAscInActor(victim);
-    if (asc < 0x10000) return;              // 建筑 / 载具 / 没有 ASC 的普通 NPC
-    if (asc == g_player_asc) return;        // 不把玩家自己当回放目标
+    if (asc < 0x10000) {                     // 建筑 / 载具 / 没有 ASC 的普通 NPC
+        ArmDiag("no-asc", victim, asc, 0, 0.0f);
+        return;
+    }
+    if (asc == g_player_asc) {               // 不把玩家自己当回放目标
+        ArmDiag("caster-target", victim, asc, 0, 0.0f);
+        return;
+    }
     const std::uintptr_t ge = LastDamageGeClass(asc);
-    if (ge < 0x10000) return;               // 目标身上没有伤害 GE（普通 NPC 等）
+    if (ge < 0x10000 || !GeNameLooksValid(ge)) {   // 目标身上没有伤害 GE（普通 NPC 等）
+        ArmDiag("no-ge", victim, asc, ge, 0.0f);
+        PendArm(victim, asc, ev.victim.id);
+        return;
+    }
     float hp = 0.0f;
-    if (!ReadAscHP(asc, &hp) || hp <= 0.0f) return;
+    if (!ReadAscHP(asc, &hp) || hp <= 0.0f) {
+        ArmDiag("no-hp", victim, asc, ge, hp);
+        return;
+    }
     char name[48] = {0};
     ObjectClassName(victim, name, sizeof(name));
     ReplayArm(asc, name, ge, hp, ev.victim.id);
 }
 
 struct PeNameCount { char name[64]; char obj[48]; int count; };
+
+// LastDamageGEDef 偶尔比伤害事件晚一帧写入；no-ge 时把 victim 挂起，100ms 后重试，
+// 最多 800ms。这样"打一下、GE 晚到"的情况也能武装，不依赖扫描。
+struct PendingArm {
+    std::uint64_t victim_id;
+    std::uintptr_t asc;
+    std::uint64_t due_ms;
+    int tries;
+    char name[48];
+};
+static PendingArm g_pending_arm[4] = {};
+static int g_pending_arm_n = 0;
+
+static void PendArm(std::uintptr_t victim, std::uintptr_t asc, std::uint64_t victim_id) {
+    if (victim < 0x10000 || asc < 0x10000) return;
+    const std::uint64_t now = NowMs();
+    for (int i = 0; i < g_pending_arm_n; ++i) {
+        if (g_pending_arm[i].asc == asc) { g_pending_arm[i].due_ms = now + 100; return; }
+    }
+    if (g_pending_arm_n >= 4) return;
+    PendingArm& p = g_pending_arm[g_pending_arm_n++];
+    p.victim_id = victim_id;
+    p.asc = asc;
+    p.due_ms = now + 100;
+    p.tries = 0;
+    ObjectClassName(victim, p.name, sizeof(p.name));
+}
+
+static void TickPendingArms() {
+    if (g_pending_arm_n == 0) return;
+    const std::uint64_t now = NowMs();
+    for (int i = 0; i < g_pending_arm_n; ) {
+        PendingArm& p = g_pending_arm[i];
+        if (now < p.due_ms) { ++i; continue; }
+        ++p.tries;
+        p.due_ms = now + 100;
+        const std::uintptr_t ge = AscStillValid(p.asc) ? LastDamageGeClass(p.asc) : 0;
+        float hp = 0.0f;
+        if (ge >= 0x10000 && GeNameLooksValid(ge) && ReadAscHP(p.asc, &hp) && hp > 0.0f) {
+            ReplayArm(p.asc, p.name, ge, hp, p.victim_id);
+            g_pending_arm[i] = g_pending_arm[--g_pending_arm_n];
+            continue;
+        }
+        if (p.tries >= 8) {
+            g_pending_arm[i] = g_pending_arm[--g_pending_arm_n];
+            continue;
+        }
+        ++i;
+    }
+}
 
 // 高倍速下（例如 100 发/秒）每帧要清掉积压的伤害事件，否则宿主 512 条的环会溢出、
 // next_damage_event 直接返回 NOT_FOUND，武装就永久停摆。expired 时用 latest 重新对齐。
@@ -4407,12 +4500,25 @@ static void CensusTick() {
     ArmFromDamageEvent(ev);
     ++g_census_hits;
     char b[256];
-    std::snprintf(b, sizeof(b), "hit[%d]: seq=%llu dmg=%lld basic=%lld final=%lld flags=0x%X",
+    const std::uintptr_t diag_victim = ActorFromDamageHandle(ev.victim);
+    std::uintptr_t diag_asc = 0;
+    if (diag_victim >= 0x10000) {
+        if (!ue::Reader::SafePtr(diag_victim + 0x940, &diag_asc) || !AscLooksLikeAsc(diag_asc))
+            diag_asc = FindAscInActor(diag_victim);
+    }
+    const std::uintptr_t diag_ge = LastDamageGeClass(diag_asc);
+    char dn[64] = {0};
+    if (diag_ge != 0) ObjectNameUtf8(diag_ge, dn, sizeof(dn));
+    std::snprintf(b, sizeof(b),
+                  "hit[%d]: seq=%llu final=%lld victim=0x%llX asc=0x%llX ge=%s(0x%llX)",
                   g_census_hits, (unsigned long long)ev.sequence,
-                  static_cast<long long>(ev.display_damage),
-                  static_cast<long long>(ev.basic_damage),
-                  static_cast<long long>(ev.final_damage), ev.flags);
+                  static_cast<long long>(ev.final_damage),
+                  (unsigned long long)diag_victim, (unsigned long long)diag_asc,
+                  dn[0] ? dn : "-", (unsigned long long)diag_ge);
     PushLog(b);
+    // 旧的 PE 环形窗口 dump 在这里停止：第一次命中要对 256~4096 条事件做 DecodeName，
+    // 曾在命中瞬间把 UI 线程卡死（日志停在半行 hitwin 上）。需要时再看 arm[] 诊断。
+    return;
     LogHitTarget();
     {
         char dn[64] = {0};
@@ -4537,22 +4643,22 @@ static bool AscLooksLikeAsc(std::uintptr_t asc) {
     if (asc < 0x10000) return false;
     std::uintptr_t cls = 0;
     if (!ue::Reader::SafePtr(asc + 0x10, &cls) || cls < 0x10000) return false;
-    if (g_cls_asc >= 0x10000) return cls == static_cast<std::uintptr_t>(g_cls_asc);
+    // 蓝图怪物/召唤物的 ASC 可能是 HTAbilitySystemComponent 的子类，类指针不完全相等；
+    // 这类对象仍然满足 HP/MaxHP 布局，所以类匹配失败后再用血量布局兜底。
+    if (g_cls_asc >= 0x10000 && cls == static_cast<std::uintptr_t>(g_cls_asc)) return true;
     float hp = 0.0f, mx = 0.0f;
     if (!SafeF32(asc + 0x1A38, &hp) || !SafeF32(asc + 0x1A3C, &mx)) return false;
     return hp > 0.0f && mx >= hp && mx < 1.0e9f;
 }
 
-// 缓存指针是否还有效：换场景/重生后旧 ASC 可能已经释放，必须先验类指针再验 MaxHP，
-// 否则回放会对着一个已经死掉的对象空放（表现就是“重进后怎么打都不掉血”）。
+// 缓存指针是否还有效：换场景/重生后旧 ASC 可能已经释放，必须先验对象头再验 HP/MaxHP。
 static bool AscStillValid(std::uintptr_t asc) {
     if (asc < 0x10000) return false;
     std::uintptr_t cls = 0;
     if (!ue::Reader::SafePtr(asc + 0x10, &cls) || cls < 0x10000) return false;
-    if (g_cls_asc >= 0x10000 && cls != static_cast<std::uintptr_t>(g_cls_asc)) return false;
-    float mx = 0.0f;
-    if (!SafeF32(asc + 0x1A3C, &mx) || !(mx > 0.0f) || mx > 1.0e9f) return false;
-    return true;
+    float hp = 0.0f, mx = 0.0f;
+    if (!SafeF32(asc + 0x1A38, &hp) || !SafeF32(asc + 0x1A3C, &mx)) return false;
+    return hp >= 0.0f && mx > 0.0f && mx < 1.0e9f && hp <= mx * 2.0f;
 }
 
 // 绫绘寚閽堢獥鍙ｆ壂鎻忥細鎬墿鐨?ASC 瀛楁涓嶄竴瀹氬湪 +0x940锛堥偅鏄?AHTAbilityCharacter 鐨勫竷灞€锛夈€?
@@ -5209,13 +5315,13 @@ void DrawCaptureUi(const AnomalyUiServiceV1* ui) {
         }
     }
     if (ui->text) {
-        const bool bound = (g_rt_n > 0) && (g_mon_list_n > 0);
-        const bool fighting = (g_rt_n > 0);
+        const bool bound = (g_rt_n > 0);
+        const bool listening = (g_ui_state.damage != 0);
         char l1[96];
         const int n1 = std::snprintf(
             l1, sizeof(l1), "%s=%s %s=%s",
-            "\xE7\xBB\x91\xE5\xAE\x9A", bound ? "\xE5\xB0\xB1\xE7\xBB\xAA" : "\xE6\x9C\xAA\xE5\xB0\xB1\xE7\xBB\xAA",
-            "\xE8\xA7\xA6\xE5\x8F\x91", fighting ? "\xE6\x88\x98\xE6\x96\x97\xE4\xB8\xAD" : "\xE5\xBE\x85\xE6\x9C\xBA");
+            "\xE7\xBB\x91\xE5\xAE\x9A", bound ? "\xE5\xB7\xB2\xE9\x94\x81\xE5\xAE\x9A" : "\xE6\x9C\xAA\xE9\x94\x81\xE5\xAE\x9A",
+            "\xE8\xA7\xA6\xE5\x8F\x91", listening ? "\xE7\x9B\x91\xE5\x90\xAC\xE4\xB8\xAD" : "\xE5\xBE\x85\xE5\x91\xBD");
         if (n1 > 0) {
             AnomalyStringViewV1 v{l1, static_cast<std::size_t>(n1)};
             ui->text(ui->user, v);
@@ -5596,6 +5702,7 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     ConsumePendingCapture();
     ConsumeEcsCapture();
     CensusTick();
+    TickPendingArms();
     ReplayTick();
     if (g_ui_state.damage != 0 && (g_draw_count % 300) == 0) {
         char gb[160];
