@@ -1041,6 +1041,12 @@ struct Ue5NteAdapter::State {
     VehicleSpeedFieldBaseline vehicle_speed_field_baseline{};
     std::uintptr_t vehicle_speed_field_baseline_component{};
     bool vehicle_speed_fields_applied{};
+    // UHTVehicleMovementComponent owns and recomputes its speed limits (TopSpeedRatio is
+    // BlueprintReadOnly and ReSetupEngineAndTransmission can rebuild the engine), so a raised
+    // cap written once is reverted by the game on a later tick. Keep the computed targets and
+    // re-assert them while the requested factor stays above stock.
+    VehicleSpeedFieldBaseline vehicle_speed_field_targets{};
+    float vehicle_requested_speed_ratio{1.0F};
     bool vehicle_wheel_friction_enabled{true};
     // 按非玩家载具的 MovementComponent 分别保存速率倍率和原始扭矩基准，绝不与玩家载具共用状态。
     std::unordered_map<std::uintptr_t, float> other_vehicle_velocity_ratios;
@@ -10807,6 +10813,8 @@ struct Ue5NteAdapter::State {
                     vehicle_speed_field_baseline = {};
                     vehicle_speed_field_baseline_component = 0;
                     vehicle_speed_fields_applied = false;
+                    vehicle_speed_field_targets = {};
+                    vehicle_requested_speed_ratio = 1.0F;
                 }
                 static constexpr std::array<std::string_view, 1> water_vehicle_outer{
                     "HTWaterVehicleBasePawn"};
@@ -10858,6 +10866,8 @@ struct Ue5NteAdapter::State {
                 vehicle_speed_field_baseline = {};
                 vehicle_speed_field_baseline_component = 0;
                 vehicle_speed_fields_applied = false;
+                vehicle_speed_field_targets = {};
+                vehicle_requested_speed_ratio = 1.0F;
                 // Revalidate this dump-defined UFunction for each movement component.
                 vehicle_bindings.set_delayed_velocity_restore = 0;
                 vehicle_delayed_velocity_restore_failure_reason.clear();
@@ -11139,6 +11149,33 @@ struct Ue5NteAdapter::State {
         } catch (...) {
             try { failure_reason = "写入 Anomaly 风格载具速度字段时发生异常"; } catch (...) {}
             return false;
+        }
+    }
+
+    // The movement component keeps its own speed state: TopSpeedRatio is BlueprintReadOnly and
+    // ReSetupEngineAndTransmission rebuilds the engine/transmission, so the raised cap is
+    // reverted on a later tick and the car falls back to its stock top speed. Re-assert the
+    // computed targets whenever the observed fields no longer cover them.
+    void MaintainVehicleSpeedFieldsLocked() noexcept {
+        if (!vehicle_speed_fields_applied || vehicle_movement_component == 0 ||
+            vehicle_requested_speed_ratio <= 1.001F) {
+            return;
+        }
+        VehicleSpeedFieldBaseline observed{};
+        if (!ReadVehicleSpeedFieldSnapshotLocked(vehicle_movement_component, observed)) return;
+        if (observed.top_speed_kmh >= vehicle_speed_field_targets.top_speed_kmh * 0.99F &&
+            observed.max_linear_velocity >=
+                vehicle_speed_field_targets.max_linear_velocity * 0.99F) {
+            return;
+        }
+        // Keep the captured stock baseline so repeated passes never compound.
+        std::string failure;
+        if (!WriteVehicleSpeedFieldSnapshotLocked(
+                vehicle_movement_component, vehicle_speed_field_targets, failure)) {
+            vehicle_speed_fields_applied = false;
+            vehicle_speed_field_targets = {};
+            vehicle_requested_speed_ratio = 1.0F;
+            vehicle_speed_restore_status = "速度上限已被游戏重置，且重新写入失败：" + failure;
         }
     }
 
@@ -11450,6 +11487,8 @@ struct Ue5NteAdapter::State {
         // native ratio path if that call fails, combining it with the user's independent torque
         // factor rather than multiplying a previous effective speed ratio a second time.
         vehicle_speed_fields_applied = true;
+        vehicle_speed_field_targets = field_targets;
+        vehicle_requested_speed_ratio = ratio;
         if (!engine_torque_refreshed) {
             const auto& external_binding = vehicle_bindings.set_external_torque_ratio;
             const float speed_torque_scale = (std::max)(2.0F * field_targets.top_speed_ratio, 2.0F);
@@ -21268,6 +21307,7 @@ void Ue5NteAdapter::OnGameTick(double delta_seconds) noexcept {
         }
         state->RefreshAhudBindingLocked();
         state->RefreshCombatSkillBindingsLocked();
+        state->MaintainVehicleSpeedFieldsLocked();
         const bool combat_service_ready =
             state->NteCombatProfileAvailable() &&
             !state->IsPublished(ANOMALY_NTE_COMBAT_SERVICE_V1_ID);
