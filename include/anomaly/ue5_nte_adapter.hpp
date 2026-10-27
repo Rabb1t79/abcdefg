@@ -76,6 +76,30 @@ struct NteCombatExecFunctionTargetsSnapshot {
     bool discovery_complete{};
 };
 
+// Read-only view of the vehicle speed path and of the spec context entry-point ABI.
+// Exposed so the runtime can record both in the profile diagnostics line, which keeps
+// the evidence available without any plugin in the loop.
+struct NteVehicleSpeedDiagnosticsSnapshot {
+    bool applied{};
+    std::uint64_t apply_count{};
+    std::uint64_t maintain_runs{};
+    std::uint64_t maintain_rewrites{};
+    std::uint64_t maintain_failures{};
+    float requested_ratio{};
+    float target_top_kmh{};
+    float target_max_linear_velocity{};
+    float observed_top_kmh{};
+    float observed_max_linear_velocity{};
+    float observed_top_speed_ratio{};
+    // Spec context entry points as the running build publishes them.
+    std::uint8_t ctx_parms{};
+    std::uint16_t ctx_size{};
+    std::uint8_t out_parms{};
+    std::uint16_t out_size{};
+    std::uint8_t spec_via_outgoing{};
+    char context_class_name[48]{};
+};
+
 class Ue5NteAdapter final {
 public:
     using TickCallback = std::function<void(double)>;
@@ -155,6 +179,7 @@ public:
     [[nodiscard]] NteCombatExecFunctionTargetsSnapshot
         CombatExecFunctionTargets() const noexcept;
     [[nodiscard]] NteCombatDiagnosticsSnapshot CombatDiagnostics() const noexcept;
+    [[nodiscard]] NteVehicleSpeedDiagnosticsSnapshot VehicleSpeedDiagnostics() const noexcept;
     // Read-only diagnostic view used by anomaly-cli's ue combat/buffs commands.
     [[nodiscard]] std::string CombatEventsJson(bool buffs_only = false) const;
     [[nodiscard]] ProfileResolutionSnapshot Resolution() const;

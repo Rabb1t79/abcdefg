@@ -1048,6 +1048,13 @@ struct Ue5NteAdapter::State {
     VehicleSpeedFieldBaseline vehicle_speed_field_baseline{};
     std::uintptr_t vehicle_speed_field_baseline_component{};
     bool vehicle_speed_fields_applied{};
+    // Diagnostics for the speed path: what we asked for, what the component held on the
+    // last tick, and how often the maintenance pass had to rewrite it.
+    VehicleSpeedFieldBaseline vehicle_speed_observed{};
+    std::uint64_t vehicle_speed_apply_count{};
+    std::uint64_t vehicle_speed_maintain_runs{};
+    std::uint64_t vehicle_speed_maintain_rewrites{};
+    std::uint64_t vehicle_speed_maintain_failures{};
     // UHTVehicleMovementComponent owns and recomputes its speed limits (TopSpeedRatio is
     // BlueprintReadOnly and ReSetupEngineAndTransmission can rebuild the engine), so a raised
     // cap written once is reverted by the game on a later tick. Keep the computed targets and
@@ -11194,21 +11201,26 @@ struct Ue5NteAdapter::State {
     // reverted on a later tick and the car falls back to its stock top speed. Re-assert the
     // computed targets whenever the observed fields no longer cover them.
     void MaintainVehicleSpeedFieldsLocked() noexcept {
-        if (!vehicle_speed_fields_applied || vehicle_movement_component == 0 ||
-            vehicle_requested_speed_ratio <= 1.001F) {
+        if (!vehicle_speed_fields_applied || vehicle_movement_component == 0) {
             return;
         }
+        ++vehicle_speed_maintain_runs;
         VehicleSpeedFieldBaseline observed{};
         if (!ReadVehicleSpeedFieldSnapshotLocked(vehicle_movement_component, observed)) return;
+        // Keep the last observed values for the diagnostics line even when no rewrite is due.
+        vehicle_speed_observed = observed;
+        if (vehicle_requested_speed_ratio <= 1.001F) return;
         if (observed.top_speed_kmh >= vehicle_speed_field_targets.top_speed_kmh * 0.99F &&
             observed.max_linear_velocity >=
                 vehicle_speed_field_targets.max_linear_velocity * 0.99F) {
             return;
         }
+        ++vehicle_speed_maintain_rewrites;
         // Keep the captured stock baseline so repeated passes never compound.
         std::string failure;
         if (!WriteVehicleSpeedFieldSnapshotLocked(
                 vehicle_movement_component, vehicle_speed_field_targets, failure)) {
+            ++vehicle_speed_maintain_failures;
             vehicle_speed_fields_applied = false;
             vehicle_speed_field_targets = {};
             vehicle_requested_speed_ratio = 1.0F;
@@ -11526,6 +11538,7 @@ struct Ue5NteAdapter::State {
         vehicle_speed_fields_applied = true;
         vehicle_speed_field_targets = field_targets;
         vehicle_requested_speed_ratio = ratio;
+        ++vehicle_speed_apply_count;
         if (!engine_torque_refreshed) {
             const auto& external_binding = vehicle_bindings.set_external_torque_ratio;
             const float speed_torque_scale = (std::max)(2.0F * field_targets.top_speed_ratio, 2.0F);
@@ -21691,6 +21704,32 @@ NteCombatDiagnosticsSnapshot Ue5NteAdapter::CombatDiagnostics() const noexcept {
         state->reflection_fault_count,
         state->last_reflection_fault_function,
         state->last_reflection_fault_code};
+}
+
+NteVehicleSpeedDiagnosticsSnapshot Ue5NteAdapter::VehicleSpeedDiagnostics() const noexcept {
+    const auto state = state_;
+    std::scoped_lock lock(state->mutex);
+    NteVehicleSpeedDiagnosticsSnapshot snapshot{
+        state->vehicle_speed_fields_applied,
+        state->vehicle_speed_apply_count,
+        state->vehicle_speed_maintain_runs,
+        state->vehicle_speed_maintain_rewrites,
+        state->vehicle_speed_maintain_failures,
+        state->vehicle_requested_speed_ratio,
+        state->vehicle_speed_field_targets.top_speed_kmh,
+        state->vehicle_speed_field_targets.max_linear_velocity,
+        state->vehicle_speed_observed.top_speed_kmh,
+        state->vehicle_speed_observed.max_linear_velocity,
+        state->vehicle_speed_observed.top_speed_ratio,
+        state->spec_apply.ctx_parms_seen,
+        state->spec_apply.ctx_size_seen,
+        state->spec_apply.out_parms_seen,
+        state->spec_apply.out_size_seen,
+        state->spec_apply.spec_via_outgoing,
+        {}};
+    std::snprintf(snapshot.context_class_name, sizeof(snapshot.context_class_name),
+        "%s", state->spec_apply.context_class_name);
+    return snapshot;
 }
 
 std::string Ue5NteAdapter::CombatEventsJson(const bool buffs_only) const {

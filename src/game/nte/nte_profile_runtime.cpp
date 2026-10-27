@@ -1939,6 +1939,38 @@ public:
             std::to_string(combat_diagnostics.last_reflection_fault_function);
         json += ",\"lastReflectionFaultCode\":" +
             std::to_string(combat_diagnostics.last_reflection_fault_code) + "}";
+        // Vehicle speed and spec-context ABI, recorded from the adapter so the values are
+        // available without a plugin issuing the call.
+        const NteVehicleSpeedDiagnosticsSnapshot vehicle_diagnostics = adapter_
+            ? adapter_->VehicleSpeedDiagnostics()
+            : NteVehicleSpeedDiagnosticsSnapshot{};
+        json += ",\"vehicleSpeed\":{\"applied\":" +
+            std::string(vehicle_diagnostics.applied ? "true" : "false");
+        json += ",\"applyCount\":" + std::to_string(vehicle_diagnostics.apply_count);
+        json += ",\"maintainRuns\":" + std::to_string(vehicle_diagnostics.maintain_runs);
+        json += ",\"maintainRewrites\":" +
+            std::to_string(vehicle_diagnostics.maintain_rewrites);
+        json += ",\"maintainFailures\":" +
+            std::to_string(vehicle_diagnostics.maintain_failures);
+        json += ",\"requestedRatio\":" + std::to_string(vehicle_diagnostics.requested_ratio);
+        json += ",\"targetTopKmh\":" + std::to_string(vehicle_diagnostics.target_top_kmh);
+        json += ",\"targetMaxLinearVelocity\":" +
+            std::to_string(vehicle_diagnostics.target_max_linear_velocity);
+        json += ",\"observedTopKmh\":" +
+            std::to_string(vehicle_diagnostics.observed_top_kmh);
+        json += ",\"observedMaxLinearVelocity\":" +
+            std::to_string(vehicle_diagnostics.observed_max_linear_velocity);
+        json += ",\"observedTopSpeedRatio\":" +
+            std::to_string(vehicle_diagnostics.observed_top_speed_ratio);
+        json += ",\"ctxParms\":" +
+            std::to_string(vehicle_diagnostics.ctx_parms);
+        json += ",\"ctxSize\":" + std::to_string(vehicle_diagnostics.ctx_size);
+        json += ",\"outParms\":" + std::to_string(vehicle_diagnostics.out_parms);
+        json += ",\"outSize\":" + std::to_string(vehicle_diagnostics.out_size);
+        json += ",\"specViaOutgoing\":" +
+            std::to_string(vehicle_diagnostics.spec_via_outgoing);
+        json += ",\"contextClass\":" + Quote(std::string(vehicle_diagnostics.context_class_name)) +
+            "}";
         const bool player_service_published = adapter_ &&
             ProcessAdapterServices().Query(
                 ANOMALY_NTE_PLAYER_SERVICE_V1_ID,
