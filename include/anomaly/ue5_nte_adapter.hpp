@@ -98,6 +98,10 @@ struct NteVehicleSpeedDiagnosticsSnapshot {
     std::uint16_t out_size{};
     std::uint8_t spec_via_outgoing{};
     char context_class_name[48]{};
+    // The game's own FHTGameplayEffectContext, captured from a victim's active effect.
+    // Reported so its real layout can be analysed instead of reconstructed.
+    std::uint64_t effect_context_capture_count{};
+    char effect_context[384]{};
 };
 
 class Ue5NteAdapter final {

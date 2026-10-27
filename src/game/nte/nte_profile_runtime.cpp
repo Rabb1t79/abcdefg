@@ -1167,6 +1167,7 @@ struct VehicleSpeedDiagState {
     std::chrono::steady_clock::time_point last_write{};
     std::uint64_t last_apply{};
     std::uint64_t last_rewrites{};
+    std::uint64_t last_context_captures{};
     bool asserted{};
 };
 
@@ -1176,9 +1177,13 @@ void PublishVehicleSpeedDiagnostics(
     VehicleSpeedDiagState& state) noexcept {
     try {
         const auto snapshot = adapter.VehicleSpeedDiagnostics();
-        if (snapshot.apply_count == 0 && snapshot.maintain_runs == 0) return;
+        if (snapshot.apply_count == 0 && snapshot.maintain_runs == 0 &&
+            snapshot.effect_context_capture_count == 0) {
+            return;
+        }
         if (state.asserted && snapshot.apply_count == state.last_apply &&
-            snapshot.maintain_rewrites == state.last_rewrites) {
+            snapshot.maintain_rewrites == state.last_rewrites &&
+            snapshot.effect_context_capture_count == state.last_context_captures) {
             return;
         }
         const auto now = std::chrono::steady_clock::now();
@@ -1203,9 +1208,12 @@ void PublishVehicleSpeedDiagnostics(
             << " out=" << static_cast<unsigned>(snapshot.out_parms) << "/"
             << static_cast<unsigned>(snapshot.out_size)
             << " viaOut=" << static_cast<unsigned>(snapshot.spec_via_outgoing)
-            << " coc=" << snapshot.context_class_name << "\n";
+            << " coc=" << snapshot.context_class_name
+            << " ctxCaptures=" << snapshot.effect_context_capture_count
+            << " ctxReport=" << snapshot.effect_context << "\n";
         state.last_apply = snapshot.apply_count;
         state.last_rewrites = snapshot.maintain_rewrites;
+        state.last_context_captures = snapshot.effect_context_capture_count;
         state.last_write = now;
         state.asserted = true;
     } catch (...) {

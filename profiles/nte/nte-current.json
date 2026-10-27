@@ -742,6 +742,7 @@
     "gameplayEffectSpec.def": 0,
     "gameplayEffectSpec.duration": 80,
     "gameplayEffectSpec.stackCount": 448,
+    "gameplayEffectSpec.effectContext": 632,
     "activeGameplayEffect.size": 864,
     "activeGameplayEffect.spec": 24,
     "activeGameplayEffect.replicationId": 0,

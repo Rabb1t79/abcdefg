@@ -847,6 +847,10 @@ struct Ue5NteAdapter::State {
     std::vector<NativeDotChoice> native_dot_choices;
     std::unordered_map<std::uintptr_t, AnomalyGenerationHandleV1>
         last_damage_ge_by_victim;
+    // Latest native effect context captured from a victim's active effects, plus how many
+    // captures have happened. Consumed by the diagnostics tap.
+    char effect_context_report[384]{};
+    std::uint64_t effect_context_capture_count{};
     // DPI-0013 / DPI-0015: spec construction and application entry points.
     struct SpecApplyBinding {
         std::uintptr_t make_spec_function{};
@@ -6810,6 +6814,103 @@ struct Ue5NteAdapter::State {
         }
     }
 
+    // Walk the victim's active gameplay effects and snapshot the effect context the game
+    // itself built. The route is FActiveGameplayEffect.Spec (profile key) ->
+    // FGameplayEffectSpec.EffectContext (a 0x18 handle) -> the context object, whose first
+    // eight bytes are the pointer. The report covers the fields the Dumper could not
+    // export: the TSharedPtr at 0x50, the HT Target at 0x80, WorldOrigin and Pad_88.
+    void CaptureEffectContextFromVictimLocked(const std::uintptr_t victim) noexcept {
+        try {
+            if (victim == 0) return;
+            const auto container_offset =
+                Layout(profile, "abilitySystem.activeGameplayEffects", -1);
+            const auto items_offset = Layout(profile, "activeGameplayEffects.items", -1);
+            const auto count_offset = Layout(profile, "activeGameplayEffects.size", -1);
+            const auto stride = Layout(profile, "activeGameplayEffect.size", -1);
+            const auto spec_offset = Layout(profile, "activeGameplayEffect.spec", -1);
+            const auto def_offset = Layout(profile, "gameplayEffectSpec.def", -1);
+            const auto context_offset = Layout(profile, "gameplayEffectSpec.effectContext", -1);
+            if (container_offset < 0 || items_offset < 0 || count_offset < 0 ||
+                stride <= 0 || spec_offset < 0 || def_offset < 0 || context_offset < 0) {
+                return;
+            }
+            std::uintptr_t asc{};
+            if (!ReadPointerAt(*memory, victim,
+                    Layout(profile, "abilityCharacter.htAbilitySystemComponent"), asc) ||
+                asc == 0) {
+                return;
+            }
+            std::uintptr_t items{};
+            std::int32_t count{};
+            std::uintptr_t container{};
+            std::uintptr_t count_address{};
+            if (!AddAddress(asc, container_offset, container) ||
+                !ReadPointerAt(*memory, container, items_offset, items) ||
+                !AddAddress(container, count_offset, count_address) ||
+                !ReadValue(*memory, count_address, count) ||
+                items == 0 || count <= 0) {
+                return;
+            }
+            const std::int32_t limit = count > 24 ? 24 : count;
+            for (std::int32_t index = 0; index < limit; ++index) {
+                std::uintptr_t entry{};
+                if (!AddAddress(items, static_cast<std::int64_t>(index) * stride, entry)) return;
+                std::uintptr_t spec{};
+                std::uintptr_t def{};
+                std::uintptr_t handle{};
+                std::uintptr_t object{};
+                if (!AddAddress(entry, spec_offset, spec) ||
+                    !ReadValue(*memory, spec + def_offset, def) || def == 0 ||
+                    !AddAddress(spec, context_offset, handle) ||
+                    !ReadValue(*memory, handle, object) || object == 0) {
+                    continue;
+                }
+                std::string context_class_name;
+                std::uintptr_t context_class{};
+                if (!ReadPointerAt(*memory, object, Layout(profile, "object.class"),
+                        context_class) ||
+                    context_class == 0 ||
+                    !ReadReflectedObjectNameLocked(context_class, context_class_name)) {
+                    continue;
+                }
+                std::uintptr_t hit_result{};
+                std::uintptr_t pad88_0{};
+                std::uintptr_t pad88_1{};
+                std::int32_t target_index{};
+                std::int32_t target_serial{};
+                std::uint8_t flags{};
+                double origin_x{};
+                double origin_y{};
+                double origin_z{};
+                static_cast<void>(ReadValue(*memory, object + 0x50, hit_result));
+                static_cast<void>(ReadValue(*memory, object + 0x60, origin_x));
+                static_cast<void>(ReadValue(*memory, object + 0x68, origin_y));
+                static_cast<void>(ReadValue(*memory, object + 0x70, origin_z));
+                static_cast<void>(ReadValue(*memory, object + 0x78, flags));
+                static_cast<void>(ReadValue(*memory, object + 0x80, target_index));
+                static_cast<void>(ReadValue(*memory, object + 0x84, target_serial));
+                static_cast<void>(ReadValue(*memory, object + 0x88, pad88_0));
+                static_cast<void>(ReadValue(*memory, object + 0x90, pad88_1));
+                std::string def_name;
+                static_cast<void>(ReadReflectedObjectNameLocked(def, def_name));
+                std::snprintf(effect_context_report, sizeof(effect_context_report),
+                    "cls=%s def=%s obj=0x%llX hit50=0x%llX tgt=%d:%d bHasWorld=%u "
+                    "origin=%.2f,%.2f,%.2f p88=0x%llX,0x%llX",
+                    context_class_name.c_str(), def_name.c_str(),
+                    static_cast<unsigned long long>(object),
+                    static_cast<unsigned long long>(hit_result),
+                    static_cast<int>(target_index), static_cast<int>(target_serial),
+                    static_cast<unsigned>(flags & 1U),
+                    origin_x, origin_y, origin_z,
+                    static_cast<unsigned long long>(pad88_0),
+                    static_cast<unsigned long long>(pad88_1));
+                ++effect_context_capture_count;
+                return;
+            }
+        } catch (...) {
+        }
+    }
+
     void CaptureCharacterDamageBytesLocked(
         const std::span<const std::uint8_t> parameters,
         const std::uint64_t capture_tick_sequence) noexcept {
@@ -6830,6 +6931,9 @@ struct Ue5NteAdapter::State {
         const bool critical = damage.critical.critical ||
             DamageTagsContainCriticalLocked(damage.tags);
         const bool critical_valid = damage.critical.valid || critical;
+        // Snapshot the native effect context while the damage effect is still active on the
+        // victim: this is the only place the game's own context is reachable.
+        CaptureEffectContextFromVictimLocked(damage.victim);
         ProcessCharacterDamageLocked(
             damage.damage, damage.source_index, damage.source_serial,
             damage.victim, damage.attacker, damage.saved_skill_cdo, damage.active_spec_handle,
@@ -21726,9 +21830,13 @@ NteVehicleSpeedDiagnosticsSnapshot Ue5NteAdapter::VehicleSpeedDiagnostics() cons
         state->spec_apply.out_parms_seen,
         state->spec_apply.out_size_seen,
         state->spec_apply.spec_via_outgoing,
+        {},
+        state->effect_context_capture_count,
         {}};
     std::snprintf(snapshot.context_class_name, sizeof(snapshot.context_class_name),
         "%s", state->spec_apply.context_class_name);
+    std::snprintf(snapshot.effect_context, sizeof(snapshot.effect_context),
+        "%s", state->effect_context_report);
     return snapshot;
 }
 
