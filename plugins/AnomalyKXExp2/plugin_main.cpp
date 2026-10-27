@@ -5245,11 +5245,12 @@ void ReplayApplyStep() {
         if (base != 0) pe = base + 0x3E41360;
     }
     if (pe < 0x10000) return;
-    unsigned char ctx[0x18] = {0};
     g_cap_suppress = 1;
-    reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
-                               reinterpret_cast<void*>(g_gec_ufn), ctx);
     for (int s = 0; s < shots; ++s) {
+        // 每一发都用新的 effect context：同一个 ctx 复用到多发表演上，语义没验证过。
+        unsigned char ctx[0x18] = {0};
+        reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
+                                   reinterpret_cast<void*>(g_gec_ufn), ctx);
         for (int i = 0; i < g_rt_n; ++i) {
             ReplayTarget& t = g_rt[i];
             if (t.asc < 0x10000 || t.ge_class < 0x10000) continue;
