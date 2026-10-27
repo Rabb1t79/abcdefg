@@ -1,4 +1,5 @@
-#include "anomaly/host_ui_service.hpp"
+﻿#include "anomaly/host_ui_service.hpp"
+#include "anomaly/liquid_glass.hpp"
 #include "anomaly/platform_ui_theme.hpp"
 #include "anomaly/thread_local_value.hpp"
 
@@ -220,16 +221,19 @@ bool DrawPluginWindowChromeButton(
     }
 
     const auto& theme = PlatformUiTheme();
-    const ImVec4 raised = ThemeColor(theme.button_hovered);
-    const ImVec4 active = ThemeColor(theme.button_active);
+    const ImVec4 raised = ThemeColorWithAlpha(theme.text, 0.09F);
+    const ImVec4 active = ThemeColorWithAlpha(theme.text, 0.15F);
     const ImVec4 accent = ThemeColor(theme.accent);
     const ImVec4 transparent(0.0F, 0.0F, 0.0F, 0.0F);
-    const ImVec4 background = held ? active : hovered ? raised
-        : selected ? ThemeColorWithAlpha(theme.accent, 0.16F) : transparent;
-    const ImVec4 text = !enabled ? ThemeColor(theme.text_muted)
-        : selected ? accent : ThemeColor(theme.text_muted);
+    static_cast<void>(raised);
+    static_cast<void>(active);
+    const ImVec4 background = selected ? ThemeColorWithAlpha(theme.accent, 0.16F) : transparent;
+    // Hover only brightens the glyph; the glass under it never changes.
+    const ImVec4 text = !enabled ? ThemeColorWithAlpha(theme.text_muted, 0.55F)
+        : selected ? accent
+        : hovered || held ? ThemeColor(theme.text) : ThemeColor(theme.text_muted);
     ImDrawList* const draw_list = window.DrawList;
-    draw_list->AddRectFilled(bounds.Min, bounds.Max, ToU32(background), 3.0F);
+    draw_list->AddRectFilled(bounds.Min, bounds.Max, ToU32(background), bounds.GetHeight() * 0.36F);
     const char* const glyph_text = PluginWindowChromeGlyphText(glyph);
     // Plugin content can select a CJK font, but these are host-owned icon glyphs.
     ImFont* const glyph_font = ImGui::GetIO().FontDefault;
@@ -265,11 +269,12 @@ bool DrawPluginWindowChrome(
     ImDrawList* const draw_list = window.DrawList;
     const ImRect header(origin, Offset(origin, size.x, kPluginWindowHeaderHeight));
     const auto& theme = PlatformUiTheme();
-    draw_list->AddRectFilled(header.Min, header.Max, ToU32(ThemeColor(theme.header_background)));
+    // The window body is glass, so the header is only a hairline under the
+    // title rather than a band of its own.
     draw_list->AddLine(
-        Offset(origin, 0.0F, kPluginWindowHeaderHeight - 1.0F),
-        Offset(origin, size.x, kPluginWindowHeaderHeight - 1.0F),
-        ToU32(ThemeColor(theme.border)));
+        Offset(origin, 14.0F, kPluginWindowHeaderHeight - 1.0F),
+        Offset(origin, size.x - 14.0F, kPluginWindowHeaderHeight - 1.0F),
+        ToU32(ThemeColorWithAlpha(theme.text, 0.10F)));
 
     const float close_x = size.x - kPluginWindowActionRightInset - kPluginWindowActionSize;
     const float pin_x = close_x - kPluginWindowActionGap - kPluginWindowActionSize;
@@ -452,8 +457,12 @@ int ANOMALY_CALL BeginWindow(
         // surface. The themed surface tokens are transparent while a background
         // image is active -- the shell paints its own veil instead -- and using
         // one here would leave the window with no background at all.
-        ImGui::PushStyleColor(
-            ImGuiCol_WindowBg, ThemeColor(anomaly::PlatformUiSurfaceColor()));
+        // With the glass renderer installed the body is drawn by the renderer
+        // under the window, so the fill stays empty.
+        const PlatformUiColor surface = anomaly::PlatformUiSurfaceColor();
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, glass::Active()
+            ? ImVec4(surface.red, surface.green, surface.blue, 0.0F)
+            : ThemeColor(surface));
         ImGui::PushStyleVar(
             ImGuiStyleVar_WindowPadding, ImVec2(kPluginWindowBodyPadding, kPluginWindowBodyPadding));
     }
@@ -461,6 +470,24 @@ int ANOMALY_CALL BeginWindow(
     if (!management_shell) {
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
+        glass::SurfaceOptions body;
+        body.variant = glass::Variant::Regular;
+        body.rounding = ImGui::GetStyle().WindowRounding;
+        body.clip = false;
+        // A plugin window floats on the game frame itself: no themed veil stands
+        // between its face and a moving scene, so it asks for the deep backdrop
+        // and the heavy face, and carries slightly more of the palette than the
+        // shell's own surfaces do. A label has to stay readable against the
+        // scene, and a light blur leaves its silhouettes running through the text.
+        body.face_blur = 2.0F;
+        // The rim stays nearly as soft as the face: the shipped clamp samples a
+        // much sharper copy along the bevel, which over a deep face drew a hard
+        // ring inside the window -- the outer glass and the blurred body read as
+        // two materials meeting at an edge instead of one pane.
+        body.rim_blur = 1.7F;
+        body.deep_backdrop = true;
+        body.tint_strength = glass::DarkAppearance() ? 0.62F : 0.52F;
+        glass::RegisterWindowSurface(body);
     }
     g_host_ui_window_scopes.Get().emplace_back();
     if (open != nullptr) *open = visible ? 1 : 0;
@@ -540,6 +567,11 @@ void ANOMALY_CALL EndWindow(void*) {
 void ANOMALY_CALL Text(void*, AnomalyStringViewV1 value) {
     const std::string text = Copy(value);
     ImGui::TextUnformatted(text.data(), text.data() + text.size());
+}
+
+void ANOMALY_CALL TextWrapped(void*, AnomalyStringViewV1 value) {
+    const std::string text = Copy(value);
+    ImGui::TextWrapped("%s", text.c_str());
 }
 
 int ANOMALY_CALL Button(
@@ -625,7 +657,7 @@ ImGuiTabItemFlags ToImGuiTabItemFlags(const std::uint32_t flags) noexcept {
 int ANOMALY_CALL BeginTabBar(
     void*, AnomalyStringViewV1 id, const std::uint32_t flags) {
     const std::string text = Copy(id);
-    return ImGui::BeginTabBar(text.c_str(), ToImGuiTabBarFlags(flags)) ? 1 : 0;
+    return glass::BeginTabBar(text.c_str(), ToImGuiTabBarFlags(flags)) ? 1 : 0;
 }
 
 int ANOMALY_CALL BeginTabItem(
@@ -648,13 +680,15 @@ int ANOMALY_CALL BeginTabItem(
 
 void ANOMALY_CALL EndTabItem(void*) { ImGui::EndTabItem(); }
 
-void ANOMALY_CALL EndTabBar(void*) { ImGui::EndTabBar(); }
+void ANOMALY_CALL EndTabBar(void*) { glass::EndTabBar(); }
 
 int ANOMALY_CALL Checkbox(void*, AnomalyStringViewV1 label, int* value) {
     if (value == nullptr) return 0;
     const std::string text = Copy(label);
     bool checked = *value != 0;
-    const bool changed = ImGui::Checkbox(text.c_str(), &checked);
+    // Every boolean the plugin ABI exposes is a switch, so plugin pages match
+    // the shell without a new entry point.
+    const bool changed = glass::Switch(text.c_str(), &checked);
     *value = checked ? 1 : 0;
     return changed ? 1 : 0;
 }
@@ -664,7 +698,19 @@ int ANOMALY_CALL SliderFloat(
     if (value == nullptr || !std::isfinite(minimum) || !std::isfinite(maximum) ||
         minimum >= maximum) return 0;
     const std::string text = Copy(label);
-    return ImGui::SliderFloat(text.c_str(), value, minimum, maximum) ? 1 : 0;
+    return glass::SliderFloat(text.c_str(), value, minimum, maximum) ? 1 : 0;
+}
+
+int ANOMALY_CALL SliderFloatEnabled(
+    void*, AnomalyStringViewV1 label, float* value,
+    float minimum, float maximum, int enabled) {
+    if (value == nullptr || !std::isfinite(minimum) || !std::isfinite(maximum) ||
+        minimum >= maximum) return 0;
+    const std::string text = Copy(label);
+    ImGui::BeginDisabled(enabled == 0);
+    const bool changed = glass::SliderFloat(text.c_str(), value, minimum, maximum);
+    ImGui::EndDisabled();
+    return enabled != 0 && changed ? 1 : 0;
 }
 
 int ANOMALY_CALL InputUInt32(
@@ -701,7 +747,8 @@ int DigitInputFilter(ImGuiInputTextCallbackData* data) {
 int ANOMALY_CALL InputText(
     void*, AnomalyStringViewV1 label, char* buffer,
     std::size_t buffer_capacity, std::uint32_t flags) {
-    constexpr std::uint32_t kKnownFlags = ANOMALY_UI_TEXT_INPUT_V1_DIGITS;
+    constexpr std::uint32_t kKnownFlags =
+        ANOMALY_UI_TEXT_INPUT_V1_DIGITS | ANOMALY_UI_TEXT_INPUT_V1_PASSWORD;
     if (buffer == nullptr || buffer_capacity == 0 ||
         (flags & ~kKnownFlags) != 0 ||
         std::find(buffer, buffer + buffer_capacity, '\0') == buffer + buffer_capacity) {
@@ -713,6 +760,9 @@ int ANOMALY_CALL InputText(
     if ((flags & ANOMALY_UI_TEXT_INPUT_V1_DIGITS) != 0) {
         imgui_flags |= ImGuiInputTextFlags_CallbackCharFilter;
         callback = DigitInputFilter;
+    }
+    if ((flags & ANOMALY_UI_TEXT_INPUT_V1_PASSWORD) != 0) {
+        imgui_flags |= ImGuiInputTextFlags_Password;
     }
     return ImGui::InputText(
         text.c_str(), buffer, buffer_capacity, imgui_flags, callback) ? 1 : 0;
@@ -737,17 +787,40 @@ int ANOMALY_CALL BeginChild(
         text.c_str(), ImVec2(width, height), static_cast<ImGuiChildFlags>(flags)) ? 1 : 0;
 }
 
+int ANOMALY_CALL BeginChildAutoFitY(
+    void*, AnomalyStringViewV1 id, float width, float max_height) {
+    const std::string text = Copy(id);
+    const float available_height = ImGui::GetContentRegionAvail().y;
+    float height_limit = std::isfinite(available_height)
+        ? (std::max)(1.0F, available_height) : 1.0F;
+    if (std::isfinite(max_height) && max_height > 0.0F) {
+        height_limit = (std::min)(height_limit, max_height);
+    }
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(1.0F, 1.0F),
+        ImVec2((std::numeric_limits<float>::max)(), height_limit));
+    return ImGui::BeginChild(
+        text.c_str(), ImVec2(width, 0.0F),
+        ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY) ? 1 : 0;
+}
+
 void ANOMALY_CALL EndChild(void*) { ImGui::EndChild(); }
 
 int ANOMALY_CALL BeginTable(
     void*, AnomalyStringViewV1 id, std::int32_t columns, std::uint32_t flags,
     float outer_width, float outer_height) {
-    constexpr std::uint32_t kKnownFlags = ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT;
-    if (columns <= 0 || (flags & ~kKnownFlags) != 0) return 0;
+    constexpr std::uint32_t kKnownFlags =
+        ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT |
+        ANOMALY_UI_TABLE_V1_SIZING_STRETCH_PROP;
+    if (columns <= 0 || (flags & ~kKnownFlags) != 0 ||
+        (flags & kKnownFlags) == kKnownFlags) return 0;
     const std::string text = Copy(id);
     ImGuiTableFlags imgui_flags = ImGuiTableFlags_None;
     if ((flags & ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT) != 0) {
         imgui_flags |= ImGuiTableFlags_SizingFixedFit;
+    }
+    if ((flags & ANOMALY_UI_TABLE_V1_SIZING_STRETCH_PROP) != 0) {
+        imgui_flags |= ImGuiTableFlags_SizingStretchProp;
     }
     return ImGui::BeginTable(
         text.c_str(), columns, imgui_flags,
@@ -1109,7 +1182,8 @@ const AnomalyUiServiceV1 kUiService{
     CloseCurrentPopup, FilterMatch, FrameState,
     SetNextWindowSizeConstraints, GetWindowSize, InputUInt32, InputDouble,
     DeveloperModeEnabled, InputText, ButtonEnabled, SameLine, SetCursorPosX, TextLink,
-    BeginTabBar, BeginTabItem, EndTabItem, EndTabBar};
+    BeginTabBar, BeginTabItem, EndTabItem, EndTabBar,
+    TextWrapped, BeginChildAutoFitY, SliderFloatEnabled};
 
 }  // namespace
 
