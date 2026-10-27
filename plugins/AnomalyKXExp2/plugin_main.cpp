@@ -4282,13 +4282,37 @@ static void PeRingPush(std::uintptr_t function, std::uintptr_t object) {
 // 伤害事件里的 victim 是宿主编码过的 UE 对象句柄：低 32 位 = GObjects 下标 + 1，
 // 高 32 位 = serial（见 adapter EncodeObjectHandle）。这里只还原 actor 指针，
 // 序列号由后续「类指针/HP」校验兜底；解不出就跳过这一发，不猜。
+// 宿主句柄的打包方式用本地玩家 pawn 在线校准：这版 Core 的 id 高低 32 位含义与
+// 仓库源码里的 EncodeObjectHandle(serial<<32 | index+1) 不一定一致，直接按低 32 位
+// 取下标会解到别的对象（日志里 boss 的 victim 被解成座椅/0x0 就是这个原因）。
+static int g_handle_pack = 0;   // 0=未校准, 1=低32位是 index+1, 2=高32位是 index+1
+
+static std::uintptr_t DecodeHandleWithPack(std::uint64_t id, int pack) {
+    if (id == 0) return 0;
+    const std::uint32_t raw = (pack == 2)
+        ? static_cast<std::uint32_t>(id >> 32)
+        : static_cast<std::uint32_t>(id & 0xFFFFFFFFull);
+    if (raw == 0) return 0;
+    const std::uintptr_t obj = reinterpret_cast<std::uintptr_t>(g_ue.ObjectAt(raw - 1u));
+    return obj >= 0x10000 ? obj : 0;
+}
+
+static bool ObjectLooksLikeCharacter(std::uintptr_t obj) {
+    if (obj < 0x10000) return false;
+    std::uintptr_t asc = 0;
+    if (ue::Reader::SafePtr(obj + 0x940, &asc) && AscLooksLikeAsc(asc)) return true;
+    return FindAscInActor(obj) >= 0x10000;
+}
+
 static std::uintptr_t ActorFromDamageHandle(AnomalyGenerationHandleV1 handle) {
     if (handle.id == 0) return 0;
-    const std::uint32_t raw = static_cast<std::uint32_t>(handle.id & 0xFFFFFFFFull);
-    if (raw == 0) return 0;
-    const std::uintptr_t actor =
-        reinterpret_cast<std::uintptr_t>(g_ue.ObjectAt(raw - 1u));
-    return actor >= 0x10000 ? actor : 0;
+    if (g_handle_pack != 0) return DecodeHandleWithPack(handle.id, g_handle_pack);
+    // 未校准：两种打包都解一次，优先能当角色用的那个。
+    const std::uintptr_t low = DecodeHandleWithPack(handle.id, 1);
+    const std::uintptr_t high = DecodeHandleWithPack(handle.id, 2);
+    if (high >= 0x10000 && ObjectLooksLikeCharacter(high)) return high;
+    if (low >= 0x10000) return low;
+    return high;
 }
 
 // 武装失败原因诊断（前 10 次）：v=victim actor, asc=解析出的 ASC, ge=LastDamageGEDef 的类,
@@ -4381,6 +4405,16 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
         }
     }
     const std::uintptr_t local = ResolvePlayerPawn();
+    if (g_handle_pack == 0 && ev.attacker.id != 0 && local >= 0x10000) {
+        // 攻击者通常就是本地玩家 pawn：用它作为句柄打包方式的地面真值。
+        if (DecodeHandleWithPack(ev.attacker.id, 1) == local) {
+            g_handle_pack = 1;
+            PushLog("decode: handle pack = low(index+1)");
+        } else if (DecodeHandleWithPack(ev.attacker.id, 2) == local) {
+            g_handle_pack = 2;
+            PushLog("decode: handle pack = high(index+1)");
+        }
+    }
     const std::uintptr_t attacker = ActorFromDamageHandle(ev.attacker);
     // 攻击者就是本地玩家时，顺手刷新施法 ASC。这是"换地图/换角色后不用手动刷新"的关键：
     // 旧版靠 MonScan 写 g_player_asc 且不再校验，多玩家场景会串到别的玩家身上。
@@ -4851,7 +4885,8 @@ void TickMonsterScan() {
         std::uintptr_t act = 0;
         const unsigned int i = g_mon_actor_i++;
         --budget;
-        if (g_mon_found >= 24) { g_mon_actor_i = g_mon_actor_n; continue; }
+        // 触发上限只限制日志条数，不再中断扫描：否则前面的垃圾候选会把真怪挤出窗口。
+        const bool log_mon = (g_mon_found < 24);
         if (!ue::Reader::SafePtr(g_mon_arr + 8ull * i, &act) || act < 0x10000) continue;
         std::uintptr_t cls = 0;
         if (!ue::Reader::SafePtr(act + 0x10, &cls) || cls < 0x10000) continue;
@@ -4903,13 +4938,15 @@ void TickMonsterScan() {
         const bool hp_ok = SafeF32(asc + 0x1A38, &hp);
         SafeF32(asc + 0x1A3C, &maxhp);
         SafeF32(asc + 0x1A50, &atk);
-        char b[224];
-        std::snprintf(b, sizeof(b),
-                      "mon[%d]: %s actor=0x%llX asc=0x%llX hp=%.1f/%.1f atk=%.1f hpok=%d",
-                      g_mon_found, nm, (unsigned long long)act, (unsigned long long)asc,
-                      hp, maxhp, atk, hp_ok ? 1 : 0);
-        PushLog(b);
-        ++g_mon_found;
+        if (log_mon) {
+            char b[224];
+            std::snprintf(b, sizeof(b),
+                          "mon[%d]: %s actor=0x%llX asc=0x%llX hp=%.1f/%.1f atk=%.1f hpok=%d",
+                          g_mon_found, nm, (unsigned long long)act, (unsigned long long)asc,
+                          hp, maxhp, atk, hp_ok ? 1 : 0);
+            PushLog(b);
+            ++g_mon_found;
+        }
         if (asc >= 0x10000 && hp > 0.0f) {
             // 记进候选表：自动流程靠"谁的 HP 掉了"来认受害者，而不是靠先扫到的第一只。
             bool known = false;
