@@ -110,6 +110,7 @@ void LoadDamageConfig();
 void SaveDamageConfig();
 void StartConfigSaveThread();
 void StopConfigSaveThread();
+void TickReplayEngine();
 static std::uintptr_t ResolvePlayerPawn();
 static std::uint64_t g_cfg_save_due_ms = 0;
 void DrawCaptureUi(const AnomalyUiServiceV1* ui);
@@ -204,6 +205,7 @@ static unsigned int g_id_pc = 0, g_id_asc = 0, g_id_vb = 0;
 static unsigned long long g_cls_pc = 0;
 static unsigned long long g_cls_asc = 0;
 static unsigned long long g_cls_vb = 0;
+static unsigned long long g_cls_ge = 0;   // /Script/GameplayAbilities.GameplayEffect
 static unsigned int g_probe_nid = 0;
 static unsigned int g_want_id = 0;
 static int g_draw_count = 0;
@@ -321,6 +323,9 @@ void ANOMALY_CALL on_update(void*, double) {
     TickReverseScan();
     TickWorldScan();
     TickRepeat();
+    // 引擎必须跑在 on_update（Game 线程，宿主只按 started 派发），不能放 on_draw：
+    // 宿主对隐藏的插件窗口直接跳过 Draw，关掉面板后 on_draw 根本不会被调用。
+    TickReplayEngine();
     if ((++n % 30) == 0) TickFeatures();
 }
 // 缂備焦鍔栭〃鍛般亹濞戞瑧鈻旈幖娣灩娴犳ê霉閻樻彃顣冲┑顔芥倐楠炩偓濞撴艾锕︾粈鍕煕濞嗘ê鐏￠悗鍨⒐缁嬪﹪宕ㄩ鐑嗗殭闂?anomaly.config闂?
@@ -1069,6 +1074,12 @@ void TickFeatures() {
             g_resolve.damage = 1;
             g_dmg_fn = df;
         }
+    }
+    // 解析 UGameplayEffect 的 UClass，供 GE 继承链校验（不查名字，Game 线程可用）。
+    if (g_cls_ge == 0) {
+        unsigned int ge_id = FindNameIdByPath("/Script/GameplayAbilities.GameplayEffect");
+        void* ge_cls = ge_id != 0 ? g_ue.FindClassById(ge_id) : nullptr;
+        g_cls_ge = reinterpret_cast<unsigned long long>(ge_cls);
     }
     if (g_id_vb == 0) g_id_vb = FindNameIdByPath("/Script/HTGame.HTVolleyballGameManager");
     unsigned int vb_id = g_id_vb;
@@ -4299,15 +4310,20 @@ static void ArmDiag(const char* why, std::uintptr_t victim, std::uintptr_t asc,
     PushLog(b);
 }
 
-// 放宽 ASC 校验后（+0x940 用 HP 布局兜底）必须再验一次 GE 类名，防止把某个
-// 恰好长得像 HP 的组件当成 ASC、再拿垃圾指针去 apply。
-static bool GeNameLooksValid(std::uintptr_t ge) {
-    char name[64] = {0};
-    ObjectNameUtf8(ge, name, sizeof(name));
-    if (name[0] == 0) return false;
-    return std::strstr(name, "GE_") != nullptr ||
-           std::strstr(name, "GameplayEffect") != nullptr ||
-           std::strstr(name, "Damage") != nullptr;
+// 放宽 ASC 校验后（+0x940 用 HP 布局兜底）必须再验一次 GE 的继承链，防止把某个
+// 恰好长得像 HP 的组件当成 ASC、再拿垃圾指针去 apply。这里不查名字（Game 线程禁止
+// DecodeName），只沿 SuperStruct 比对缓存的 GameplayEffect UClass。
+static bool GeClassLooksValid(std::uintptr_t ge) {
+    if (ge < 0x10000) return false;
+    if (g_cls_ge < 0x10000) return true;   // 还没解析到基类：放行，后续 UI 线程会补
+    std::uintptr_t cls = ge;
+    for (int depth = 0; depth < 10 && cls >= 0x10000; ++depth) {
+        if (cls == static_cast<std::uintptr_t>(g_cls_ge)) return true;
+        std::uintptr_t super = 0;
+        if (!ue::Reader::SafePtr(cls + 0x40, &super) || super < 0x10000) break;
+        cls = super;
+    }
+    return false;
 }
 
 // 事件驱动武装（KB 11.10 的第 1、2 条）：这一击打中谁，就取谁的
@@ -4363,7 +4379,7 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
         return;
     }
     const std::uintptr_t ge = LastDamageGeClass(asc);
-    if (ge < 0x10000 || !GeNameLooksValid(ge)) {   // 目标身上没有伤害 GE（普通 NPC 等）
+    if (ge < 0x10000 || !GeClassLooksValid(ge)) {   // 目标身上没有伤害 GE（普通 NPC 等）
         ArmDiag("no-ge", victim, asc, ge, 0.0f);
         PendArm(victim, asc, ev.victim.id);
         return;
@@ -4373,9 +4389,7 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
         ArmDiag("no-hp", victim, asc, ge, hp);
         return;
     }
-    char name[48] = {0};
-    ObjectClassName(victim, name, sizeof(name));
-    ReplayArm(asc, name, ge, hp, ev.victim.id);
+    ReplayArm(asc, "-", ge, hp, ev.victim.id);
 }
 
 struct PeNameCount { char name[64]; char obj[48]; int count; };
@@ -4404,7 +4418,8 @@ static void PendArm(std::uintptr_t victim, std::uintptr_t asc, std::uint64_t vic
     p.asc = asc;
     p.due_ms = now + 100;
     p.tries = 0;
-    ObjectClassName(victim, p.name, sizeof(p.name));
+    std::snprintf(p.name, sizeof(p.name), "%s", "-");
+    static_cast<void>(victim);
 }
 
 static void TickPendingArms() {
@@ -4417,7 +4432,7 @@ static void TickPendingArms() {
         p.due_ms = now + 100;
         const std::uintptr_t ge = AscStillValid(p.asc) ? LastDamageGeClass(p.asc) : 0;
         float hp = 0.0f;
-        if (ge >= 0x10000 && GeNameLooksValid(ge) && ReadAscHP(p.asc, &hp) && hp > 0.0f) {
+        if (ge >= 0x10000 && GeClassLooksValid(ge) && ReadAscHP(p.asc, &hp) && hp > 0.0f) {
             ReplayArm(p.asc, p.name, ge, hp, p.victim_id);
             g_pending_arm[i] = g_pending_arm[--g_pending_arm_n];
             continue;
@@ -4508,13 +4523,12 @@ static void CensusTick() {
     }
     const std::uintptr_t diag_ge = LastDamageGeClass(diag_asc);
     char dn[64] = {0};
-    if (diag_ge != 0) ObjectNameUtf8(diag_ge, dn, sizeof(dn));
     std::snprintf(b, sizeof(b),
-                  "hit[%d]: seq=%llu final=%lld victim=0x%llX asc=0x%llX ge=%s(0x%llX)",
+                  "hit[%d]: seq=%llu final=%lld victim=0x%llX asc=0x%llX ge=0x%llX",
                   g_census_hits, (unsigned long long)ev.sequence,
                   static_cast<long long>(ev.final_damage),
                   (unsigned long long)diag_victim, (unsigned long long)diag_asc,
-                  dn[0] ? dn : "-", (unsigned long long)diag_ge);
+                  (unsigned long long)diag_ge);
     PushLog(b);
     // 旧的 PE 环形窗口 dump 在这里停止：第一次命中要对 256~4096 条事件做 DecodeName，
     // 曾在命中瞬间把 UI 线程卡死（日志停在半行 hitwin 上）。需要时再看 arm[] 诊断。
@@ -5589,8 +5603,18 @@ void ReplayTick() {
         t.hp = hp;
         ++i;
     }
-    if (g_gec_ufn == 0 || g_gea_ufn == 0) ResolveGeHelpersUiThread();
-    if (g_rt_n == 0) return;
+    if (g_rt_n == 0) {
+        g_shot_clock_ms = 0;
+        return;
+    }
+    if (g_gec_ufn == 0 || g_gea_ufn == 0) {
+        // UFunction 解析要查名字服务，放在 Game 线程每秒试一次即可；解析失败不刷屏。
+        static std::uint64_t next_resolve = 0;
+        if (now >= next_resolve) {
+            next_resolve = now + 1000;
+            ResolveGeHelpersUiThread();
+        }
+    }
     if (g_gec_ufn == 0 || g_gea_ufn == 0) return;
     static std::uint64_t last_report = 0;
     if (now - last_report >= 5000) {
@@ -5606,6 +5630,21 @@ void ReplayTick() {
     }
     g_ge_shots = shots;
     g_ge_req = 1;
+}
+
+// Game 线程引擎：宿主只在插件"已启动"时派发 on_update，与窗口是否可见无关；
+// on_draw 在窗口隐藏时会被跳过，所以事件消费/武装/回放节奏都必须放在这里。
+// 本函数里禁止 DecodeName（宿主 names 的锁）：武装只做指针/偏移读取，名字留给 on_draw。
+void TickReplayEngine() {
+    if (g_ctx == nullptr) return;
+    g_cap_on = (g_ui_state.damage != 0) ? 1 : 0;
+    static int sub_try = 0;
+    if (g_cap_on != 0 && g_pe_subscribed == 0 && (++sub_try % 15) == 0)
+        EnsureSubscription();
+    if (g_cap_on == 0 && g_pe_subscribed != 0) ReleaseCaptureSubscription();
+    CensusTick();
+    TickPendingArms();
+    ReplayTick();
 }
 
 // Game-thread turn: one context, then one application per live target, so every
@@ -5696,14 +5735,9 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     if (g_probe_on) ProbeScanStep();
     TickChronosDump();
     TickFeatures();
-    if (g_cap_on != 0 && !g_pe_subscribed && (g_draw_count % 30) == 0) EnsureSubscription();
-    if (g_cap_on == 0 && g_pe_subscribed != 0) ReleaseCaptureSubscription();
     CollectApplyUfns();
     ConsumePendingCapture();
     ConsumeEcsCapture();
-    CensusTick();
-    TickPendingArms();
-    ReplayTick();
     if (g_ui_state.damage != 0 && (g_draw_count % 300) == 0) {
         char gb[160];
         std::snprintf(gb, sizeof(gb), "gate: cap=%d sub=%d found=%d list=%d rt=%d ufn=%d/%d",
