@@ -4393,7 +4393,7 @@ static void EventDiag(const AnomalyNteDamageEventV1& ev) {
 // 事件驱动武装（KB 11.10 的第 1、2 条）：这一击打中谁，就取谁的
 // LastDamageGEDef(0x2378) → +0x10 的 UClass 作为回放 GE，连同当前 HP 记进回放表。
 // 自喂（回放自己造成的伤害）由 ReplayArm 的「同一 victim + 同一 GE」短路挡掉。
-static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
+static void ArmFromDamageEventLegacy(const AnomalyNteDamageEventV1& ev) {
     if (ev.final_damage <= 0) return;
     EventDiag(ev);
     // 高倍速下回放自己每秒产生上百个伤害事件：victim 句柄与我们记录的一致就直接
@@ -4458,6 +4458,195 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
     }
     const std::uintptr_t ge = LastDamageGeClass(asc);
     if (ge < 0x10000 || !GeClassLooksValid(ge)) {   // 目标身上没有伤害 GE（普通 NPC 等）
+        ArmDiag("no-ge", victim, asc, ge, 0.0f);
+        ArmDbgPush(victim, 4);
+        PendArm(victim, asc, ev.victim.id);
+        return;
+    }
+    float hp = 0.0f;
+    if (!ReadAscHP(asc, &hp) || hp <= 0.0f) {
+        ArmDiag("no-hp", victim, asc, ge, hp);
+        ArmDbgPush(victim, 5);
+        return;
+    }
+    ArmDbgPush(victim, 100);
+    ReplayArm(asc, "-", ge, hp, ev.victim.id);
+}
+
+// ---- host-anchored participant resolution ------------------------------------------
+// 这版 Core 的对象句柄解出来的不是目标 actor（日志里 boss 的 victim 被解成座椅/单元格），
+// 但宿主 participant_path_utf8 给出的 actor 路径是可信的，末段就是类名。按类名在
+// GObjects 里找实例（对象 +0x10 的类对象的 FName id 等于类名 id），结果按类缓存。
+struct PathNameCache { std::uint64_t id; char name[64]; };
+static PathNameCache g_path_names[8] = {};
+struct PathActorCache { std::uint32_t name_id; std::uintptr_t actor; std::uintptr_t asc; };
+static PathActorCache g_path_actors[8] = {};
+
+static bool ClassNameIsPlayer(const char* name) {
+    return name != nullptr && (name[0] == 'p' || name[0] == 'P') &&
+        std::strstr(name, "layer") != nullptr;
+}
+
+static void CombatParticipantClassName(AnomalyGenerationHandleV1 h, char* out, std::size_t cap) {
+    if (out == nullptr || cap == 0) return;
+    out[0] = 0;
+    if (h.id == 0 || g_ctx == nullptr || g_ctx->nte_combat == nullptr) return;
+    for (int i = 0; i < 8; ++i) {
+        if (g_path_names[i].id == h.id) {
+            std::snprintf(out, cap, "%s", g_path_names[i].name);
+            return;
+        }
+    }
+    const auto* combat = static_cast<const AnomalyNteCombatServiceV1*>(g_ctx->nte_combat);
+    if (combat->participant_path_utf8 == nullptr) return;
+    char path[192] = {0};
+    std::size_t size = sizeof(path) - 1;
+    if (combat->participant_path_utf8(combat->user, h, path, &size).code != ANOMALY_STATUS_V1_OK)
+        return;
+    path[size < sizeof(path) ? size : sizeof(path) - 1] = 0;
+    const char* dot = std::strrchr(path, '.');
+    const char* name = dot != nullptr ? dot + 1 : std::strrchr(path, '/');
+    if (name == nullptr) name = path;
+    std::snprintf(out, cap, "%s", name);
+    for (int i = 0; i < 8; ++i) {
+        if (g_path_names[i].id == 0 || g_path_names[i].id == h.id) {
+            g_path_names[i].id = h.id;
+            std::snprintf(g_path_names[i].name, sizeof(g_path_names[i].name), "%s", name);
+            break;
+        }
+    }
+}
+
+static std::uintptr_t FindActorByClassId(std::uint32_t want, bool require_ge,
+                                         std::uintptr_t* asc_out) {
+    if (asc_out != nullptr) *asc_out = 0;
+    if (want == 0) return 0;
+    const std::uint32_t limit = static_cast<std::uint32_t>(g_ue.object_limit);
+    std::uintptr_t fallback = 0;
+    std::uintptr_t fallback_asc = 0;
+    for (std::uint32_t i = 0; i < limit; ++i) {
+        const std::uintptr_t obj = reinterpret_cast<std::uintptr_t>(g_ue.ObjectAt(i));
+        if (obj < 0x10000) continue;
+        std::uintptr_t cls = 0;
+        if (!ue::Reader::SafePtr(obj + 0x10, &cls) || cls < 0x10000) continue;
+        std::uint32_t nid = 0;
+        if (!ue::Reader::SafeU32(cls + 0x18, &nid) || nid != want) continue;
+        std::uintptr_t asc = 0;
+        if (!ue::Reader::SafePtr(obj + 0x940, &asc) || !AscLooksLikeAsc(asc)) continue;
+        float hp = 0.0f;
+        if (!ReadAscHP(asc, &hp) || hp <= 0.0f) continue;
+        if (fallback == 0) { fallback = obj; fallback_asc = asc; }
+        if (!require_ge) { if (asc_out) *asc_out = asc; return obj; }
+        const std::uintptr_t ge = LastDamageGeClass(asc);
+        if (ge >= 0x10000 && GeClassLooksValid(ge)) {
+            if (asc_out) *asc_out = asc;
+            return obj;
+        }
+    }
+    if (fallback != 0 && asc_out != nullptr) *asc_out = fallback_asc;
+    return fallback;
+}
+
+static std::uintptr_t ResolveParticipantByPath(AnomalyGenerationHandleV1 h, bool require_ge,
+                                               std::uintptr_t* asc_out) {
+    if (asc_out != nullptr) *asc_out = 0;
+    char name[64] = {0};
+    CombatParticipantClassName(h, name, sizeof(name));
+    if (name[0] == 0) return 0;
+    std::uint32_t nid = 0;
+    if (!g_ue.NameId(name, &nid) || nid == 0) return 0;
+    for (int i = 0; i < 8; ++i) {
+        if (g_path_actors[i].name_id != nid || g_path_actors[i].actor < 0x10000) continue;
+        std::uintptr_t cls = 0;
+        if (!ue::Reader::SafePtr(g_path_actors[i].actor + 0x10, &cls) || cls < 0x10000) break;
+        std::uint32_t cid = 0;
+        if (!ue::Reader::SafeU32(cls + 0x18, &cid) || cid != nid) break;
+        float hp = 0.0f;
+        if (!ReadAscHP(g_path_actors[i].asc, &hp) || hp <= 0.0f) break;
+        if (require_ge) {
+            const std::uintptr_t ge = LastDamageGeClass(g_path_actors[i].asc);
+            if (ge < 0x10000 || !GeClassLooksValid(ge)) break;
+        }
+        if (asc_out) *asc_out = g_path_actors[i].asc;
+        return g_path_actors[i].actor;
+    }
+    std::uintptr_t asc = 0;
+    const std::uintptr_t actor = FindActorByClassId(nid, require_ge, &asc);
+    if (actor >= 0x10000) {
+        int slot = 0;
+        for (int i = 0; i < 8; ++i) {
+            if (g_path_actors[i].name_id == nid) { slot = i; break; }
+        }
+        g_path_actors[slot].name_id = nid;
+        g_path_actors[slot].actor = actor;
+        g_path_actors[slot].asc = asc;
+    }
+    if (asc_out) *asc_out = asc;
+    return actor;
+}
+
+// 事件驱动武装：受害者/施法者都以宿主给出的 participant path 为准，句柄解码只当快速路径。
+static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
+    if (ev.final_damage <= 0) return;
+    EventDiag(ev);
+    for (int i = 0; i < g_rt_n; ++i) {
+        if (g_rt[i].victim_id != 0 && g_rt[i].victim_id == ev.victim.id) {
+            g_rt[i].last_hit_ms = NowMs();
+            return;
+        }
+    }
+
+    char vname[64] = {0};
+    char aname[64] = {0};
+    CombatParticipantClassName(ev.victim, vname, sizeof(vname));
+    CombatParticipantClassName(ev.attacker, aname, sizeof(aname));
+    const bool victim_is_player = ClassNameIsPlayer(vname);
+
+    // 施法 ASC：path 是 player_* 的那个参与者就是本地玩家。
+    if (victim_is_player || ClassNameIsPlayer(aname)) {
+        const AnomalyGenerationHandleV1 ph = victim_is_player ? ev.victim : ev.attacker;
+        std::uintptr_t pasc = 0;
+        if (ResolveParticipantByPath(ph, false, &pasc) >= 0x10000 && pasc >= 0x10000 &&
+            pasc != g_player_asc) {
+            g_player_asc = pasc;
+            PushLog("player: caster resolved from combat path");
+        }
+    }
+    if (victim_is_player) return;   // 玩家挨打：不把玩家当回放目标
+
+    // 目标：句柄解出来的对象只有 ASC+GE 都成立才可信，否则按 path 反查。
+    std::uintptr_t victim = ActorFromDamageHandle(ev.victim);
+    std::uintptr_t asc = 0;
+    if (victim >= 0x10000) {
+        if (!ue::Reader::SafePtr(victim + 0x940, &asc) || !AscLooksLikeAsc(asc))
+            asc = FindAscInActor(victim);
+    }
+    std::uintptr_t ge = asc >= 0x10000 ? LastDamageGeClass(asc) : 0;
+    if (!(asc >= 0x10000 && ge >= 0x10000 && GeClassLooksValid(ge))) {
+        std::uintptr_t pasc = 0;
+        const std::uintptr_t pv = ResolveParticipantByPath(ev.victim, true, &pasc);
+        if (pv >= 0x10000 && pasc >= 0x10000) {
+            victim = pv;
+            asc = pasc;
+            ge = LastDamageGeClass(asc);
+        }
+    }
+    if (victim < 0x10000) {
+        ArmDiag("no-victim", 0, 0, 0, 0.0f);
+        ArmDbgPush(0, 1);
+        return;
+    }
+    if (asc < 0x10000) {
+        ArmDiag("no-asc", victim, asc, ge, 0.0f);
+        ArmDbgPush(victim, 2);
+        return;
+    }
+    if (asc == g_player_asc) {
+        ArmDiag("caster-target", victim, asc, ge, 0.0f);
+        ArmDbgPush(victim, 3);
+        return;
+    }
+    if (ge < 0x10000 || !GeClassLooksValid(ge)) {
         ArmDiag("no-ge", victim, asc, ge, 0.0f);
         ArmDbgPush(victim, 4);
         PendArm(victim, asc, ev.victim.id);
