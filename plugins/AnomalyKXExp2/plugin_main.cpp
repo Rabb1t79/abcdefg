@@ -69,8 +69,8 @@ constexpr const char* kChronosSchema =
     R"("infinitePauseToggleHotkeyModifiers":{"type":"integer"}}})";
 constexpr const char* kDamageSchema =
     R"({"type":"object","additionalProperties":false,"required":["replayCount"],)"
-    R"("properties":{"replayCount":{"type":"integer","minimum":0,"maximum":1024},)"
-    R"("chainReaction":{"type":"boolean"}}})";
+    R"("properties":{"replayCount":{"type":"integer","minimum":1,"maximum":1024},)"
+    R"("chainReaction":{"type":"boolean"},"enabled":{"type":"boolean"}}})";
 constexpr const char* kVolleyballSchema =
     R"({"type":"object","additionalProperties":false,"properties":)"
     R"({"hotkey":{"type":"string"},"anomaly-ultimate-tabs":{"type":"string"}}})";
@@ -103,6 +103,10 @@ Ctx* g_ctx = nullptr;
 const void* LazyService(const void** slot, const char* id, uint32_t min_version);
 void TryQueryIsGM();
 static void PushLog(const char* text);
+static std::uint64_t NowMs();
+void RegisterDamageConfigSchema();
+void LoadDamageConfig();
+void TickConfigSave();
 void DrawCaptureUi(const AnomalyUiServiceV1* ui);
 void ReleaseCaptureSubscription();
 void ReleaseExecThunk();
@@ -269,6 +273,9 @@ AnomalyStatusV1 ANOMALY_CALL on_load(const AnomalyHostApiV1* host, void** out) {
     if (!ctx->config) { delete ctx; g_ctx = nullptr;
         return fail(ANOMALY_STATUS_V1_UNAVAILABLE, "config service is unavailable"); }
 
+    RegisterDamageConfigSchema();
+    LoadDamageConfig();
+
     void* unused = nullptr;
     ChronosLoad(host, &unused);
     DamageLoad(host, &unused);
@@ -301,6 +308,7 @@ void ANOMALY_CALL on_update(void*, double) {
     TickReverseScan();
     TickWorldScan();
     TickRepeat();
+    TickConfigSave();
     if ((++n % 30) == 0) TickFeatures();
 }
 // 缂備焦鍔栭〃鍛般亹濞戞瑧鈻旈幖娣灩娴犳ê霉閻樻彃顣冲┑顔芥倐楠炩偓濞撴艾锕︾粈鍕煕濞嗘ê鐏￠悗鍨⒐缁嬪﹪宕ㄩ鐑嗗殭闂?anomaly.config闂?
@@ -319,20 +327,140 @@ bool g_ui_dirty = false;
 constexpr const char* kWindowTitle = "AnomalyUltimate##";
 constexpr const char* kDamageSchemaId = "anomaly.ultimate.damage-replay.settings";
 
+// 勾选状态/次数持久化：借 anomaly.config 的 schema 文档（宿主持久化）。
+static AnomalyGenerationHandleV1 g_damage_schema{};
+static int g_damage_schema_ok = 0;
+static int g_cfg_seen_damage = -1;
+static int g_cfg_seen_chain = -1;
+static int g_cfg_seen_replay = -1;
+static std::uint64_t g_cfg_save_due_ms = 0;
+
+static const AnomalyConfigServiceV1* DamageConfigService() {
+    if (g_ctx == nullptr || g_ctx->config == nullptr) return nullptr;
+    return static_cast<const AnomalyConfigServiceV1*>(g_ctx->config);
+}
+
+static bool ConfigFieldAvailable(const AnomalyConfigServiceV1* cfg, std::size_t end) {
+    return cfg != nullptr && static_cast<std::size_t>(cfg->struct_size) >= end;
+}
+
+static int JsonIntField(const char* doc, const char* key, int fallback) {
+    const char* p = std::strstr(doc, key);
+    if (p == nullptr) return fallback;
+    p += std::strlen(key);
+    while (*p == ' ' || *p == '\t' || *p == ':') ++p;
+    bool negative = false;
+    if (*p == '-') { negative = true; ++p; }
+    if (*p < '0' || *p > '9') return fallback;
+    int value = 0;
+    while (*p >= '0' && *p <= '9') {
+        if (value < 100000) value = value * 10 + (*p - '0');
+        ++p;
+    }
+    return negative ? -value : value;
+}
+
+static bool JsonBoolField(const char* doc, const char* key, bool fallback) {
+    const char* p = std::strstr(doc, key);
+    if (p == nullptr) return fallback;
+    p += std::strlen(key);
+    while (*p == ' ' || *p == '\t' || *p == ':') ++p;
+    if (std::strncmp(p, "true", 4) == 0) return true;
+    if (std::strncmp(p, "false", 5) == 0) return false;
+    return fallback;
+}
+
+void RegisterDamageConfigSchema() {
+    const auto* cfg = DamageConfigService();
+    if (cfg == nullptr) return;
+    if (!ConfigFieldAvailable(
+            cfg, offsetof(AnomalyConfigServiceV1, register_schema) +
+                     sizeof(cfg->register_schema)) ||
+        cfg->register_schema == nullptr) {
+        PushLog("cfg: schema registration unavailable");
+        return;
+    }
+    AnomalyStringViewV1 id{kDamageSchemaId, std::strlen(kDamageSchemaId)};
+    AnomalyByteSpanV1 schema{reinterpret_cast<const std::uint8_t*>(kDamageSchema),
+                             std::strlen(kDamageSchema)};
+    g_damage_schema_ok =
+        cfg->register_schema(cfg->user, id, 1, schema, &g_damage_schema).code ==
+        ANOMALY_STATUS_V1_OK;
+    PushLog(g_damage_schema_ok ? "cfg: schema registered" : "cfg: schema registration failed");
+}
+
+void LoadDamageConfig() {
+    if (!g_damage_schema_ok) return;
+    const auto* cfg = DamageConfigService();
+    if (cfg == nullptr ||
+        !ConfigFieldAvailable(
+            cfg, offsetof(AnomalyConfigServiceV1, read) + sizeof(cfg->read)) ||
+        cfg->read == nullptr) {
+        return;
+    }
+    char buffer[256];
+    std::size_t size = sizeof(buffer) - 1;
+    std::uint32_t version = 0;
+    AnomalyMutableByteSpanV1 destination{reinterpret_cast<std::uint8_t*>(buffer),
+                                         sizeof(buffer) - 1};
+    AnomalyStringViewV1 id{kDamageSchemaId, std::strlen(kDamageSchemaId)};
+    if (cfg->read(cfg->user, id, &version, destination, &size).code != ANOMALY_STATUS_V1_OK ||
+        size >= sizeof(buffer)) {
+        return;
+    }
+    buffer[size] = 0;
+    const int replay =
+        JsonIntField(buffer, "\"replayCount\"", static_cast<int>(g_ui_state.replay));
+    if (replay >= 1 && replay <= 1024) g_ui_state.replay = static_cast<float>(replay);
+    g_ui_state.chain = JsonBoolField(buffer, "\"chainReaction\"", g_ui_state.chain != 0) ? 1 : 0;
+    g_ui_state.damage = JsonBoolField(buffer, "\"enabled\"", g_ui_state.damage != 0) ? 1 : 0;
+    char b[96];
+    std::snprintf(b, sizeof(b), "cfg: loaded enabled=%d chain=%d replay=%d",
+                  g_ui_state.damage, g_ui_state.chain, static_cast<int>(g_ui_state.replay));
+    PushLog(b);
+}
+
 void SaveDamageConfig() {
-    if (!g_ctx || !g_ctx->config) return;
-    const auto* cfg = static_cast<const AnomalyConfigServiceV1*>(g_ctx->config);
-    if (!cfg->write_atomic) return;
+    const auto* cfg = DamageConfigService();
+    if (!g_damage_schema_ok || cfg == nullptr ||
+        !ConfigFieldAvailable(
+            cfg, offsetof(AnomalyConfigServiceV1, write_atomic) + sizeof(cfg->write_atomic)) ||
+        cfg->write_atomic == nullptr) {
+        return;
+    }
     char doc[192];
-    int n = snprintf(doc, sizeof(doc), "{\"replayCount\":%d,\"chainReaction\":%s}",
-                     static_cast<int>(g_ui_state.replay),
-                     g_ui_state.chain ? "true" : "false");
+    const int n = std::snprintf(
+        doc, sizeof(doc), "{\"replayCount\":%d,\"chainReaction\":%s,\"enabled\":%s}",
+        static_cast<int>(g_ui_state.replay),
+        g_ui_state.chain ? "true" : "false",
+        g_ui_state.damage ? "true" : "false");
     if (n <= 0) return;
     AnomalyStringViewV1 id{kDamageSchemaId, std::strlen(kDamageSchemaId)};
     AnomalyByteSpanV1 span{reinterpret_cast<const std::uint8_t*>(doc),
                            static_cast<std::size_t>(n)};
-    cfg->write_atomic(cfg->user, id, 1, span);
+    const AnomalyStatusV1 status = cfg->write_atomic(cfg->user, id, 1, span);
+    static int logged_failure = 0;
+    if (status.code != ANOMALY_STATUS_V1_OK) {
+        if (logged_failure == 0) {
+            logged_failure = 1;
+            char b[96];
+            std::snprintf(b, sizeof(b), "cfg: save failed rc=%u",
+                          static_cast<unsigned>(status.code));
+            PushLog(b);
+        }
+        return;
+    }
     g_ui_dirty = false;
+}
+
+// 勾选/次数变化后 400ms 落盘（on_draw 只置时间戳，真正的写盘放在 on_update）。
+void TickConfigSave() {
+    if (g_cfg_save_due_ms == 0 || NowMs() < g_cfg_save_due_ms) return;
+    g_cfg_save_due_ms = 0;
+    SaveDamageConfig();
+    g_cfg_seen_damage = g_ui_state.damage;
+    g_cfg_seen_chain = g_ui_state.chain;
+    g_cfg_seen_replay = static_cast<int>(g_ui_state.replay);
 }
 
 
@@ -5349,6 +5477,19 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     }
     if (ctx == nullptr || ui == nullptr || ui->begin_window == nullptr) return;
     ++g_draw_count;
+    {
+        const int cfg_damage = g_ui_state.damage;
+        const int cfg_chain = g_ui_state.chain;
+        const int cfg_replay = static_cast<int>(g_ui_state.replay);
+        if (g_cfg_seen_damage < 0) {
+            g_cfg_seen_damage = cfg_damage;
+            g_cfg_seen_chain = cfg_chain;
+            g_cfg_seen_replay = cfg_replay;
+        } else if (cfg_damage != g_cfg_seen_damage || cfg_chain != g_cfg_seen_chain ||
+                   cfg_replay != g_cfg_seen_replay) {
+            g_cfg_save_due_ms = NowMs() + 400;
+        }
+    }
     if (g_apply_hook_enabled) InstallApplyHook();
     else ReleaseHooks();
     // Gate 闂?Apply 闂佸憡鍔曢幊姗€宕曠€靛憡瀚柛鎰典簼閺嗗繘鏌?x7682F55闂佹寧绋戦¨鈧紒杈ㄧ箖缁嬪寮捄銊︽緰濠电偞娼欓鍡樼閼恒儳鈻?true闂佹寧绋戦張顒€螞閵堝鍋戞い鎺戝€昏ぐ灞角庨崶锝呭⒉濞寸厧鎳橀弻宀冪疀閵壯冭€挎繛?Apply 闂佸憡鑹鹃悧鍡涙嚐閻斿摜鈻旈柛婵嗗缁€瀣槈閹绢垰浜鹃梺鍦焾閸婂潡骞?
