@@ -139,6 +139,8 @@ static void ObjectNameUtf8(std::uintptr_t object, char* out, std::size_t cap);
 std::uintptr_t PlayerAscForApply();
 void MonTrackTick();
 void StopHeartbeat();
+static bool AscLooksLikeAsc(std::uintptr_t asc);
+static std::uintptr_t FindAscInActor(std::uintptr_t act);
 static std::uintptr_t g_gec_ufn = 0;
 static std::uintptr_t g_gea_ufn = 0;
 static int g_ge_apply_rc = 0;
@@ -305,7 +307,7 @@ struct UiState {
     int chain = 0;
     int volley = 0;
     int gm = 0;
-    float replay = 32.0f;
+    float replay = 8.0f;   // 每秒回放次数（间隔 = 1000/replay）；8 是 11.10 实测跑通的速率
 };
 UiState g_ui_state;
 int GmToggleOn() { return g_ui_state.gm; }
@@ -4088,6 +4090,39 @@ static void PeRingPush(std::uintptr_t function, std::uintptr_t object) {
     ++g_pe_ring_seq;
 }
 
+// 伤害事件里的 victim 是宿主编码过的 UE 对象句柄：低 32 位 = GObjects 下标 + 1，
+// 高 32 位 = serial（见 adapter EncodeObjectHandle）。这里只还原 actor 指针，
+// 序列号由后续「类指针/HP」校验兜底；解不出就跳过这一发，不猜。
+static std::uintptr_t ActorFromDamageHandle(AnomalyGenerationHandleV1 handle) {
+    if (handle.id == 0) return 0;
+    const std::uint32_t raw = static_cast<std::uint32_t>(handle.id & 0xFFFFFFFFull);
+    if (raw == 0) return 0;
+    const std::uintptr_t actor =
+        reinterpret_cast<std::uintptr_t>(g_ue.ObjectAt(raw - 1u));
+    return actor >= 0x10000 ? actor : 0;
+}
+
+// 事件驱动武装（KB 11.10 的第 1、2 条）：这一击打中谁，就取谁的
+// LastDamageGEDef(0x2378) → +0x10 的 UClass 作为回放 GE，连同当前 HP 记进回放表。
+// 自喂（回放自己造成的伤害）由 ReplayArm 的「同一 victim + 同一 GE」短路挡掉。
+static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
+    if (ev.final_damage <= 0) return;
+    const std::uintptr_t victim = ActorFromDamageHandle(ev.victim);
+    if (victim < 0x10000) return;
+    if (victim == g_player_pawn || victim == g_player_pawn_ref) return;
+    std::uintptr_t asc = 0;
+    if (!ue::Reader::SafePtr(victim + 0x940, &asc) || !AscLooksLikeAsc(asc))
+        asc = FindAscInActor(victim);
+    if (asc < 0x10000) return;
+    const std::uintptr_t ge = LastDamageGeClass(asc);
+    if (ge < 0x10000) return;
+    float hp = 0.0f;
+    if (!ReadAscHP(asc, &hp) || hp <= 0.0f) return;
+    char name[48] = {0};
+    ObjectClassName(victim, name, sizeof(name));
+    ReplayArm(asc, name, ge, hp);
+}
+
 struct PeNameCount { char name[64]; char obj[48]; int count; };
 
 static void CensusTick() {
@@ -4119,6 +4154,8 @@ static void CensusTick() {
     ev.struct_size = sizeof(ev);
     if (combat->next_damage_event(combat->user, g_dmg_seq, &ev).code != ANOMALY_STATUS_V1_OK) return;
     g_dmg_seq = ev.sequence;
+    // 每一发真实伤害都尝试武装；下面的普查只打印前两发，不能挡住武装。
+    ArmFromDamageEvent(ev);
     if (g_census_hits >= 2) { g_census_reported = 2; return; }
     ++g_census_hits;
     char b[256];
@@ -5051,12 +5088,17 @@ void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, fl
     }
     ReplayTarget& t = g_rt[idx];
     const bool changed = (t.ge_class != ge_class);
+    t.last_hit_ms = NowMs();
+    if (!changed) {
+        // 同一 victim + 同一 GE：这一发很可能就是回放自己打出去的（KB 11.10 的自喂抑制）。
+        // 只续命，不能刷新 t.hp，否则 ReplayTick 的 async 归因会永远等于 0。
+        return;
+    }
     t.ge_class = ge_class;
     t.hp = hp;
-    t.last_hit_ms = NowMs();
     t.blocked = 0;
     if (t.paused != 0) { t.paused = 0; PushLog("replay: resumed"); }
-    if (changed || idx + 1 == g_rt_n) {
+    {
         char b[192];
         std::snprintf(b, sizeof(b), "replay: track %s asc=0x%llX hp=%.1f ge=0x%llX n=%d",
                       t.name, (unsigned long long)asc, hp,
@@ -5116,6 +5158,18 @@ void ReplayTick() {
     if (g_gec_ufn == 0 || g_gea_ufn == 0) ResolveGeHelpersUiThread();
     if (g_rt_n == 0) return;
     if (g_gec_ufn == 0 || g_gea_ufn == 0) return;
+    static std::uint64_t last_report = 0;
+    if (now - last_report >= 5000) {
+        last_report = now;
+        for (int i = 0; i < g_rt_n; ++i) {
+            char b[192];
+            std::snprintf(b, sizeof(b),
+                          "replay: [%d] %s hp=%.1f shots=%d landed=%d dmg=%d fail=%d",
+                          i, g_rt[i].name, g_rt[i].hp, g_rep_shots,
+                          g_rt[i].landed, g_rep_dmg, g_rep_fail);
+            PushLog(b);
+        }
+    }
     g_ge_req = 1;
 }
 
@@ -5194,6 +5248,7 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     CensusTick();
     AutoTargetTick();
     TickMonsterScan();
+    MonTrackTick();      // 兜底：伤害事件没解码出 victim 时，按候选怪 HP 下降补一次
     ReplayTick();
     if (g_ui_state.damage != 0 && (g_draw_count % 300) == 0) {
         char gb[160];
