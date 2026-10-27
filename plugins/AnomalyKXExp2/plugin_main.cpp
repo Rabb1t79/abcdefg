@@ -126,7 +126,8 @@ static unsigned long long g_ecs_calls = 0;
 void RequestGeScan();
 void ReplayTick();
 void ReplayApplyStep();
-void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, float hp);
+void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, float hp,
+               std::uint64_t victim_id = 0);
 void AutoTargetTick();
 void MonTrackTick();
 static constexpr int kMonList = 16;
@@ -144,6 +145,7 @@ static std::uintptr_t FindAscInActor(std::uintptr_t act);
 static std::uintptr_t g_gec_ufn = 0;
 static std::uintptr_t g_gea_ufn = 0;
 static int g_ge_apply_rc = 0;
+static int g_ge_shots = 0;         // shots owed for this turn (shot clock, max 4 per frame)
 static int g_ge_req = 0;           // 1 = 绛変笅涓€鍙戝湪 Game 绾跨▼鎵ц锛坥n_draw 涓嶆槸 Game 绾跨▼锛?
 static int g_ge_player_n = 0;
 static int g_ge_sel2 = 0;
@@ -158,6 +160,7 @@ static char g_ge_token[32] = {};
 static char g_ge_player_name[24][64] = {};
 struct ReplayTarget {
     std::uintptr_t asc;
+    std::uint64_t victim_id;   // 最近一次真实命中它的 victim 句柄（O(1) 自喂判定）
     char name[48];
     std::uintptr_t ge_class;
     float hp;
@@ -170,7 +173,7 @@ struct ReplayTarget {
 static constexpr int kMaxReplayTargets = 8;
 static ReplayTarget g_rt[kMaxReplayTargets] = {};
 static int g_rt_n = 0;
-static std::uint32_t g_rt_due_ms = 0;
+static std::uint64_t g_shot_clock_ms = 0;   // 上次拍发时刻（steady_clock 毫秒）
 static int g_ge_probe = 0;             // 1 = 閫愪釜璇?GE锛堟壘鑳界湡鐨勬帀琛€鐨勯偅涓級
 static int g_ge_probe_idx = 0;
 static int g_ge_probe_prev = -1;       // 涓婁竴鍙戠敤鐨?GE 涓嬫爣锛堝紓姝ュ埌璐﹁璁板埌瀹冨ご涓婏級
@@ -307,7 +310,7 @@ struct UiState {
     int chain = 0;
     int volley = 0;
     int gm = 0;
-    float replay = 8.0f;   // 每秒回放次数（间隔 = 1000/replay）；8 是 11.10 实测跑通的速率
+    float replay = 100.0f; // 每秒回放次数（间隔 = 1000/replay）；100 = 10ms 一发，每帧最多补 4 发
 };
 UiState g_ui_state;
 int GmToggleOn() { return g_ui_state.gm; }
@@ -4107,6 +4110,14 @@ static std::uintptr_t ActorFromDamageHandle(AnomalyGenerationHandleV1 handle) {
 // 自喂（回放自己造成的伤害）由 ReplayArm 的「同一 victim + 同一 GE」短路挡掉。
 static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
     if (ev.final_damage <= 0) return;
+    // 高倍速下回放自己每秒产生上百个伤害事件：victim 句柄与我们记录的一致就直接
+    // 认作自喂，不解析对象/名字（O(1)），否则每秒上百次 DecodeName 会拖慢 UI 线程。
+    for (int i = 0; i < g_rt_n; ++i) {
+        if (g_rt[i].victim_id != 0 && g_rt[i].victim_id == ev.victim.id) {
+            g_rt[i].last_hit_ms = NowMs();
+            return;
+        }
+    }
     const std::uintptr_t victim = ActorFromDamageHandle(ev.victim);
     if (victim < 0x10000) return;
     if (victim == g_player_pawn || victim == g_player_pawn_ref) return;
@@ -4120,10 +4131,42 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
     if (!ReadAscHP(asc, &hp) || hp <= 0.0f) return;
     char name[48] = {0};
     ObjectClassName(victim, name, sizeof(name));
-    ReplayArm(asc, name, ge, hp);
+    ReplayArm(asc, name, ge, hp, ev.victim.id);
 }
 
 struct PeNameCount { char name[64]; char obj[48]; int count; };
+
+// 高倍速下（例如 100 发/秒）每帧要清掉积压的伤害事件，否则宿主 512 条的环会溢出、
+// next_damage_event 直接返回 NOT_FOUND，武装就永久停摆。expired 时用 latest 重新对齐。
+static void DrainDamageEvents(const AnomalyNteCombatServiceV1* combat, int limit) {
+    for (int n = 0; n < limit; ++n) {
+        AnomalyNteDamageEventV1 ev{};
+        ev.struct_size = sizeof(ev);
+        if (combat->next_damage_event(combat->user, g_dmg_seq, &ev).code ==
+            ANOMALY_STATUS_V1_OK) {
+            g_dmg_seq = ev.sequence;
+            ArmFromDamageEvent(ev);
+            continue;
+        }
+        if (combat->latest_damage_sequence != nullptr) {
+            const std::uint64_t latest = combat->latest_damage_sequence(combat->user);
+            if (latest > g_dmg_seq) {
+                static std::uint64_t last_log_ms = 0;
+                const std::uint64_t now = NowMs();
+                if (now - last_log_ms >= 1000) {
+                    last_log_ms = now;
+                    char b[112];
+                    std::snprintf(b, sizeof(b), "hit: resync cursor %llu -> %llu",
+                                  (unsigned long long)g_dmg_seq,
+                                  (unsigned long long)latest);
+                    PushLog(b);
+                }
+                g_dmg_seq = latest;
+            }
+        }
+        return;
+    }
+}
 
 static void CensusTick() {
     if (g_cap_on == 0) return;
@@ -4150,13 +4193,17 @@ static void CensusTick() {
         PushLog(b);
         return;
     }
+    if (g_census_hits >= 2) {
+        g_census_reported = 2;
+        DrainDamageEvents(combat, 16);   // 普查结束后只做武装，每帧最多清 16 条
+        return;
+    }
     AnomalyNteDamageEventV1 ev{};
     ev.struct_size = sizeof(ev);
     if (combat->next_damage_event(combat->user, g_dmg_seq, &ev).code != ANOMALY_STATUS_V1_OK) return;
     g_dmg_seq = ev.sequence;
     // 每一发真实伤害都尝试武装；下面的普查只打印前两发，不能挡住武装。
     ArmFromDamageEvent(ev);
-    if (g_census_hits >= 2) { g_census_reported = 2; return; }
     ++g_census_hits;
     char b[256];
     std::snprintf(b, sizeof(b), "hit[%d]: seq=%llu dmg=%lld basic=%lld final=%lld flags=0x%X",
@@ -5055,9 +5102,9 @@ static std::uintptr_t LastDamageGeClass(std::uintptr_t asc) {
 static int GeRateIntervalMs() {
     int rate = static_cast<int>(g_ui_state.replay);
     if (rate < 1) rate = 1;
-    if (rate > 100) rate = 100;
+    if (rate > 512) rate = 512;
     int ms = 1000 / rate;
-    if (ms < 16) ms = 16;
+    if (ms < 8) ms = 8;      // 上限 125 发/秒；超出的按帧补发，见 ReplayTick 的 shot clock
     return ms;
 }
 
@@ -5072,7 +5119,8 @@ void ReplayDropTarget(int index) {
     --g_rt_n;
 }
 
-void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, float hp) {
+void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, float hp,
+               std::uint64_t victim_id) {
     if (asc < 0x10000 || ge_class < 0x10000) return;
     int idx = -1;
     for (int i = 0; i < g_rt_n; ++i) {
@@ -5087,6 +5135,7 @@ void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, fl
         std::snprintf(g_rt[idx].name, sizeof(g_rt[idx].name), "%s", name ? name : "?");
     }
     ReplayTarget& t = g_rt[idx];
+    if (victim_id != 0) t.victim_id = victim_id;
     const bool changed = (t.ge_class != ge_class);
     t.last_hit_ms = NowMs();
     if (!changed) {
@@ -5113,12 +5162,18 @@ void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, fl
 void ReplayTick() {
     if (g_ui_state.damage == 0) {
         if (g_rt_n != 0) { g_rt_n = 0; PushLog("replay: cleared"); }
+        g_shot_clock_ms = 0;
+        g_ge_shots = 0;
         return;
     }
     const std::uint64_t now = NowMs();
-    if (now < g_rt_due_ms) return;
     const int interval = GeRateIntervalMs();
-    g_rt_due_ms = static_cast<std::uint32_t>(now + interval);
+    if (g_shot_clock_ms == 0) g_shot_clock_ms = now;
+    if (now < g_shot_clock_ms + static_cast<std::uint64_t>(interval)) return;
+    int shots = static_cast<int>((now - g_shot_clock_ms) / static_cast<std::uint64_t>(interval));
+    if (shots < 1) shots = 1;
+    if (shots > 4) shots = 4;   // 卡帧时最多补 4 发，避免一次追账把游戏顶死
+    g_shot_clock_ms += static_cast<std::uint64_t>(shots) * static_cast<std::uint64_t>(interval);
     for (int i = 0; i < g_rt_n; ) {
         ReplayTarget& t = g_rt[i];
         float hp = 0.0f;
@@ -5170,6 +5225,7 @@ void ReplayTick() {
             PushLog(b);
         }
     }
+    g_ge_shots = shots;
     g_ge_req = 1;
 }
 
@@ -5177,6 +5233,8 @@ void ReplayTick() {
 // target of this turn is hit on the same tick.
 void ReplayApplyStep() {
     g_ge_req = 0;
+    const int shots = g_ge_shots > 0 ? g_ge_shots : 1;
+    g_ge_shots = 0;
     if (g_ui_state.damage == 0 || g_rt_n == 0) return;
     if (g_gec_ufn == 0 || g_gea_ufn == 0) return;
     const std::uintptr_t src = PlayerAscForApply();
@@ -5191,19 +5249,21 @@ void ReplayApplyStep() {
     g_cap_suppress = 1;
     reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
                                reinterpret_cast<void*>(g_gec_ufn), ctx);
-    for (int i = 0; i < g_rt_n; ++i) {
-        ReplayTarget& t = g_rt[i];
-        if (t.asc < 0x10000 || t.ge_class < 0x10000) continue;
-        unsigned char params[0x38] = {0};
-        const float level = 1.0f;
-        std::memcpy(params + 0x00, &t.ge_class, 8);
-        std::memcpy(params + 0x08, &t.asc, 8);
-        std::memcpy(params + 0x10, &level, 4);
-        std::memcpy(params + 0x18, ctx, 0x18);
-        reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
-                                   reinterpret_cast<void*>(g_gea_ufn), params);
-        ++t.applied;
-        ++g_rep_shots;
+    for (int s = 0; s < shots; ++s) {
+        for (int i = 0; i < g_rt_n; ++i) {
+            ReplayTarget& t = g_rt[i];
+            if (t.asc < 0x10000 || t.ge_class < 0x10000) continue;
+            unsigned char params[0x38] = {0};
+            const float level = 1.0f;
+            std::memcpy(params + 0x00, &t.ge_class, 8);
+            std::memcpy(params + 0x08, &t.asc, 8);
+            std::memcpy(params + 0x10, &level, 4);
+            std::memcpy(params + 0x18, ctx, 0x18);
+            reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
+                                       reinterpret_cast<void*>(g_gea_ufn), params);
+            ++t.applied;
+            ++g_rep_shots;
+        }
     }
     g_cap_suppress = 0;
 }
