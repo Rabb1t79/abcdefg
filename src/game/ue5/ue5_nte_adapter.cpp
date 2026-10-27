@@ -861,6 +861,13 @@ struct Ue5NteAdapter::State {
         std::uint8_t modifier_count{};
         std::uint8_t modifier_is_class{};
         char execution_name[48]{};
+        // Observed ABI of the two context entry points, recorded whether or not they pass
+        // validation, plus the class of the context object the engine handed back.
+        std::uint8_t ctx_parms_seen{};
+        std::uint16_t ctx_size_seen{};
+        std::uint8_t out_parms_seen{};
+        std::uint16_t out_size_seen{};
+        char context_class_name[48]{};
         std::array<std::uint8_t, 8> set_by_caller_tag{};
         bool attempted{};
         bool valid{};
@@ -9653,8 +9660,15 @@ struct Ue5NteAdapter::State {
                 ReadValue(*memory, make_outgoing + Layout(profile, "ufunction.numParms"),
                     out_parms) &&
                 ReadValue(*memory, make_outgoing + Layout(profile, "ufunction.parmsSize"),
-                    out_size) &&
-                ctx_parms == 0 && ctx_size == 0x10 && out_parms == 3 && out_size == 0x38) {
+                    out_size)) {
+                // Record what the running build actually publishes; the failure text reports
+                // these so a mismatch is diagnosable without guessing from the Dump.
+                spec_apply.ctx_parms_seen = ctx_parms;
+                spec_apply.ctx_size_seen = ctx_size;
+                spec_apply.out_parms_seen = out_parms;
+                spec_apply.out_size_seen = out_size;
+            }
+            if (ctx_size == 0x18 && out_parms == 4 && out_size == 0x38) {
                 spec_apply.make_context_function = make_context;
                 spec_apply.make_outgoing_function = make_outgoing;
             }
@@ -9704,7 +9718,10 @@ struct Ue5NteAdapter::State {
             // whenever both entry points resolved.
             if (spec_apply.make_context_function != 0 &&
                 spec_apply.make_outgoing_function != 0) {
-                std::array<std::uint8_t, 0x10> context{};
+                // FGameplayEffectContextHandle is 0x18 in this build (Dump: alignas(0x08),
+                // opaque Pad_0[0x18]). Passing a shorter buffer made ProcessEvent read past
+                // it, so the size comes from the Dump rather than the stock 0x10 assumption.
+                std::array<std::uint8_t, 0x18> context{};
                 if (InvokeNativeProcessEventLocked(source_ability_system,
                         spec_apply.make_context_function, context.data(),
                         context.size())) {
@@ -9719,6 +9736,20 @@ struct Ue5NteAdapter::State {
                     const auto weak_serial = Layout(profile, "weakObject.serial", -1);
                     std::uintptr_t context_object{};
                     std::memcpy(&context_object, context.data(), sizeof(context_object));
+                    if (context_object != 0) {
+                        // Which context class the engine allocated decides whether the HT-only
+                        // Target field at 0x80 exists (HT derived is 0xB0, the base is 0x80).
+                        std::uintptr_t context_class{};
+                        std::string context_class_name;
+                        if (ReadPointerAt(*memory, context_object,
+                                Layout(profile, "object.class"), context_class) &&
+                            context_class != 0 &&
+                            ReadReflectedObjectNameLocked(context_class, context_class_name)) {
+                            std::snprintf(spec_apply.context_class_name,
+                                sizeof(spec_apply.context_class_name), "%s",
+                                context_class_name.c_str());
+                        }
+                    }
                     if (context_object != 0 &&
                         ReadableRange(*memory, context_object,
                             static_cast<std::size_t>(instigator_offset < 0 ? 0 : instigator_offset) +
@@ -10631,16 +10662,22 @@ struct Ue5NteAdapter::State {
             if (instant_last_hp.size() >= 256U && !has_previous) instant_last_hp.clear();
             instant_last_hp[victim] = hp_after;
             if (!dead_after && has_previous && hp_before >= previous_hp - 0.001F) {
-                static char spec_failure[192]{};
+                static char spec_failure[320]{};
                 std::snprintf(spec_failure, sizeof(spec_failure),
-                    "no HP change (t=%u mod=%d cdo=%u n=%u a=%d out=%u ex=%s)",
+                    "no HP change (t=%u mod=%d cdo=%u n=%u a=%d out=%u ex=%s "
+                    "ctx=%u/%u oabi=%u/%u coc=%s)",
                     static_cast<unsigned>(spec_apply.calculation_type),
                     static_cast<int>(Layout(profile, "gameplayEffect.modifiers", -9)),
                     static_cast<unsigned>(spec_apply.modifier_is_class),
                     static_cast<unsigned>(spec_apply.modifier_count),
                     static_cast<unsigned>(spec_apply.assign_function != 0 ? 1 : 0),
                     static_cast<unsigned>(spec_apply.spec_via_outgoing),
-                    spec_apply.execution_name);
+                    spec_apply.execution_name,
+                    static_cast<unsigned>(spec_apply.ctx_parms_seen),
+                    static_cast<unsigned>(spec_apply.ctx_size_seen),
+                    static_cast<unsigned>(spec_apply.out_parms_seen),
+                    static_cast<unsigned>(spec_apply.out_size_seen),
+                    spec_apply.context_class_name);
                 return Status(ANOMALY_STATUS_V1_FAILED, spec_failure);
             }
         }
