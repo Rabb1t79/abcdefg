@@ -4299,6 +4299,22 @@ static std::uintptr_t ActorFromDamageHandle(AnomalyGenerationHandleV1 handle) {
 // hp=读到的当前 HP。只在真的没武装时打一行，不会刷屏。
 static void PendArm(std::uintptr_t victim, std::uintptr_t asc, std::uint64_t victim_id);
 static int g_arm_diag = 0;
+
+// 记录武装失败/成功的 victim 指针，等 on_draw（render 线程）再解析类名——
+// Game 线程不能调 DecodeName。
+struct ArmDbgRec { std::uintptr_t victim; std::uintptr_t cls; int code; };
+static ArmDbgRec g_arm_dbg[12] = {};
+static int g_arm_dbg_n = 0;
+
+static void ArmDbgPush(std::uintptr_t victim, int code) {
+    if (g_arm_dbg_n >= 12) return;
+    std::uintptr_t cls = 0;
+    if (victim >= 0x10000) ue::Reader::SafePtr(victim + 0x10, &cls);
+    ArmDbgRec& r = g_arm_dbg[g_arm_dbg_n++];
+    r.victim = victim;
+    r.cls = cls;
+    r.code = code;
+}
 static void ArmDiag(const char* why, std::uintptr_t victim, std::uintptr_t asc,
                     std::uintptr_t ge, float hp) {
     if (g_arm_diag >= 10) return;
@@ -4362,9 +4378,10 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
         }
     }
     const std::uintptr_t victim = ActorFromDamageHandle(ev.victim);
-    if (victim < 0x10000) { ArmDiag("no-victim", 0, 0, 0, 0.0f); return; }
+    if (victim < 0x10000) { ArmDiag("no-victim", 0, 0, 0, 0.0f); ArmDbgPush(0, 1); return; }
     if (victim == local || victim == g_player_pawn || victim == g_player_pawn_ref) {
         ArmDiag("self", victim, 0, 0, 0.0f);
+        ArmDbgPush(victim, 0);
         return;
     }
     std::uintptr_t asc = 0;
@@ -4372,23 +4389,28 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
         asc = FindAscInActor(victim);
     if (asc < 0x10000) {                     // 建筑 / 载具 / 没有 ASC 的普通 NPC
         ArmDiag("no-asc", victim, asc, 0, 0.0f);
+        ArmDbgPush(victim, 2);
         return;
     }
     if (asc == g_player_asc) {               // 不把玩家自己当回放目标
         ArmDiag("caster-target", victim, asc, 0, 0.0f);
+        ArmDbgPush(victim, 3);
         return;
     }
     const std::uintptr_t ge = LastDamageGeClass(asc);
     if (ge < 0x10000 || !GeClassLooksValid(ge)) {   // 目标身上没有伤害 GE（普通 NPC 等）
         ArmDiag("no-ge", victim, asc, ge, 0.0f);
+        ArmDbgPush(victim, 4);
         PendArm(victim, asc, ev.victim.id);
         return;
     }
     float hp = 0.0f;
     if (!ReadAscHP(asc, &hp) || hp <= 0.0f) {
         ArmDiag("no-hp", victim, asc, ge, hp);
+        ArmDbgPush(victim, 5);
         return;
     }
+    ArmDbgPush(victim, 100);
     ReplayArm(asc, "-", ge, hp, ev.victim.id);
 }
 
@@ -4678,12 +4700,20 @@ static bool AscStillValid(std::uintptr_t asc) {
 // 绫绘寚閽堢獥鍙ｆ壂鎻忥細鎬墿鐨?ASC 瀛楁涓嶄竴瀹氬湪 +0x940锛堥偅鏄?AHTAbilityCharacter 鐨勫竷灞€锛夈€?
 static std::uintptr_t FindAscInActor(std::uintptr_t act) {
     if (act < 0x10000 || g_cls_asc < 0x10000) return 0;
-    for (std::uintptr_t off = 0x400; off <= 0xC00; off += 8) {
+    // 不同怪物蓝图把 ASC 放在不同偏移（AHTAbilityCharacter 是 0x940，其他子类可能在
+    // 0x300~0x1400 之间），而且类可能是 HTAbilitySystemComponent 的子类。先按类指针
+    // 精确匹配，再用 HP/MaxHP 布局兜底；后续还有 GE 继承链校验兜底防误判。
+    for (std::uintptr_t off = 0x300; off <= 0x1400; off += 8) {
         std::uintptr_t p = 0;
         if (!ue::Reader::SafePtr(act + off, &p) || p < 0x10000) continue;
         std::uintptr_t cls = 0;
-        if (!ue::Reader::SafePtr(p + 0x10, &cls)) continue;
+        if (!ue::Reader::SafePtr(p + 0x10, &cls) || cls < 0x10000) continue;
         if (cls == static_cast<std::uintptr_t>(g_cls_asc)) return p;
+        float hp = 0.0f, mx = 0.0f;
+        if (SafeF32(p + 0x1A38, &hp) && SafeF32(p + 0x1A3C, &mx) &&
+            hp > 0.0f && mx >= hp && mx < 1.0e9f) {
+            return p;
+        }
     }
     return 0;
 }
@@ -5709,6 +5739,18 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
                    cfg_replay != g_cfg_seen_replay) {
             g_cfg_save_due_ms = NowMs() + 400;
         }
+    }
+    // Game 线程只记指针，这里（render 线程）才解析类名。
+    for (int i = 0; i < g_arm_dbg_n; ) {
+        const ArmDbgRec rec = g_arm_dbg[i];
+        g_arm_dbg[i] = g_arm_dbg[--g_arm_dbg_n];
+        char nm[64] = {0};
+        if (rec.victim >= 0x10000) ObjectClassName(rec.victim, nm, sizeof(nm));
+        char b[192];
+        std::snprintf(b, sizeof(b), "dbg: arm code=%d v=0x%llX cls=0x%llX class=%s",
+                      rec.code, (unsigned long long)rec.victim, (unsigned long long)rec.cls,
+                      nm[0] ? nm : "?");
+        PushLog(b);
     }
     if (g_apply_hook_enabled) InstallApplyHook();
     else ReleaseHooks();
