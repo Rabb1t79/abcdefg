@@ -4338,11 +4338,40 @@ static bool GeClassLooksValid(std::uintptr_t ge) {
     return false;
 }
 
+// 事件真值诊断：宿主自己怎么称呼这一发的 victim / 伤害来源。用来判定到底是
+// 宿主把命中对象记错了，还是我们的句柄解码错了（participant_path_utf8 / source_name_utf8）。
+static int g_evt_diag = 0;
+static void EventDiag(const AnomalyNteDamageEventV1& ev) {
+    if (g_evt_diag >= 12 || g_ctx == nullptr || g_ctx->nte_combat == nullptr) return;
+    const auto* combat = static_cast<const AnomalyNteCombatServiceV1*>(g_ctx->nte_combat);
+    if (combat->participant_path_utf8 == nullptr) return;
+    ++g_evt_diag;
+    char vp[192] = {0};
+    char src[128] = {0};
+    std::size_t vn = sizeof(vp) - 1;
+    std::size_t sn = sizeof(src) - 1;
+    combat->participant_path_utf8(combat->user, ev.victim, vp, &vn);
+    vp[vn < sizeof(vp) ? vn : sizeof(vp) - 1] = 0;
+    if (combat->source_name_utf8 != nullptr && ev.source_id != 0) {
+        combat->source_name_utf8(combat->user, ev.source_id, src, &sn);
+        src[sn < sizeof(src) ? sn : sizeof(src) - 1] = 0;
+    }
+    char b[420];
+    std::snprintf(b, sizeof(b),
+                  "evt[%d]: seq=%llu final=%lld vid=0x%llX aid=0x%llX sid=%llu vpath=%s src=%s",
+                  g_evt_diag, (unsigned long long)ev.sequence,
+                  static_cast<long long>(ev.final_damage),
+                  (unsigned long long)ev.victim.id, (unsigned long long)ev.attacker.id,
+                  (unsigned long long)ev.source_id, vp[0] ? vp : "-", src[0] ? src : "-");
+    PushLog(b);
+}
+
 // 事件驱动武装（KB 11.10 的第 1、2 条）：这一击打中谁，就取谁的
 // LastDamageGEDef(0x2378) → +0x10 的 UClass 作为回放 GE，连同当前 HP 记进回放表。
 // 自喂（回放自己造成的伤害）由 ReplayArm 的「同一 victim + 同一 GE」短路挡掉。
 static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
     if (ev.final_damage <= 0) return;
+    EventDiag(ev);
     // 高倍速下回放自己每秒产生上百个伤害事件：victim 句柄与我们记录的一致就直接
     // 认作自喂，不解析对象/名字（O(1)），否则每秒上百次 DecodeName 会拖慢 UI 线程。
     for (int i = 0; i < g_rt_n; ++i) {
