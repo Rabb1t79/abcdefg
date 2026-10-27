@@ -1159,6 +1159,59 @@ bool NteProfileGenerationQuarantined() noexcept {
         registry->quarantined.load(std::memory_order_acquire);
 }
 
+// Diagnostic tap for the vehicle speed path and the spec context ABI.
+// The startup profile snapshot is emitted once, so a speed change made later had no
+// observation channel at all; this appends the adapter's counters to a small file the
+// moment they move, at most a few times per second. Temporary instrumentation.
+struct VehicleSpeedDiagState {
+    std::chrono::steady_clock::time_point last_write{};
+    std::uint64_t last_apply{};
+    std::uint64_t last_rewrites{};
+    bool asserted{};
+};
+
+void PublishVehicleSpeedDiagnostics(
+    const Ue5NteAdapter& adapter,
+    const std::filesystem::path& path,
+    VehicleSpeedDiagState& state) noexcept {
+    try {
+        const auto snapshot = adapter.VehicleSpeedDiagnostics();
+        if (snapshot.apply_count == 0 && snapshot.maintain_runs == 0) return;
+        if (state.asserted && snapshot.apply_count == state.last_apply &&
+            snapshot.maintain_rewrites == state.last_rewrites) {
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (state.asserted && now - state.last_write < std::chrono::milliseconds(900)) return;
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        std::ofstream out(path, std::ios::app);
+        if (!out) return;
+        out << "applied=" << (snapshot.applied ? 1 : 0)
+            << " apply=" << snapshot.apply_count
+            << " runs=" << snapshot.maintain_runs
+            << " rewrites=" << snapshot.maintain_rewrites
+            << " fail=" << snapshot.maintain_failures
+            << " ratio=" << snapshot.requested_ratio
+            << " targetKmh=" << snapshot.target_top_kmh
+            << " targetMLV=" << snapshot.target_max_linear_velocity
+            << " obsKmh=" << snapshot.observed_top_kmh
+            << " obsMLV=" << snapshot.observed_max_linear_velocity
+            << " obsRatio=" << snapshot.observed_top_speed_ratio
+            << " ctx=" << static_cast<unsigned>(snapshot.ctx_parms) << "/"
+            << static_cast<unsigned>(snapshot.ctx_size)
+            << " out=" << static_cast<unsigned>(snapshot.out_parms) << "/"
+            << static_cast<unsigned>(snapshot.out_size)
+            << " viaOut=" << static_cast<unsigned>(snapshot.spec_via_outgoing)
+            << " coc=" << snapshot.context_class_name << "\n";
+        state.last_apply = snapshot.apply_count;
+        state.last_rewrites = snapshot.maintain_rewrites;
+        state.last_write = now;
+        state.asserted = true;
+    } catch (...) {
+    }
+}
+
 class TickEvidenceObserverGate final {
 public:
     using Observer = std::function<void(std::uint32_t, double)>;
@@ -1408,7 +1461,10 @@ public:
             tick_hook_ = std::make_unique<GameTickHook>(
                 [weak = std::weak_ptr<Ue5NteAdapter>(adapter_),
                   evidence = tick_evidence_gate_, damage_hook,
-                  event_target](double delta) {
+                  event_target,
+                  vehicle_diag_path = options_.runtime_root / "logs" / "vehicle-speed-diag.txt",
+                  vehicle_diag_state = std::make_shared<VehicleSpeedDiagState>()](
+                    double delta) {
                     const auto started_at = std::chrono::steady_clock::now();
                     // Keep the adapter generation alive through evidence
                     // observation. This also protects the service tables if
@@ -1416,6 +1472,8 @@ public:
                     const auto adapter = weak.lock();
                     if (adapter) {
                         adapter->OnGameTick(delta);
+                        PublishVehicleSpeedDiagnostics(
+                            *adapter, vehicle_diag_path, *vehicle_diag_state);
                         if (damage_hook != nullptr && !damage_hook->Attempted() &&
                             event_target != nullptr && adapter->CombatFeatureAvailable()) {
                             const auto exec_targets = adapter->CombatExecFunctionTargets();
