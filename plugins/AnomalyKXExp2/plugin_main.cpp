@@ -373,6 +373,13 @@ static bool JsonBoolField(const char* doc, const char* key, bool fallback) {
 void RegisterDamageConfigSchema() {
     const auto* cfg = DamageConfigService();
     if (cfg == nullptr) return;
+    {
+        char b[96];
+        std::snprintf(b, sizeof(b), "cfg: service size=%u version=%u",
+                      static_cast<unsigned>(cfg->struct_size),
+                      static_cast<unsigned>(cfg->service_version));
+        PushLog(b);
+    }
     if (!ConfigFieldAvailable(
             cfg, offsetof(AnomalyConfigServiceV1, register_schema) +
                      sizeof(cfg->register_schema)) ||
