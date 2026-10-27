@@ -140,7 +140,7 @@ void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, fl
                std::uint64_t victim_id = 0);
 void AutoTargetTick();
 void MonTrackTick();
-static constexpr int kMonList = 16;
+static constexpr int kMonList = 32;
 static std::uintptr_t g_mon_list[kMonList] = {};
 static char g_mon_list_name[kMonList][48] = {};
 static float g_mon_list_hp[kMonList] = {};
@@ -4795,6 +4795,7 @@ void TickMonsterScan() {
     }
     int budget = kMonBudget;
     char nm[72] = {0};
+    const std::uintptr_t local_pawn = ResolvePlayerPawn();
     while (budget > 0 && g_mon_level_i < g_mon_level_n) {
         if (g_mon_arr == 0) {
             std::uintptr_t arr = 0;
@@ -4821,7 +4822,7 @@ void TickMonsterScan() {
         std::uintptr_t act = 0;
         const unsigned int i = g_mon_actor_i++;
         --budget;
-        if (g_mon_found >= 12) { g_mon_actor_i = g_mon_actor_n; continue; }
+        if (g_mon_found >= 24) { g_mon_actor_i = g_mon_actor_n; continue; }
         if (!ue::Reader::SafePtr(g_mon_arr + 8ull * i, &act) || act < 0x10000) continue;
         std::uintptr_t cls = 0;
         if (!ue::Reader::SafePtr(act + 0x10, &cls) || cls < 0x10000) continue;
@@ -4851,15 +4852,24 @@ void TickMonsterScan() {
                 }
             }
         }
-        const bool hostile = std::strstr(nm, "mon_") != nullptr ||
-                             std::strstr(nm, "boss_") != nullptr ||
-                             std::strstr(nm, "Mon_") != nullptr ||
-                             std::strstr(nm, "Boss_") != nullptr;
-        if (!hostile) { RememberClassName(nm); continue; }
-        if (std::strstr(nm, "bullet") != nullptr || std::strstr(nm, "Effect") != nullptr) continue;
+        // 放开命中对象验证：不再只认 mon_/boss_ 前缀，任何在 +0x940 持有
+        // HP/MaxHP 布局 ASC 的 actor 都进候选表（本地玩家除外）。真正武装前还有
+        // LastDamageGEDef + GE 继承链校验，建筑/载具/普通 NPC 会在那里被拒。
         std::uintptr_t asc = 0;
-        if (!ue::Reader::SafePtr(act + 0x940, &asc) || !AscLooksLikeAsc(asc))
+        if (!ue::Reader::SafePtr(act + 0x940, &asc) || !AscLooksLikeAsc(asc)) {
+            const bool named = std::strstr(nm, "mon_") != nullptr ||
+                               std::strstr(nm, "boss_") != nullptr ||
+                               std::strstr(nm, "Mon_") != nullptr ||
+                               std::strstr(nm, "Boss_") != nullptr;
+            if (!named) { RememberClassName(nm); continue; }
             asc = FindAscInActor(act);
+        }
+        if (std::strstr(nm, "bullet") != nullptr || std::strstr(nm, "Effect") != nullptr ||
+            ((nm[0] == 'p' || nm[0] == 'P') && std::strstr(nm, "layer") != nullptr) ||
+            act == local_pawn || asc < 0x10000) {
+            RememberClassName(nm);
+            continue;
+        }
         float hp = 0.0f, maxhp = 0.0f, atk = 0.0f;
         const bool hp_ok = SafeF32(asc + 0x1A38, &hp);
         SafeF32(asc + 0x1A3C, &maxhp);
