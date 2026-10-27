@@ -4340,6 +4340,18 @@ static bool AscLooksLikeAsc(std::uintptr_t asc) {
     return hp > 0.0f && mx >= hp && mx < 1.0e9f;
 }
 
+// 缓存指针是否还有效：换场景/重生后旧 ASC 可能已经释放，必须先验类指针再验 MaxHP，
+// 否则回放会对着一个已经死掉的对象空放（表现就是“重进后怎么打都不掉血”）。
+static bool AscStillValid(std::uintptr_t asc) {
+    if (asc < 0x10000) return false;
+    std::uintptr_t cls = 0;
+    if (!ue::Reader::SafePtr(asc + 0x10, &cls) || cls < 0x10000) return false;
+    if (g_cls_asc >= 0x10000 && cls != static_cast<std::uintptr_t>(g_cls_asc)) return false;
+    float mx = 0.0f;
+    if (!SafeF32(asc + 0x1A3C, &mx) || !(mx > 0.0f) || mx > 1.0e9f) return false;
+    return true;
+}
+
 // 绫绘寚閽堢獥鍙ｆ壂鎻忥細鎬墿鐨?ASC 瀛楁涓嶄竴瀹氬湪 +0x940锛堥偅鏄?AHTAbilityCharacter 鐨勫竷灞€锛夈€?
 static std::uintptr_t FindAscInActor(std::uintptr_t act) {
     if (act < 0x10000 || g_cls_asc < 0x10000) return 0;
@@ -4364,6 +4376,7 @@ static std::uintptr_t g_mon_levels[64] = {};
 static std::uintptr_t g_mon_arr = 0;
 static int g_mon_found = 0;
 static int g_mon_scanned = 0;
+static std::uintptr_t g_mon_world = 0;   // 本轮扫描用的 UWorld，换了世界/副本就重扫
 // 涓囦竴 mon_/boss_ 杩欏鍛藉悕鍦ㄦ湰 build 涓嶆垚绔嬶細鎶婃壂鍒扮殑鍏朵粬绫诲悕鍘婚噸鐣欏嚑涓紝
 // found==0 鏃舵墦鍑烘潵锛屽氨鑳界洿鎺ョ湅鍒版€墿鐪熸鐨勫懡鍚嶈鍒欍€?
 static char g_mon_seen[16][48] = {};
@@ -4418,6 +4431,7 @@ static bool BuildMonsterLevelList(std::uintptr_t world) {
     std::snprintf(hb, sizeof(hb), "mon: levels=%d world=0x%llX",
                   g_mon_level_n, (unsigned long long)world);
     PushLog(hb);
+    g_mon_world = world;
     return g_mon_level_n > 0;
 }
 
@@ -4470,16 +4484,18 @@ void TickMonsterScan() {
         if (nm[0] == 0) continue;
         // 椤烘墜鎹炵帺瀹?pawn/ASC锛歸orld鈫扜ameInstance鈫扡ocalPlayer鈫扨C 閭ｆ潯閾惧湪鏈?build 涓?
         // 鍙栦笉鍒帮紙pawn=0x0锛夛紝浣嗚繖娆?Actor 鏋氫妇鏄彲闈犵殑銆?
-        if ((nm[0] == 'p' || nm[0] == 'P') && std::strstr(nm, "layer") != nullptr &&
-            g_player_asc < 0x10000) {
+        if ((nm[0] == 'p' || nm[0] == 'P') && std::strstr(nm, "layer") != nullptr) {
             std::uintptr_t pasc = 0;
             if (ue::Reader::SafePtr(act + 0x940, &pasc) && AscLooksLikeAsc(pasc)) {
+                const bool changed_player = (g_player_asc != pasc);
                 g_player_asc = pasc;
                 g_player_pawn = act;
-                char pb[160];
-                std::snprintf(pb, sizeof(pb), "mon: player %s actor=0x%llX asc=0x%llX",
-                              nm, (unsigned long long)act, (unsigned long long)pasc);
-                PushLog(pb);
+                if (changed_player) {
+                    char pb[160];
+                    std::snprintf(pb, sizeof(pb), "mon: player %s actor=0x%llX asc=0x%llX",
+                                  nm, (unsigned long long)act, (unsigned long long)pasc);
+                    PushLog(pb);
+                }
             }
         }
         const bool hostile = std::strstr(nm, "mon_") != nullptr ||
@@ -4861,42 +4877,92 @@ void TickApplyCaptureReplay() {
 // 自动回放就挂在这里，不再依赖 MonScan 的手动选择。
 // Watches every candidate monster's HP: whoever just lost HP is the target that
 // was hit, and its own LastDamageGEDef is the GE that hit used.
+static void DropMonsterEntry(int index) {
+    if (index < 0 || index >= g_mon_list_n) return;
+    for (int k = index; k + 1 < g_mon_list_n; ++k) {
+        g_mon_list[k] = g_mon_list[k + 1];
+        g_mon_list_hp[k] = g_mon_list_hp[k + 1];
+        std::snprintf(g_mon_list_name[k], sizeof(g_mon_list_name[0]), "%s",
+                      g_mon_list_name[k + 1]);
+    }
+    --g_mon_list_n;
+}
+
 void MonTrackTick() {
     if (g_ui_state.damage == 0 || g_mon_list_n == 0) return;
     static std::uint64_t next = 0;
     const std::uint64_t now = NowMs();
     if (now < next) return;
     next = now + 150;
-    for (int i = 0; i < g_mon_list_n; ++i) {
+    for (int i = 0; i < g_mon_list_n; ) {
         float hp = 0.0f;
-        if (!ReadAscHP(g_mon_list[i], &hp)) continue;
-        const float prev = g_mon_list_hp[i];
-        g_mon_list_hp[i] = hp;
-        if (prev <= 0.0f || hp >= prev - 0.5f) continue;
-        const std::uintptr_t ge = LastDamageGeClass(g_mon_list[i]);
-        g_monster_asc = g_mon_list[i];
-        if (ge == 0) {
-            char b[128];
-            std::snprintf(b, sizeof(b), "track: no GE for %s hp=%.1f (retry)", g_mon_list_name[i], hp);
-            PushLog(b);
-            g_mon_list_hp[i] = prev;
+        if (!ReadAscHP(g_mon_list[i], &hp) || hp <= 0.0f) {
+            // 目标已死 / 对象已释放：从候选表移除。旧代码把 prev 恢复成 >0，
+            // 会变成每 150ms 一条 "track: no GE ... hp=0.0" 的死循环。
+            DropMonsterEntry(i);
             continue;
         }
+        const float prev = g_mon_list_hp[i];
+        g_mon_list_hp[i] = hp;
+        if (prev <= 0.0f || hp >= prev - 0.5f) { ++i; continue; }
+        const std::uintptr_t ge = LastDamageGeClass(g_mon_list[i]);
+        if (ge == 0) {
+            // 读不到 GE（对象刚死/正在切换）：保留新 hp 当基线等下一发，
+            // 不再恢复 prev，避免同一条记录无限重试。
+            ++i;
+            continue;
+        }
+        g_monster_asc = g_mon_list[i];
         ReplayArm(g_mon_list[i], g_mon_list_name[i], ge, hp);
+        ++i;
     }
 }
 
 void AutoTargetTick() {
     if (g_ui_state.damage == 0) { g_cap_on = 0; return; }
     g_cap_on = 1;
-    if (g_mon_on != 0) return;
-    if (g_mon_list_n == 0) { RequestMonsterScan(); return; }
-    int alive = 0;
-    for (int i = 0; i < g_mon_list_n; ++i) {
-        float hp = 0.0f;
-        if (ReadAscHP(g_mon_list[i], &hp) && hp > 0.0f) ++alive;
+    static std::uint64_t next_scan_allowed = 0;
+    static std::uint64_t scan_started_ms = 0;
+    static std::uint64_t next_refresh_ms = 0;
+    const std::uint64_t now = NowMs();
+    if (g_mon_on != 0) {
+        // 扫描卡死看门狗：分帧扫描正常 <1s 结束，超过 5s 一定是状态坏了。
+        if (scan_started_ms == 0) {
+            scan_started_ms = now;
+        } else if (now - scan_started_ms > 5000) {
+            g_mon_on = 0;
+            scan_started_ms = 0;
+            PushLog("mon: scan watchdog reset");
+        }
+        return;
     }
-    if (alive == 0) RequestMonsterScan();
+    scan_started_ms = 0;
+    if (next_refresh_ms == 0) next_refresh_ms = now + 15000;
+    bool need = (g_mon_list_n == 0);
+    if (!need) {
+        int alive = 0;
+        for (int i = 0; i < g_mon_list_n; ++i) {
+            float hp = 0.0f;
+            if (ReadAscHP(g_mon_list[i], &hp) && hp > 0.0f) ++alive;
+        }
+        if (alive == 0) need = true;
+    }
+    bool world_changed = false;
+    if (!need) {
+        const std::uintptr_t world =
+            (g_world_fixed >= 0x10000) ? g_world_fixed : ReadWorldFresh();
+        if (world >= 0x10000 && g_mon_world >= 0x10000 && world != g_mon_world) {
+            need = true;                 // 换场景/副本：旧列表里的 ASC 全部作废
+            world_changed = true;
+        }
+    }
+    if (!need && now >= next_refresh_ms) need = true;   // 兜底：每 15s 刷新一次
+    if (!need) return;
+    if (now < next_scan_allowed) return;
+    if (world_changed) PushLog("mon: world changed, rescan");
+    RequestMonsterScan();
+    next_scan_allowed = now + 3000;   // 扫不到东西也别每帧重扫（旧代码会 300ms 一轮）
+    next_refresh_ms = now + 15000;
 }
 
 static int g_rep_dmg = 0;
@@ -4977,12 +5043,16 @@ static std::uintptr_t FindFuncInherited(void* uclass, const char* name) {
 }
 
 static std::uintptr_t PlayerAscForApply() {
-    if (g_player_asc >= 0x10000) return g_player_asc;
-    std::uintptr_t pawn = (g_player_pawn >= 0x10000) ? g_player_pawn : ResolvePlayerPawn();
+    if (g_player_asc >= 0x10000 && AscStillValid(g_player_asc)) return g_player_asc;
+    g_player_asc = 0;                          // 失效：换场景/重生后重新解析
+    std::uintptr_t pawn = ResolvePlayerPawn();
+    if (pawn < 0x10000) pawn = g_player_pawn;
     if (pawn < 0x10000) return 0;
     std::uintptr_t asc = 0;
-    if (ue::Reader::SafePtr(pawn + 0x940, &asc)) return asc;
-    return 0;
+    if (!ue::Reader::SafePtr(pawn + 0x940, &asc) || !AscLooksLikeAsc(asc)) return 0;
+    g_player_asc = asc;
+    g_player_pawn = pawn;
+    return asc;
 }
 
 static HANDLE g_hb_thread = nullptr;
@@ -5178,9 +5248,9 @@ void ReplayTick() {
         ReplayTarget& t = g_rt[i];
         float hp = 0.0f;
         const bool ok = ReadAscHP(t.asc, &hp);
-        if (!ok || hp <= 0.0f) {
+        if (!ok || hp <= 0.0f || !AscStillValid(t.asc)) {
             char b[128];
-            std::snprintf(b, sizeof(b), "replay: drop %s (dead/lost hp=%.1f)", t.name, hp);
+            std::snprintf(b, sizeof(b), "replay: drop %s (dead/lost/retired hp=%.1f)", t.name, hp);
             PushLog(b);
             ReplayDropTarget(i);
             continue;
