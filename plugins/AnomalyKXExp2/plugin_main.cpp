@@ -4306,6 +4306,16 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
             src_asc != g_player_asc) {
             g_player_asc = src_asc;
             g_player_pawn = local;
+            PushLog("player: caster refreshed from local pawn");
+        }
+    } else if (g_player_asc < 0x10000 && attacker >= 0x10000) {
+        // 兜底：world→GI→LocalPlayer 链偶尔解析不出来（开局那几帧），先拿这一发的攻击者
+        // 当初始施法 ASC；一旦能识别本地玩家就会被上面的分支纠正。
+        std::uintptr_t src_asc = 0;
+        if (ue::Reader::SafePtr(attacker + 0x940, &src_asc) && AscLooksLikeAsc(src_asc)) {
+            g_player_asc = src_asc;
+            g_player_pawn = attacker;
+            PushLog("player: caster bootstrapped from attacker");
         }
     }
     const std::uintptr_t victim = ActorFromDamageHandle(ev.victim);
