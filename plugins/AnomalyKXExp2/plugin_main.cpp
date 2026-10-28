@@ -4119,6 +4119,19 @@ static std::uintptr_t g_pend_func = 0;
 static const char*    g_pend_name = nullptr;
 static int            g_pend_fresh = 0;
 
+// Render thread (StoreCapture already resolved the GE class name) -> game thread mailbox:
+// the real apply call carries the target ASC and the GE class pointer, which is the one
+// ground truth that does not depend on the broken object handle decode.
+static std::uintptr_t g_arm_ge = 0;
+static std::uintptr_t g_arm_asc = 0;
+static volatile LONG g_arm_seq = 0;
+static LONG g_arm_seen = 0;
+static void QueueArmFromCapture(std::uintptr_t ge, std::uintptr_t asc) {
+    g_arm_ge = ge;
+    g_arm_asc = asc;
+    InterlockedIncrement(&g_arm_seq);
+}
+
 static void PendCapture(const unsigned char* raw, std::uintptr_t receiver,
                         std::uintptr_t function, const char* name) {
     std::memcpy(g_pend_raw, raw, sizeof(g_pend_raw));
@@ -4158,6 +4171,14 @@ static void StoreCapture(const unsigned char* raw, std::uintptr_t receiver,
     c.ev = raw[0x68];
     c.hp_ok = ReadAscHP(c.target_asc, &c.hp) ? 1 : 0;
     c.ms = NowMs();
+    // 玩家技能真正落到怪身上的那一次 apply：把 GE 类 + 目标 ASC 交给游戏线程武装。
+    // 只收名字像伤害的 GE，且目标不是玩家自己；自己回放的 apply 由 g_cap_suppress 挡掉。
+    if (g_ui_state.damage != 0 && c.ge_class >= 0x10000 && c.target_asc >= 0x10000 &&
+        c.hp > 0.0f &&
+        (std::strstr(c.ge, "Dmg") != nullptr || std::strstr(c.ge, "Damage") != nullptr ||
+         std::strstr(c.ge, "dmg") != nullptr)) {
+        QueueArmFromCapture(c.ge_class, c.target_asc);
+    }
     // FBufData.DynamicGrantedTags @ raw+0x18锛欶GameplayTagContainer = 涓や釜 TArray
     {
         std::uintptr_t data = 0;
@@ -5123,14 +5144,18 @@ void TickMonsterScan() {
         const bool hp_ok = SafeF32(asc + 0x1A38, &hp);
         SafeF32(asc + 0x1A3C, &maxhp);
         SafeF32(asc + 0x1A50, &atk);
-        if (log_mon) {
+        const bool hostile_name = std::strstr(nm, "mon_") != nullptr ||
+                                  std::strstr(nm, "boss_") != nullptr ||
+                                  std::strstr(nm, "Mon_") != nullptr ||
+                                  std::strstr(nm, "Boss_") != nullptr;
+        if (log_mon || hostile_name) {
             char b[224];
             std::snprintf(b, sizeof(b),
                           "mon[%d]: %s actor=0x%llX asc=0x%llX hp=%.1f/%.1f atk=%.1f hpok=%d",
                           g_mon_found, nm, (unsigned long long)act, (unsigned long long)asc,
                           hp, maxhp, atk, hp_ok ? 1 : 0);
             PushLog(b);
-            ++g_mon_found;
+            if (log_mon) ++g_mon_found;
         }
         if (asc >= 0x10000 && hp > 0.0f) {
             // 记进候选表：自动流程靠"谁的 HP 掉了"来认受害者，而不是靠先扫到的第一只。
@@ -5928,6 +5953,20 @@ void ReplayTick() {
 // Game 线程引擎：宿主只在插件"已启动"时派发 on_update，与窗口是否可见无关；
 // on_draw 在窗口隐藏时会被跳过，所以事件消费/武装/回放节奏都必须放在这里。
 // 本函数里禁止 DecodeName（宿主 names 的锁）：武装只做指针/偏移读取，名字留给 on_draw。
+static void DrainArmRequests() {
+    const LONG seq = InterlockedCompareExchange(&g_arm_seq, 0, 0);
+    if (seq == g_arm_seen) return;
+    g_arm_seen = seq;
+    const std::uintptr_t ge = g_arm_ge;
+    const std::uintptr_t asc = g_arm_asc;
+    if (ge < 0x10000 || asc < 0x10000) return;
+    if (asc == g_player_asc) return;
+    float hp = 0.0f;
+    if (!AscStillValid(asc) || !ReadAscHP(asc, &hp) || hp <= 0.0f) return;
+    if (!GeClassLooksValid(ge)) return;
+    ReplayArm(asc, "-", ge, hp, 0);
+}
+
 void TickReplayEngine() {
     if (g_ctx == nullptr) return;
     g_cap_on = (g_ui_state.damage != 0) ? 1 : 0;
@@ -5940,6 +5979,7 @@ void TickReplayEngine() {
     MonTrackTick();
     CensusTick();
     TickPendingArms();
+    DrainArmRequests();
     ReplayTick();
 }
 
