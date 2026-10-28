@@ -4281,6 +4281,32 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
         }
     }
     const std::uintptr_t victim = ActorFromDamageHandle(ev.victim);
+    // 诊断（前 10 发）：句柄 id、布局解码结果、最终 actor、ASC、GE、HP。
+    static int ev_diag = 0;
+    if (ev_diag < 10 && ev.victim.id != 0) {
+        ++ev_diag;
+        const std::uint32_t idx = static_cast<std::uint32_t>(ev.victim.id & 0xFFFFFFFFull);
+        const std::uintptr_t lay = idx != 0
+            ? reinterpret_cast<std::uintptr_t>(ObjectAtLayout(idx - 1u)) : 0;
+        std::uintptr_t dasc = 0, dge = 0;
+        float dhp = 0.0f;
+        if (victim >= 0x10000) {
+            if (!ue::Reader::SafePtr(victim + 0x940, &dasc)) dasc = 0;
+            if (dasc >= 0x10000) dge = LastDamageGeClass(dasc);
+            if (dasc >= 0x10000) ReadAscHP(dasc, &dhp);
+        }
+        char db[224];
+        std::snprintf(db, sizeof(db),
+                      "ev[%d]: seq=%llu fin=%lld vid=0x%llX items=0x%llX lay=0x%llX v=0x%llX "
+                      "asc=0x%llX ge=0x%llX hp=%.1f",
+                      ev_diag, (unsigned long long)ev.sequence,
+                      static_cast<long long>(ev.final_damage),
+                      (unsigned long long)ev.victim.id,
+                      (unsigned long long)g_gobjects_items, (unsigned long long)lay,
+                      (unsigned long long)victim, (unsigned long long)dasc,
+                      (unsigned long long)dge, dhp);
+        PushLog(db);
+    }
     if (victim < 0x10000) return;
     if (victim == g_player_pawn || victim == g_player_pawn_ref) return;
     std::uintptr_t asc = 0;
@@ -5766,7 +5792,13 @@ bool InitUe(const void* signature_service, const void* names_service) {
             const int disp = *reinterpret_cast<const int*>(address + 3);
             const std::uintptr_t items_addr = address + 7 + (std::intptr_t)disp;
             std::uintptr_t items = 0;
-            if (ue::Reader::SafePtr(items_addr, &items) && items != 0) g_gobjects_items = items;
+            if (ue::Reader::SafePtr(items_addr, &items) && items != 0) {
+                g_gobjects_items = items;
+                char b[96];
+                std::snprintf(b, sizeof(b), "ue: gobjects items=0x%llX",
+                              (unsigned long long)g_gobjects_items);
+                PushLog(b);
+            }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             g_gobjects_items = 0;
         }
