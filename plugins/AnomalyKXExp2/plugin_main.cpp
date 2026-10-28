@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
+#include <share.h>
 #include <chrono>
 
 namespace {
@@ -838,9 +839,14 @@ void TickChronosDump() {
     if (g_gworld_ptr == 0) { g_chronos_rc = -303; return; }
 
     {
-        unsigned int wid = 0;
-        if (ue::Reader::SafeU32(static_cast<std::uintptr_t>(g_gworld_ptr) + 0x18, &wid))
-            DecodeName(wid, g_world_name, sizeof(g_world_name));
+        // 世界名只在世界指针变化时解析；每帧调宿主 names 会拿 State 锁。
+        static std::uintptr_t last_world = 0;
+        if (static_cast<std::uintptr_t>(g_gworld_ptr) != last_world) {
+            last_world = static_cast<std::uintptr_t>(g_gworld_ptr);
+            unsigned int wid = 0;
+            if (ue::Reader::SafeU32(static_cast<std::uintptr_t>(g_gworld_ptr) + 0x18, &wid))
+                DecodeName(wid, g_world_name, sizeof(g_world_name));
+        }
     }
     std::uintptr_t level = 0;
     if (!ue::Reader::SafePtr(static_cast<std::uintptr_t>(g_gworld_ptr) + 0x30, &level) || level == 0) {
@@ -1654,6 +1660,7 @@ static int g_fn_sel = -1;
 static char g_log[32][96];
 static int g_log_n = 0;
 static char g_log_path[MAX_PATH] = {0};
+static FILE* g_log_fp = nullptr;
 
 static void PushLog(const char* text) {
     if (text == nullptr) return;
@@ -1674,10 +1681,12 @@ static void PushLog(const char* text) {
     }
     // 每行开关文件：常开句柄会让热重载后的新 generation（以及外部工具）打不开日志；
     // 现在扫描已删除、日志量很小，开关一次的开销可以接受。
-    FILE* fp = std::fopen(g_log_path, "a");
-    if (fp == nullptr) return;
-    std::fprintf(fp, "%s\n", text);
-    std::fclose(fp);
+    if (g_log_fp == nullptr) {
+        g_log_fp = _fsopen(g_log_path, "a", _SH_DENYNO);
+        if (g_log_fp == nullptr) return;
+        std::setvbuf(g_log_fp, nullptr, _IOLBF, 4096);
+    }
+    std::fprintf(g_log_fp, "%s\n", text);
 }
 
 static void CloseLogFile() {
@@ -5564,7 +5573,15 @@ static void StopHeartbeat() {
 static bool ResolveGeHelpersUiThread() {
     if (g_gec_ufn != 0 && g_gea_ufn != 0) return true;
     const std::uintptr_t src = PlayerAscForApply();
-    if (src < 0x10000) { PushLog("geapply: helpers not resolved (no asc)"); return false; }
+    if (src < 0x10000) {
+        static std::uint64_t next_log = 0;
+        const std::uint64_t now = NowMs();
+        if (now >= next_log) {
+            next_log = now + 2000;
+            PushLog("geapply: helpers not resolved (no asc)");
+        }
+        return false;
+    }
     std::uintptr_t cls = g_cls_asc;
     if (cls < 0x10000) {
         std::uintptr_t c = 0;
