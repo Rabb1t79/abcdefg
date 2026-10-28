@@ -4479,8 +4479,9 @@ static void ArmFromDamageEventLegacy(const AnomalyNteDamageEventV1& ev) {
 // GObjects 里找实例（对象 +0x10 的类对象的 FName id 等于类名 id），结果按类缓存。
 struct PathNameCache { std::uint64_t id; char name[64]; };
 static PathNameCache g_path_names[8] = {};
-struct PathActorCache { std::uint32_t name_id; std::uintptr_t actor; std::uintptr_t asc; };
-static PathActorCache g_path_actors[8] = {};
+static bool BuildMonsterLevelList(std::uintptr_t world);
+static int g_mon_level_n = 0;
+static std::uintptr_t g_mon_levels[64] = {};
 
 static bool ClassNameIsPlayer(const char* name) {
     return name != nullptr && (name[0] == 'p' || name[0] == 'P') &&
@@ -4517,69 +4518,66 @@ static void CombatParticipantClassName(AnomalyGenerationHandleV1 h, char* out, s
     }
 }
 
-static std::uintptr_t FindActorByClassId(std::uint32_t want, bool require_ge,
-                                         std::uintptr_t* asc_out) {
-    if (asc_out != nullptr) *asc_out = 0;
-    if (want == 0) return 0;
-    const std::uint32_t limit = static_cast<std::uint32_t>(g_ue.object_limit);
-    std::uintptr_t fallback = 0;
-    std::uintptr_t fallback_asc = 0;
-    for (std::uint32_t i = 0; i < limit; ++i) {
-        const std::uintptr_t obj = reinterpret_cast<std::uintptr_t>(g_ue.ObjectAt(i));
-        if (obj < 0x10000) continue;
-        std::uintptr_t cls = 0;
-        if (!ue::Reader::SafePtr(obj + 0x10, &cls) || cls < 0x10000) continue;
-        std::uint32_t nid = 0;
-        if (!ue::Reader::SafeU32(cls + 0x18, &nid) || nid != want) continue;
-        std::uintptr_t asc = 0;
-        if (!ue::Reader::SafePtr(obj + 0x940, &asc) || !AscLooksLikeAsc(asc)) continue;
-        float hp = 0.0f;
-        if (!ReadAscHP(asc, &hp) || hp <= 0.0f) continue;
-        if (fallback == 0) { fallback = obj; fallback_asc = asc; }
-        if (!require_ge) { if (asc_out) *asc_out = asc; return obj; }
-        const std::uintptr_t ge = LastDamageGeClass(asc);
-        if (ge >= 0x10000 && GeClassLooksValid(ge)) {
-            if (asc_out) *asc_out = asc;
-            return obj;
+// The host resolves the handle correctly (participant_path_utf8 proves it) even though the
+// plugin cannot turn it into a pointer. snapshot_by_handle returns the object's own FName
+// id; match that against the level actor arrays, whose pointers are trustworthy, instead of
+// walking GObjects through the wrong accessor.
+static std::uint32_t HostNameIdForHandle(AnomalyGenerationHandleV1 h) {
+    if (h.id == 0 || g_ctx == nullptr || g_ctx->ue5_objects == nullptr) return 0;
+    const auto* objs = static_cast<const AnomalyUe5ObjectsServiceV1*>(g_ctx->ue5_objects);
+    if (objs->snapshot_by_handle == nullptr) return 0;
+    AnomalyUe5ObjectSnapshotV1 snap{};
+    snap.struct_size = sizeof(snap);
+    if (objs->snapshot_by_handle(objs->user, h, &snap).code != ANOMALY_STATUS_V1_OK) return 0;
+    return snap.name_id;
+}
+
+static std::uintptr_t FindActorByNameId(std::uint32_t nid) {
+    if (nid == 0) return 0;
+    for (int lv = 0; lv < g_mon_level_n; ++lv) {
+        std::uintptr_t arr = 0;
+        unsigned int num = 0;
+        if (!ue::Reader::SafePtr(g_mon_levels[lv] + 0xA0, &arr) ||
+            !ue::Reader::SafeU32(g_mon_levels[lv] + 0xA8, &num) ||
+            arr < 0x10000 || num == 0) continue;
+        const unsigned int cap = num < 6000u ? num : 6000u;
+        for (unsigned int i = 0; i < cap; ++i) {
+            std::uintptr_t act = 0;
+            if (!ue::Reader::SafePtr(arr + 8ull * i, &act) || act < 0x10000) continue;
+            std::uint32_t own = 0;
+            if (!ue::Reader::SafeU32(act + 0x18, &own) || own != nid) continue;
+            return act;
         }
     }
-    if (fallback != 0 && asc_out != nullptr) *asc_out = fallback_asc;
-    return fallback;
+    return 0;
 }
 
 static std::uintptr_t ResolveParticipantByPath(AnomalyGenerationHandleV1 h, bool require_ge,
                                                std::uintptr_t* asc_out) {
     if (asc_out != nullptr) *asc_out = 0;
-    char name[64] = {0};
-    CombatParticipantClassName(h, name, sizeof(name));
-    if (name[0] == 0) return 0;
-    std::uint32_t nid = 0;
-    if (!g_ue.NameId(name, &nid) || nid == 0) return 0;
-    for (int i = 0; i < 8; ++i) {
-        if (g_path_actors[i].name_id != nid || g_path_actors[i].actor < 0x10000) continue;
-        std::uintptr_t cls = 0;
-        if (!ue::Reader::SafePtr(g_path_actors[i].actor + 0x10, &cls) || cls < 0x10000) break;
-        std::uint32_t cid = 0;
-        if (!ue::Reader::SafeU32(cls + 0x18, &cid) || cid != nid) break;
-        float hp = 0.0f;
-        if (!ReadAscHP(g_path_actors[i].asc, &hp) || hp <= 0.0f) break;
-        if (require_ge) {
-            const std::uintptr_t ge = LastDamageGeClass(g_path_actors[i].asc);
-            if (ge < 0x10000 || !GeClassLooksValid(ge)) break;
-        }
-        if (asc_out) *asc_out = g_path_actors[i].asc;
-        return g_path_actors[i].actor;
+    const std::uint32_t nid = HostNameIdForHandle(h);
+    if (nid == 0) return 0;
+    if (g_mon_level_n == 0) {
+        const std::uintptr_t world = ReadWorldFresh();
+        if (world >= 0x10000) BuildMonsterLevelList(world);
     }
+    std::uintptr_t actor = FindActorByNameId(nid);
+    if (actor < 0x10000) {
+        // Level list may be stale (map switch): rebuild once and retry.
+        g_mon_level_n = 0;
+        const std::uintptr_t world = ReadWorldFresh();
+        if (world >= 0x10000 && BuildMonsterLevelList(world)) actor = FindActorByNameId(nid);
+    }
+    if (actor < 0x10000) return 0;
     std::uintptr_t asc = 0;
-    const std::uintptr_t actor = FindActorByClassId(nid, require_ge, &asc);
-    if (actor >= 0x10000) {
-        int slot = 0;
-        for (int i = 0; i < 8; ++i) {
-            if (g_path_actors[i].name_id == nid) { slot = i; break; }
-        }
-        g_path_actors[slot].name_id = nid;
-        g_path_actors[slot].actor = actor;
-        g_path_actors[slot].asc = asc;
+    if (!ue::Reader::SafePtr(actor + 0x940, &asc) || !AscLooksLikeAsc(asc))
+        asc = FindAscInActor(actor);
+    if (asc < 0x10000) return 0;
+    float hp = 0.0f;
+    if (!ReadAscHP(asc, &hp) || hp <= 0.0f) return 0;
+    if (require_ge) {
+        const std::uintptr_t ge = LastDamageGeClass(asc);
+        if (ge < 0x10000 || !GeClassLooksValid(ge)) return 0;
     }
     if (asc_out) *asc_out = asc;
     return actor;
@@ -4969,11 +4967,9 @@ static std::uintptr_t FindAscInActor(std::uintptr_t act) {
 // 鍒嗗抚鎵弿锛埪?.1锛氭寜閽洖璋冮噷鍋氬叏琛ㄩ亶鍘嗕細鎶婃父鎴忓崱姝伙級銆傛瘡甯ф渶澶氬鐞?kMonBudget 涓?actor銆?
 static constexpr int kMonBudget = 128;
 static int g_mon_on = 0;
-static int g_mon_level_n = 0;
 static int g_mon_level_i = 0;
 static unsigned int g_mon_actor_i = 0;
 static unsigned int g_mon_actor_n = 0;
-static std::uintptr_t g_mon_levels[64] = {};
 static std::uintptr_t g_mon_arr = 0;
 static int g_mon_found = 0;
 static int g_mon_scanned = 0;
