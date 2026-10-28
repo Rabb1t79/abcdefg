@@ -4586,6 +4586,29 @@ static bool BuildMonsterLevelList(std::uintptr_t world) {
     return g_mon_level_n > 0;
 }
 
+// 预设怪名：dump + 运行日志里出现过的类名，启动时在 render 线程解析成 FName id。
+// 扫描里逐 actor 只比较整数，绝大多数环境 actor 不再调宿主 names（卡顿主因）。
+static const char* const kMonsterNames[] = {
+#include "monster_names.inc"
+};
+static std::uint32_t g_monster_ids[256] = {};
+static int g_monster_id_n = 0;
+static void ResolveMonsterIds() {
+    if (g_monster_id_n != 0) return;
+    for (const char* name : kMonsterNames) {
+        if (name == nullptr) continue;
+        std::uint32_t id = 0;
+        if (g_ue.NameId(name, &id) && id != 0 && g_monster_id_n < 256)
+            g_monster_ids[g_monster_id_n++] = id;
+    }
+}
+static bool IsPresetMonster(std::uint32_t id) {
+    for (int i = 0; i < g_monster_id_n; ++i) {
+        if (g_monster_ids[i] == id) return true;
+    }
+    return false;
+}
+
 void TickMonsterScan() {
     if (g_mon_on == 0) return;
     if (g_gworld_ptr == 0) { g_mon_on = 0; PushLog("mon: no GWorld"); return; }
@@ -4630,6 +4653,13 @@ void TickMonsterScan() {
         ++g_mon_scanned;
         unsigned int nid = 0;
         if (!ue::Reader::SafeU32(cls + 0x18, &nid)) continue;
+        // 只有“预设怪名命中”或“+0x940 有 ASC 形态（玩家/未收录的怪）”才解析名字；
+        // 其它环境 actor 直接跳过，扫描里不再逐 actor 调宿主 names。
+        const bool preset = IsPresetMonster(nid);
+        std::uintptr_t pre_asc = 0;
+        const bool asc_shape = ue::Reader::SafePtr(act + 0x940, &pre_asc) &&
+                               pre_asc >= 0x10000 && AscLooksLikeAsc(pre_asc);
+        if (!preset && !asc_shape) continue;
         nm[0] = 0;
         DecodeName(nid, nm, sizeof(nm));
         if (nm[0] == 0) continue;
@@ -4649,7 +4679,8 @@ void TickMonsterScan() {
                 }
             }
         }
-        const bool hostile = std::strstr(nm, "mon_") != nullptr ||
+        const bool hostile = preset ||
+                             std::strstr(nm, "mon_") != nullptr ||
                              std::strstr(nm, "boss_") != nullptr ||
                              std::strstr(nm, "Mon_") != nullptr ||
                              std::strstr(nm, "Boss_") != nullptr ||
@@ -5508,6 +5539,7 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
         std::uint32_t nid = 0;
         if (g_ue.NameId("OnDamaged", &nid) && nid != 0) g_ondmg_nid = nid;
     }
+    ResolveMonsterIds();   // 预设怪名 -> FName id（render 线程，一次）
     {
         const int cfg_damage = g_ui_state.damage;
         const int cfg_chain = g_ui_state.chain;
