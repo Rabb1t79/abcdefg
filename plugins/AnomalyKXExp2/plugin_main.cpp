@@ -4390,6 +4390,10 @@ static constexpr int kExcludeNameCount =
     static_cast<int>(sizeof(kExcludeNames) / sizeof(kExcludeNames[0]));
 static void ResolveExcludeIdsStep() {
     if (g_ue.names == nullptr) return;
+    // 对不存在的名字 find_utf8 要扫整张名表（几十毫秒），每 30 帧解析 1 个，
+    // 否则启动阶段每帧两次宿主查询会把帧时间拉到几百毫秒。
+    static int tick = 0;
+    if ((++tick % 30) != 0) return;
     for (int n = 0; n < 1 && g_exclude_cursor < kExcludeNameCount; ++n) {
         const char* name = kExcludeNames[g_exclude_cursor++];
         if (name == nullptr) continue;
@@ -4875,7 +4879,9 @@ static constexpr int kMonsterNameCount =
     static_cast<int>(sizeof(kMonsterNames) / sizeof(kMonsterNames[0]));
 static void ResolveMonsterIdsStep() {
     if (g_ue.names == nullptr) return;
-    // 每帧只解析 1 个：对不存在的名字 find_utf8 要扫整张名表，一次做完会卡启动。
+    // 每 30 帧只解析 1 个：对不存在的名字 find_utf8 要扫整张名表，一次做完会卡启动。
+    static int tick = 0;
+    if ((++tick % 30) != 0) return;
     for (int n = 0; n < 1 && g_monster_resolve_cursor < kMonsterNameCount; ++n) {
         const char* name = kMonsterNames[g_monster_resolve_cursor++];
         if (name == nullptr) continue;
