@@ -4238,12 +4238,32 @@ static void PeRingPush(std::uintptr_t function, std::uintptr_t object) {
 // 伤害事件里的 victim 是宿主编码过的 UE 对象句柄：低 32 位 = GObjects 下标 + 1，
 // 高 32 位 = serial（见 adapter EncodeObjectHandle）。这里只还原 actor 指针，
 // 序列号由后续「类指针/HP」校验兜底；解不出就跳过这一发，不猜。
+// GObjects 按宿主 registry 布局取对象：items 数组 + 每 chunk 0x10000 项、每项 0x18 字节、
+// 对象指针在项首（profile: itemsOffset 16 / chunkSize 65536 / itemStride 24 / objectOffset 0）。
+// 句柄解码必须用这个布局，才能和宿主索引对齐；访问器函数走的是另一套数组。
+static std::uintptr_t g_gobjects_items = 0;
+
+static void* ObjectAtLayout(std::uint32_t index) {
+    if (g_gobjects_items == 0) return nullptr;
+    const std::uint32_t page = index >> 16;
+    const std::uint32_t slot = index & 0xFFFFu;
+    std::uintptr_t chunk = 0;
+    if (!ue::Reader::SafePtr(g_gobjects_items + static_cast<std::uintptr_t>(page) * 8, &chunk) ||
+        chunk == 0)
+        return nullptr;
+    const std::uintptr_t item = chunk + static_cast<std::uintptr_t>(slot) * 0x18;
+    std::uintptr_t object = 0;
+    if (!ue::Reader::SafePtr(item, &object)) return nullptr;
+    return reinterpret_cast<void*>(object);
+}
+
 static std::uintptr_t ActorFromDamageHandle(AnomalyGenerationHandleV1 handle) {
     if (handle.id == 0) return 0;
     const std::uint32_t raw = static_cast<std::uint32_t>(handle.id & 0xFFFFFFFFull);
     if (raw == 0) return 0;
-    const std::uintptr_t actor =
-        reinterpret_cast<std::uintptr_t>(g_ue.ObjectAt(raw - 1u));
+    std::uintptr_t actor = reinterpret_cast<std::uintptr_t>(ObjectAtLayout(raw - 1u));
+    if (actor < 0x10000)
+        actor = reinterpret_cast<std::uintptr_t>(g_ue.ObjectAt(raw - 1u));
     return actor >= 0x10000 ? actor : 0;
 }
 
@@ -5739,6 +5759,18 @@ bool InitUe(const void* signature_service, const void* names_service) {
     g_sig_addr = (unsigned long long)address;
     g_ue.names = static_cast<const AnomalyUe5NamesServiceV1*>(names_service);
     g_ue.get_object = reinterpret_cast<ue::GetObjFn>(address);
+    // GObjects 的 items 数组指针：访问器首指令 mov rax,[rip+disp] 的 RIP 目标里存着它
+    // （profile: rip-rel32, instructionSize 7, addend -16，即 items 在 FUObjectArray+16）。
+    {
+        __try {
+            const int disp = *reinterpret_cast<const int*>(address + 3);
+            const std::uintptr_t items_addr = address + 7 + (std::intptr_t)disp;
+            std::uintptr_t items = 0;
+            if (ue::Reader::SafePtr(items_addr, &items) && items != 0) g_gobjects_items = items;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_gobjects_items = 0;
+        }
+    }
     {
         std::uintptr_t gaddr = 0;
         AnomalyStringViewV1 gpat{kGWorldSig, std::strlen(kGWorldSig)};
