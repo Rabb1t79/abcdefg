@@ -5532,10 +5532,15 @@ void ReplayApplyStep() {
             std::memcpy(params + 0x08, &t.asc, 8);
             std::memcpy(params + 0x10, &level, 4);
             std::memcpy(params + 0x18, ctx, 0x18);
-            reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
-                                       reinterpret_cast<void*>(g_gea_ufn), params);
-            ++t.applied;
-            ++g_rep_shots;
+            // 空 context 下 GE 只按基础幅度结算（实测约 400/次），玩家真实命中约 900；
+            // 一次 shot 施加 3 次，使回放单发伤害接近原始命中。调这个常量即可改倍率。
+            constexpr int kAppliesPerShot = 3;
+            for (int k = 0; k < kAppliesPerShot; ++k) {
+                reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
+                                           reinterpret_cast<void*>(g_gea_ufn), params);
+                ++t.applied;
+                ++g_rep_shots;
+            }
         }
     }
     g_cap_suppress = 0;
