@@ -4593,9 +4593,14 @@ static const char* const kMonsterNames[] = {
 };
 static std::uint32_t g_monster_ids[256] = {};
 static int g_monster_id_n = 0;
-static void ResolveMonsterIds() {
-    if (g_monster_id_n != 0) return;
-    for (const char* name : kMonsterNames) {
+static int g_monster_resolve_cursor = 0;
+static constexpr int kMonsterNameCount =
+    static_cast<int>(sizeof(kMonsterNames) / sizeof(kMonsterNames[0]));
+static void ResolveMonsterIdsStep() {
+    if (g_ue.names == nullptr) return;
+    // 宿主 find_utf8 对不存在的名字要扫整张名表：179 个一次做完会把启动卡死，分帧做。
+    for (int n = 0; n < 2 && g_monster_resolve_cursor < kMonsterNameCount; ++n) {
+        const char* name = kMonsterNames[g_monster_resolve_cursor++];
         if (name == nullptr) continue;
         std::uint32_t id = 0;
         if (g_ue.NameId(name, &id) && id != 0 && g_monster_id_n < 256)
@@ -5105,6 +5110,7 @@ void MonTrackTick() {
 void AutoTargetTick() {
     if (g_ui_state.damage == 0) { g_cap_on = 0; return; }
     g_cap_on = 1;
+    if (g_gworld_ptr == 0) return;   // 世界还没解析出来：先不请求扫描
     static std::uint64_t next_scan_allowed = 0;
     static std::uint64_t scan_started_ms = 0;
     static std::uint64_t next_refresh_ms = 0;
@@ -5276,7 +5282,15 @@ static void StopHeartbeat() {
 static bool ResolveGeHelpersUiThread() {
     if (g_gec_ufn != 0 && g_gea_ufn != 0) return true;
     const std::uintptr_t src = PlayerAscForApply();
-    if (src < 0x10000) { PushLog("geapply: helpers not resolved (no asc)"); return false; }
+    if (src < 0x10000) {
+        static std::uint64_t next_log = 0;
+        const std::uint64_t now = NowMs();
+        if (now >= next_log) {
+            next_log = now + 2000;
+            PushLog("geapply: helpers not resolved (no asc)");
+        }
+        return false;
+    }
     std::uintptr_t cls = g_cls_asc;
     if (cls < 0x10000) {
         std::uintptr_t c = 0;
@@ -5539,7 +5553,7 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
         std::uint32_t nid = 0;
         if (g_ue.NameId("OnDamaged", &nid) && nid != 0) g_ondmg_nid = nid;
     }
-    ResolveMonsterIds();   // 预设怪名 -> FName id（render 线程，一次）
+    ResolveMonsterIdsStep();   // 预设怪名 -> FName id（render 线程，每帧 2 个）
     {
         const int cfg_damage = g_ui_state.damage;
         const int cfg_chain = g_ui_state.chain;
