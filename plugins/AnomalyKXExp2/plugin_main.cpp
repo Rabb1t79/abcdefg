@@ -131,7 +131,7 @@ void RequestGeScan();
 void ReplayTick();
 void ReplayApplyStep();
 void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, float hp,
-               std::uint64_t victim_id = 0);
+               std::uint64_t victim_id = 0, float ref_dmg = 0.0f);
 void AutoTargetTick();
 void MonTrackTick();
 static constexpr int kMonList = 16;
@@ -173,6 +173,9 @@ struct ReplayTarget {
     int paused;
     int applied;
     int landed;
+    float ref_dmg;      // 最近一次真实命中的 final_damage
+    double dmg_sum;     // 已落地伤害累计（估算每次 apply 的伤害）
+    int applied_sum;    // 与 dmg_sum 对应的 apply 次数
 };
 static constexpr int kMaxReplayTargets = 8;
 static ReplayTarget g_rt[kMaxReplayTargets] = {};
@@ -4243,8 +4246,30 @@ static void PeRingPush(std::uintptr_t function, std::uintptr_t object) {
 // 句柄解码必须用这个布局，才能和宿主索引对齐；访问器函数走的是另一套数组。
 static std::uintptr_t g_gobjects_items = 0;
 
+// 句柄解码的 items 指针要延迟解析：插件在游戏启动早期加载时 GObjects 还没建好，
+// on_load 里读一次会拿到 0，之后所有句柄都解不出来。这里按需重试，成功后缓存。
+static bool ResolveGObjectsItems() {
+    if (g_gobjects_items != 0) return true;
+    const std::uintptr_t fn = static_cast<std::uintptr_t>(g_sig_addr);
+    if (fn < 0x10000) return false;
+    std::uintptr_t items = 0;
+    __try {
+        const int disp = *reinterpret_cast<const int*>(fn + 3);
+        const std::uintptr_t items_addr = fn + 7 + (std::intptr_t)disp;
+        if (!ue::Reader::SafePtr(items_addr, &items) || items == 0) return false;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    g_gobjects_items = items;
+    char b[96];
+    std::snprintf(b, sizeof(b), "ue: gobjects items=0x%llX",
+                  (unsigned long long)g_gobjects_items);
+    PushLog(b);
+    return true;
+}
+
 static void* ObjectAtLayout(std::uint32_t index) {
-    if (g_gobjects_items == 0) return nullptr;
+    if (g_gobjects_items == 0 && !ResolveGObjectsItems()) return nullptr;
     const std::uint32_t page = index >> 16;
     const std::uint32_t slot = index & 0xFFFFu;
     std::uintptr_t chunk = 0;
@@ -4274,10 +4299,12 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
     if (ev.final_damage <= 0) return;
     // 高倍速下回放自己每秒产生上百个伤害事件：victim 句柄与我们记录的一致就直接
     // 认作自喂，不解析对象/名字（O(1)），否则每秒上百次 DecodeName 会拖慢 UI 线程。
+    bool known_target = false;
     for (int i = 0; i < g_rt_n; ++i) {
         if (g_rt[i].victim_id != 0 && g_rt[i].victim_id == ev.victim.id) {
             g_rt[i].last_hit_ms = NowMs();
-            return;
+            known_target = true;
+            break;
         }
     }
     const std::uintptr_t victim = ActorFromDamageHandle(ev.victim);
@@ -4318,8 +4345,29 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
     float hp = 0.0f;
     if (!ReadAscHP(asc, &hp) || hp <= 0.0f) return;
     char name[48] = {0};
-    ObjectClassName(victim, name, sizeof(name));
-    ReplayArm(asc, name, ge, hp, ev.victim.id);
+    if (!known_target) ObjectClassName(victim, name, sizeof(name));
+    // 玩家自己不能进表：受伤事件里玩家也是 victim，进表后 MonTrack 会把它当目标回放。
+    {
+        const std::uintptr_t pasc = PlayerAscForApply();
+        if (pasc >= 0x10000 && asc == pasc) return;
+        if ((name[0] == 'p' || name[0] == 'P') && std::strstr(name, "layer") != nullptr) return;
+    }
+    // 和挑战 boss 走同一条路：把事件解析出的受害者也放进扫描表，由 MonTrackTick
+    // 在 HP 掉血时刻重新读 LastDamageGEDef 再武装（GE 取的是命中当时的那个）。
+    {
+        bool known = false;
+        for (int k = 0; k < g_mon_list_n; ++k) {
+            if (g_mon_list[k] == asc) { known = true; break; }
+        }
+        if (!known && g_mon_list_n < kMonList) {
+            g_mon_list[g_mon_list_n] = asc;
+            std::snprintf(g_mon_list_name[g_mon_list_n], sizeof(g_mon_list_name[0]), "%s",
+                          name[0] ? name : "-");
+            g_mon_list_hp[g_mon_list_n] = hp;
+            ++g_mon_list_n;
+        }
+    }
+    ReplayArm(asc, name, ge, hp, ev.victim.id, static_cast<float>(ev.final_damage));
 }
 
 struct PeNameCount { char name[64]; char obj[48]; int count; };
@@ -5162,6 +5210,17 @@ void AutoTargetTick() {
     if (!need) return;
     if (now < next_scan_allowed) return;
     if (world_changed) PushLog("mon: world changed, rescan");
+    if (world_changed) {
+        // 旧世界的目标是悬空指针：清空回放表和玩家缓存，避免重进世界后继续对已释放的 ASC 施加。
+        g_rt_n = 0;
+        g_shot_clock_ms = 0;
+        g_ge_shots = 0;
+        g_monster_asc = 0;
+        g_player_asc = 0;
+        g_player_pawn = 0;
+        g_player_pawn_ref = 0;
+        PushLog("mon: world changed, cleared targets");
+    }
     RequestMonsterScan();
     next_scan_allowed = now + 3000;   // 扫不到东西也别每帧重扫（旧代码会 300ms 一轮）
     next_refresh_ms = now + 15000;
@@ -5392,7 +5451,7 @@ void ReplayDropTarget(int index) {
 }
 
 void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, float hp,
-               std::uint64_t victim_id) {
+               std::uint64_t victim_id, float ref_dmg) {
     if (asc < 0x10000 || ge_class < 0x10000) return;
     int idx = -1;
     for (int i = 0; i < g_rt_n; ++i) {
@@ -5408,6 +5467,7 @@ void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, fl
     }
     ReplayTarget& t = g_rt[idx];
     if (victim_id != 0) t.victim_id = victim_id;
+    if (ref_dmg > 0.0f) t.ref_dmg = ref_dmg;
     const bool changed = (t.ge_class != ge_class);
     t.last_hit_ms = NowMs();
     if (!changed) {
@@ -5418,6 +5478,8 @@ void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, fl
     t.ge_class = ge_class;
     t.hp = hp;
     t.blocked = 0;
+    t.dmg_sum = 0.0;
+    t.applied_sum = 0;
     if (t.paused != 0) { t.paused = 0; PushLog("replay: resumed"); }
     {
         char b[192];
@@ -5463,6 +5525,8 @@ void ReplayTick() {
             if (delta > 0.5f) {
                 ++t.landed;
                 g_rep_dmg += static_cast<int>(delta);
+                t.dmg_sum += delta;          // 估算“每次 apply 打出多少”
+                t.applied_sum += t.applied;
                 t.blocked = 0;
                 if (t.paused != 0) { t.paused = 0; PushLog("replay: resumed (damage landed)"); }
             } else {
@@ -5503,6 +5567,18 @@ void ReplayTick() {
 
 // Game-thread turn: one context, then one application per live target, so every
 // target of this turn is hit on the same tick.
+static bool SafeReadI32(std::uintptr_t addr, std::int32_t* out) {
+    if (addr < 0x10000 || out == nullptr) return false;
+    __try { *out = *reinterpret_cast<std::int32_t*>(addr); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    return true;
+}
+static bool SafeWriteI32(std::uintptr_t addr, std::int32_t value) {
+    if (addr < 0x10000) return false;
+    __try { *reinterpret_cast<std::int32_t*>(addr) = value; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    return true;
+}
 void ReplayApplyStep() {
     g_ge_req = 0;
     const int shots = g_ge_shots > 0 ? g_ge_shots : 1;
@@ -5523,9 +5599,29 @@ void ReplayApplyStep() {
         unsigned char ctx[0x18] = {0};
         reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
                                    reinterpret_cast<void*>(g_gec_ufn), ctx);
+        // FGameplayEffectContextHandle 首 8 字节是 TSharedPtr 的对象指针（FGameplayEffectContext，
+        // 0x80 字节）。其中 Instigator@+0x08 / EffectCauser@+0x10 / InstigatorASC@+0x34 都是
+        // TWeakObjectPtr（索引+序列号），MakeEffectContext 已按玩家 ASC 填好，强写裸指针会破坏它；
+        // 这里只补能安全写的 AbilityLevel@+0x28（int32），与施加用的 level 保持一致。
+        {
+            std::uintptr_t cobj = 0;
+            std::memcpy(&cobj, ctx, 8);
+            static int ctx_logs = 0;
+            if (ctx_logs < 3) {
+                ++ctx_logs;
+                std::int32_t old_level = -1;
+                SafeReadI32(cobj + 0x28, &old_level);
+                char b[128];
+                std::snprintf(b, sizeof(b), "ue: ctx=0x%llX abilityLevel=%d",
+                              (unsigned long long)cobj, old_level);
+                PushLog(b);
+            }
+            SafeWriteI32(cobj + 0x28, 1);
+        }
         for (int i = 0; i < g_rt_n; ++i) {
             ReplayTarget& t = g_rt[i];
             if (t.asc < 0x10000 || t.ge_class < 0x10000) continue;
+            if (!AscStillValid(t.asc)) continue;   // 目标已释放/换世界：不要对悬空 ASC 施加
             unsigned char params[0x38] = {0};
             const float level = 1.0f;
             std::memcpy(params + 0x00, &t.ge_class, 8);
@@ -5533,14 +5629,11 @@ void ReplayApplyStep() {
             std::memcpy(params + 0x10, &level, 4);
             std::memcpy(params + 0x18, ctx, 0x18);
             // 空 context 下 GE 只按基础幅度结算（实测约 400/次），玩家真实命中约 900；
-            // 一次 shot 施加 3 次，使回放单发伤害接近原始命中。调这个常量即可改倍率。
-            constexpr int kAppliesPerShot = 3;
-            for (int k = 0; k < kAppliesPerShot; ++k) {
-                reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
-                                           reinterpret_cast<void*>(g_gea_ufn), params);
-                ++t.applied;
-                ++g_rep_shots;
-            }
+            // 与挑战 boss 完全一致：每发 shot 只施加一次 GE，不做倍率补偿。
+            reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
+                                       reinterpret_cast<void*>(g_gea_ufn), params);
+            ++t.applied;
+            ++g_rep_shots;
         }
     }
     g_cap_suppress = 0;
