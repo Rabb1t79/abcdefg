@@ -103,16 +103,10 @@ Ctx* g_ctx = nullptr;
 const void* LazyService(const void** slot, const char* id, uint32_t min_version);
 void TryQueryIsGM();
 static void PushLog(const char* text);
-static void CloseLogFile();
 static std::uint64_t NowMs();
 void RegisterDamageConfigSchema();
 void LoadDamageConfig();
-void SaveDamageConfig();
-void StartConfigSaveThread();
-void StopConfigSaveThread();
-void TickReplayEngine();
-static std::uintptr_t ResolvePlayerPawn();
-static std::uint64_t g_cfg_save_due_ms = 0;
+void TickConfigSave();
 void DrawCaptureUi(const AnomalyUiServiceV1* ui);
 void ReleaseCaptureSubscription();
 void ReleaseExecThunk();
@@ -140,7 +134,7 @@ void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, fl
                std::uint64_t victim_id = 0);
 void AutoTargetTick();
 void MonTrackTick();
-static constexpr int kMonList = 32;
+static constexpr int kMonList = 16;
 static std::uintptr_t g_mon_list[kMonList] = {};
 static char g_mon_list_name[kMonList][48] = {};
 static float g_mon_list_hp[kMonList] = {};
@@ -151,10 +145,9 @@ std::uintptr_t PlayerAscForApply();
 void MonTrackTick();
 void StopHeartbeat();
 static bool AscLooksLikeAsc(std::uintptr_t asc);
-static bool AscStillValid(std::uintptr_t asc);
 static std::uintptr_t FindAscInActor(std::uintptr_t act);
 static bool ReadAscHP(std::uintptr_t asc, float* out);
-static bool GeClassLooksValid(std::uintptr_t ge);
+static std::uint32_t g_ondmg_nid = 0;   // "OnDamaged" 的 FName id，由 on_draw 解析
 static std::uintptr_t g_gec_ufn = 0;
 static std::uintptr_t g_gea_ufn = 0;
 static int g_ge_apply_rc = 0;
@@ -207,11 +200,9 @@ static unsigned int g_id_pc = 0, g_id_asc = 0, g_id_vb = 0;
 static unsigned long long g_cls_pc = 0;
 static unsigned long long g_cls_asc = 0;
 static unsigned long long g_cls_vb = 0;
-static unsigned long long g_cls_ge = 0;   // /Script/GameplayAbilities.GameplayEffect
 static unsigned int g_probe_nid = 0;
 static unsigned int g_want_id = 0;
 static int g_draw_count = 0;
-static std::uint64_t g_last_draw_ms = 0;   // 最近一次 on_draw（面板可见）时刻；扫描只在此时进行
 static int g_names_ok = 0;
 void TickFeatures();
 bool InitUe(const void* signature_service, const void* names_service);
@@ -261,7 +252,6 @@ AnomalyStatusV1 ANOMALY_CALL on_load(const AnomalyHostApiV1* host, void** out) {
     ++g_load_count;
     if (!host || !out) return fail(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "host is invalid");
     *out = nullptr;
-    PushLog("on_load: begin");
 
     auto* ctx = new Ctx{};
     ctx->host = host;
@@ -287,7 +277,6 @@ AnomalyStatusV1 ANOMALY_CALL on_load(const AnomalyHostApiV1* host, void** out) {
 
     RegisterDamageConfigSchema();
     LoadDamageConfig();
-    StartConfigSaveThread();
 
     void* unused = nullptr;
     ChronosLoad(host, &unused);
@@ -303,16 +292,10 @@ AnomalyStatusV1 ANOMALY_CALL on_start(void* ctx) { return ctx ? ok() : fail(ANOM
 AnomalyStatusV1 ANOMALY_CALL on_stop(void* ctx, uint32_t) { if (!ctx) return ok(); return ok(); }
 void ANOMALY_CALL on_unload(void* ctx) {
     if (ctx == nullptr) return;
-    StopConfigSaveThread();
-    if (g_cfg_save_due_ms != 0) {
-        g_cfg_save_due_ms = 0;
-        SaveDamageConfig();
-    }
     StopHeartbeat();
     ReleaseCaptureSubscription();
     ReleaseExecThunk();
     ReleaseHooks();
-    CloseLogFile();
     if (ctx == g_ctx) g_ctx = nullptr;
     delete static_cast<Ctx*>(ctx);
 }
@@ -327,9 +310,7 @@ void ANOMALY_CALL on_update(void*, double) {
     TickReverseScan();
     TickWorldScan();
     TickRepeat();
-    // 引擎必须跑在 on_update（Game 线程，宿主只按 started 派发），不能放 on_draw：
-    // 宿主对隐藏的插件窗口直接跳过 Draw，关掉面板后 on_draw 根本不会被调用。
-    TickReplayEngine();
+    TickConfigSave();
     if ((++n % 30) == 0) TickFeatures();
 }
 // 缂備焦鍔栭〃鍛般亹濞戞瑧鈻旈幖娣灩娴犳ê霉閻樻彃顣冲┑顔芥倐楠炩偓濞撴艾锕︾粈鍕煕濞嗘ê鐏￠悗鍨⒐缁嬪﹪宕ㄩ鐑嗗殭闂?anomaly.config闂?
@@ -354,6 +335,7 @@ static int g_damage_schema_ok = 0;
 static int g_cfg_seen_damage = -1;
 static int g_cfg_seen_chain = -1;
 static int g_cfg_seen_replay = -1;
+static std::uint64_t g_cfg_save_due_ms = 0;
 
 static const AnomalyConfigServiceV1* DamageConfigService() {
     if (g_ctx == nullptr || g_ctx->config == nullptr) return nullptr;
@@ -393,13 +375,6 @@ static bool JsonBoolField(const char* doc, const char* key, bool fallback) {
 void RegisterDamageConfigSchema() {
     const auto* cfg = DamageConfigService();
     if (cfg == nullptr) return;
-    {
-        char b[96];
-        std::snprintf(b, sizeof(b), "cfg: service size=%u version=%u",
-                      static_cast<unsigned>(cfg->struct_size),
-                      static_cast<unsigned>(cfg->service_version));
-        PushLog(b);
-    }
     if (!ConfigFieldAvailable(
             cfg, offsetof(AnomalyConfigServiceV1, register_schema) +
                      sizeof(cfg->register_schema)) ||
@@ -480,37 +455,14 @@ void SaveDamageConfig() {
     g_ui_dirty = false;
 }
 
-// 勾选/次数变化后 400ms 落盘。宿主禁止在 game/render 回调里做 plugin state I/O
-// （InvokeStateIoService → IsSynchronousStateIoForbidden），所以写盘放在插件自己的
-// worker 线程里；on_draw 只置时间戳。
-static HANDLE g_cfg_thread = nullptr;
-static volatile LONG g_cfg_stop = 0;
-
-static DWORD WINAPI ConfigSaveThreadProc(LPVOID) {
-    while (g_cfg_stop == 0) {
-        Sleep(200);
-        if (g_cfg_save_due_ms == 0 || NowMs() < g_cfg_save_due_ms) continue;
-        g_cfg_save_due_ms = 0;
-        SaveDamageConfig();
-        g_cfg_seen_damage = g_ui_state.damage;
-        g_cfg_seen_chain = g_ui_state.chain;
-        g_cfg_seen_replay = static_cast<int>(g_ui_state.replay);
-    }
-    return 0;
-}
-
-void StartConfigSaveThread() {
-    if (g_cfg_thread != nullptr) return;
-    g_cfg_stop = 0;
-    g_cfg_thread = CreateThread(nullptr, 0, ConfigSaveThreadProc, nullptr, 0, nullptr);
-}
-
-void StopConfigSaveThread() {
-    if (g_cfg_thread == nullptr) return;
-    g_cfg_stop = 1;
-    WaitForSingleObject(g_cfg_thread, 3000);
-    CloseHandle(g_cfg_thread);
-    g_cfg_thread = nullptr;
+// 勾选/次数变化后 400ms 落盘（on_draw 只置时间戳，真正的写盘放在 on_update）。
+void TickConfigSave() {
+    if (g_cfg_save_due_ms == 0 || NowMs() < g_cfg_save_due_ms) return;
+    g_cfg_save_due_ms = 0;
+    SaveDamageConfig();
+    g_cfg_seen_damage = g_ui_state.damage;
+    g_cfg_seen_chain = g_ui_state.chain;
+    g_cfg_seen_replay = static_cast<int>(g_ui_state.replay);
 }
 
 
@@ -992,16 +944,37 @@ static void ApplyGeCapture(std::uintptr_t object, std::uintptr_t function, void*
 static void SendEventCapture(std::uintptr_t object, std::uintptr_t function, void* parameters);
 static void ApplyTargetCapture(std::uintptr_t function, std::uintptr_t object, void* parameters);
 
+// 直接武装：受害者自己的 OnDamaged 实参里就有伤害 GE 类和它的 ASC，
+// 对“扫描/句柄都拿不到”的 Abyss 类怪同样成立。Game 线程只做指针读取，
+// "OnDamaged" 的 name id 由 on_draw（render 线程）解析后放在 g_ondmg_nid。
+static void OnDamagedArm(std::uintptr_t object, std::uintptr_t function, void* parameters) {
+    if (parameters == nullptr || function == 0 || g_ondmg_nid == 0) return;
+    std::uint32_t fn_nid = 0;
+    if (!ue::Reader::SafeU32(function + 0x18, &fn_nid) || fn_nid != g_ondmg_nid) return;
+    std::uintptr_t ge = 0, ge_class = 0, victim_asc = 0;
+    if (!ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(parameters) + 0x130, &ge) ||
+        ge < 0x10000)
+        return;
+    if (!ue::Reader::SafePtr(ge + 0x10, &ge_class) || ge_class < 0x10000) return;
+    if (!ue::Reader::SafePtr(object + 0x940, &victim_asc) || victim_asc < 0x10000) return;
+    const std::uintptr_t pasc = PlayerAscForApply();
+    if (pasc < 0x10000 || victim_asc == pasc) return;   // 玩家挨打不武装
+    float hp = 0.0f;
+    if (!ReadAscHP(victim_asc, &hp) || hp <= 0.0f) return;
+    ReplayArm(victim_asc, "-", ge_class, hp, 0);
+}
+
 void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t function, void* parameters) {
     ++g_pe_total;
+    OnDamagedArm(object, function, parameters);
     // 杩欓噷鏄涓讳繚璇佺殑 Game 绾跨▼鍥炶皟鍩燂細ProcessEvent 鏂藉姞鍙兘鍦ㄨ繖閲屽仛锛堣 GeApplyStep锛夈€?
     if (g_ge_req != 0) ReplayApplyStep();
     if (g_cap_on != 0) PeRingPush(function, object);
     ApplyTargetCapture(function, object, parameters);
     // 涓嬮潰涓夊鍘嗗彶鎹曡幏鍦?UFunction 鏈В鏋愬墠浼氬姣忎釜浜嬩欢璋冪敤涓€娆?DecodeName锛堝涓?
     // resolve_utf8 鈫?State::mutex锛夈€傚畠浠睘浜庡凡鍏抽棴鐨勫疄楠岃矾寰勶紝榛樿涓嶅惎鐢ㄣ€?
-    OnDamagedCapture(object, function, parameters);
     if (g_legacy_capture != 0) {
+        OnDamagedCapture(object, function, parameters);
         SendEventCapture(object, function, parameters);
         ApplyGeCapture(object, function, parameters);
     }
@@ -1078,12 +1051,6 @@ void TickFeatures() {
             g_resolve.damage = 1;
             g_dmg_fn = df;
         }
-    }
-    // 解析 UGameplayEffect 的 UClass，供 GE 继承链校验（不查名字，Game 线程可用）。
-    if (g_cls_ge == 0) {
-        unsigned int ge_id = FindNameIdByPath("/Script/GameplayAbilities.GameplayEffect");
-        void* ge_cls = ge_id != 0 ? g_ue.FindClassById(ge_id) : nullptr;
-        g_cls_ge = reinterpret_cast<unsigned long long>(ge_cls);
     }
     if (g_id_vb == 0) g_id_vb = FindNameIdByPath("/Script/HTGame.HTVolleyballGameManager");
     unsigned int vb_id = g_id_vb;
@@ -1256,9 +1223,7 @@ void ReleaseHooks() {
 
 static void*  g_rq_args[8] = {nullptr};
 static std::uintptr_t g_player_pawn_ref = 0;
-static std::uintptr_t g_player_asc = 0;   // 施法 ASC（OnDamaged 过滤/回放都要用，声明放前面）
 static std::uintptr_t g_ondmg_ufn = 0;
-static std::uint32_t g_ondmg_nid = 0;   // "OnDamaged" 的 FName id：Game 线程只比 id，不 DecodeName
 static std::uintptr_t g_od_recv = 0;
 static unsigned char  g_od_params[0x148] = {0};
 static int g_od_remaining = 0;
@@ -1320,32 +1285,21 @@ static constexpr bool kReplayExec = false;
 
 // ===== OnDamaged 闂佺顫夊ú婵嬬嵁?+ 闂佸湱顭堥ˇ鏉款渻閸岀偞鈷掗柟缁㈠枛濞呫垽鏌￠埀顒勫箻閸涱垳顦╅梺鍦暯閸嬫捇鏌￠崼婵愭Ш閻㈩垵娅ｉ埀顒傤攰閸╂牕顭囬棃娑掓敠闁归偊浜濈缓娲倵閸︻収鍔滅紒杈ㄧ箖缁嬪顓奸崼銏㈢暫濠电姴顭堥崐妤冩偖椤愶箑绀嗘い鎰靛墰缁€?====
 static void OnDamagedCapture(std::uintptr_t object, std::uintptr_t function, void* parameters) {
-    if (parameters == nullptr || function == 0) return;
-    // name id 由 on_draw（render 线程）解析好；这里只做整数比较，不碰宿主 names 服务。
-    if (g_ondmg_nid == 0) return;
-    std::uint32_t fn_nid = 0;
-    if (!ue::Reader::SafeU32(function + 0x18, &fn_nid) || fn_nid != g_ondmg_nid) return;
+    if (parameters == nullptr || function == 0 || g_player_pawn_ref < 0x10000) return;
+    if (g_ondmg_ufn == 0) {
+        unsigned int nid = 0;
+        char nm[48] = {0};
+        if (!ue::Reader::SafeU32(function + 0x18, &nid)) return;
+        DecodeName(nid, nm, sizeof(nm));
+        if (std::strcmp(nm, "OnDamaged") != 0) return;
+        g_ondmg_ufn = function;
+        PushLog("ondmg: ufn resolved");
+    }
+    if (function != g_ondmg_ufn) return;
     std::uintptr_t inst = 0, causer = 0;
     ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(parameters) + 0x138, &inst);
     ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(parameters) + 0x140, &causer);
-    if (g_player_pawn_ref >= 0x10000 && inst != g_player_pawn_ref && causer != g_player_pawn_ref)
-        return;
-    // 直接武装：受害者自己的 OnDamaged 实参里就有伤害 GE 和它的 ASC，不需要句柄/扫描/名字。
-    {
-        std::uintptr_t ge = 0, ge_class = 0, victim_asc = 0;
-        if (ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(parameters) + 0x130, &ge) &&
-            ge >= 0x10000 &&
-            ue::Reader::SafePtr(ge + 0x10, &ge_class) && ge_class >= 0x10000 &&
-            ue::Reader::SafePtr(object + 0x940, &victim_asc) && victim_asc >= 0x10000 &&
-            g_player_asc >= 0x10000 && victim_asc != g_player_asc) {
-            float hp = 0.0f;
-            if (ReadAscHP(victim_asc, &hp) && hp > 0.0f && GeClassLooksValid(ge_class)) {
-                ReplayArm(victim_asc, "-", ge_class, hp, 0);
-                PushLog("ondmg: armed victim from OnDamaged args");
-            }
-        }
-    }
-    if (g_legacy_capture == 0) return;
+    if (inst != g_player_pawn_ref && causer != g_player_pawn_ref) return;
     std::memcpy(g_od_params, parameters, sizeof(g_od_params));
     g_od_recv = object;
     // OnDamaged 闂佸憡鐟ラ崐褰掑汲閻旂儤鏆滈柛鎰╁妿濠€浼存煥濞戞ɑ绠絋Game_parameters.hpp闂?x148闂佹寧绋戦¨鈧紒?
@@ -1668,7 +1622,6 @@ static int g_fn_sel = -1;
 // 闂佸湱绮敮濠傗枎閵忋倕绀冮柛娑卞枟閿涘鐓崶顭戞缂佽鲸鐟╅幃娆掋亹閹哄棗浜?GE 闂佸搫鍟崕濂稿吹濠婂牆绀夐柕濞垮妽鐎氬綊鏌涢弮鍌毿＄紒鏂款嚟閹澘鐣濈€ｎ剛顦?
 static char g_log[32][96];
 static int g_log_n = 0;
-static char g_log_path[MAX_PATH] = {0};
 
 static void PushLog(const char* text) {
     if (text == nullptr) return;
@@ -1679,24 +1632,21 @@ static void PushLog(const char* text) {
         for (int i = 1; i < 32; ++i) std::memcpy(g_log[i - 1], g_log[i], sizeof(g_log[0]));
         std::snprintf(g_log[31], sizeof(g_log[0]), "%s", text);
     }
-    if (g_log_path[0] == 0) {
-        char path[MAX_PATH] = {0};
-        if (GetModuleFileNameA(nullptr, path, MAX_PATH) == 0) return;
+    // 闂佸憡鑹鹃張顒€顪冮崒娑欎氦闁芥ê顦～锝夋煕閹烘柨顣奸柣鏍х埣楠炲绠涢弴鐔虹崶閻?kx_log.txt闂佹寧绋戦悧鍛矚閼哥數顩查幖杈剧秵閻庤尙绱掗幑鎰《缂併劏娉曞☉鐢割敊濞嗘儳娈洪梺鍛婄懄閻楊厾妲?
+    char path[MAX_PATH] = {0};
+    if (GetModuleFileNameA(nullptr, path, MAX_PATH) != 0) {
         char* slash = std::strrchr(path, '\\');
-        if (slash == nullptr) return;
-        *slash = 0;
-        std::snprintf(g_log_path, sizeof(g_log_path), "%s\\kx_log.txt", path);
+        if (slash != nullptr) {
+            *slash = 0;
+            char file[MAX_PATH + 32];
+            std::snprintf(file, sizeof(file), "%s\\kx_log.txt", path);
+            FILE* fp = std::fopen(file, "a");
+            if (fp != nullptr) {
+                std::fprintf(fp, "%s\n", text);
+                std::fclose(fp);
+            }
+        }
     }
-    // 每行开关文件：常开句柄会让热重载后的新 generation（以及外部工具）打不开日志；
-    // 现在扫描已删除、日志量很小，开关一次的开销可以接受。
-    FILE* fp = std::fopen(g_log_path, "a");
-    if (fp == nullptr) return;
-    std::fprintf(fp, "%s\n", text);
-    std::fclose(fp);
-}
-
-static void CloseLogFile() {
-    // 日志改为每行开关，无需在卸载时关闭句柄。
 }
 
 void ProbeFunctionsService() {
@@ -2919,6 +2869,7 @@ static int g_asc_dead = 0;
 static std::uintptr_t g_monster_asc = 0;
 static std::uintptr_t g_player_pawn = 0;   // MonScan 椤烘墜鎹炲埌鐨勭帺瀹?pawn锛堜笉渚濊禆 world鈫扜I 閾撅級
 static std::uintptr_t g_player_source = 0;
+static std::uintptr_t g_player_asc = 0;
 
 static int g_asc_mode = 0;
 static int g_rev_phase = 0;
@@ -4133,21 +4084,6 @@ static std::uintptr_t g_pend_func = 0;
 static const char*    g_pend_name = nullptr;
 static int            g_pend_fresh = 0;
 
-// Render thread (StoreCapture already resolved the GE class name) -> game thread mailbox:
-// the real apply call carries the target ASC and the GE class pointer, which is the one
-// ground truth that does not depend on the broken object handle decode.
-static std::uintptr_t g_arm_ge = 0;
-static std::uintptr_t g_arm_asc = 0;
-static std::uintptr_t g_arm_recv = 0;
-static volatile LONG g_arm_seq = 0;
-static LONG g_arm_seen = 0;
-static void QueueArmFromCapture(std::uintptr_t ge, std::uintptr_t asc, std::uintptr_t recv) {
-    g_arm_ge = ge;
-    g_arm_asc = asc;
-    g_arm_recv = recv;
-    InterlockedIncrement(&g_arm_seq);
-}
-
 static void PendCapture(const unsigned char* raw, std::uintptr_t receiver,
                         std::uintptr_t function, const char* name) {
     std::memcpy(g_pend_raw, raw, sizeof(g_pend_raw));
@@ -4187,14 +4123,6 @@ static void StoreCapture(const unsigned char* raw, std::uintptr_t receiver,
     c.ev = raw[0x68];
     c.hp_ok = ReadAscHP(c.target_asc, &c.hp) ? 1 : 0;
     c.ms = NowMs();
-    // 玩家技能真正落到怪身上的那一次 apply：把 GE 类 + 目标 ASC 交给游戏线程武装。
-    // 只收名字像伤害的 GE，且目标不是玩家自己；自己回放的 apply 由 g_cap_suppress 挡掉。
-    if (g_ui_state.damage != 0 && c.ge_class >= 0x10000 && c.target_asc >= 0x10000 &&
-        c.hp > 0.0f &&
-        (std::strstr(c.ge, "Dmg") != nullptr || std::strstr(c.ge, "Damage") != nullptr ||
-         std::strstr(c.ge, "dmg") != nullptr)) {
-        QueueArmFromCapture(c.ge_class, c.target_asc, c.receiver);
-    }
     // FBufData.DynamicGrantedTags @ raw+0x18锛欶GameplayTagContainer = 涓や釜 TArray
     {
         std::uintptr_t data = 0;
@@ -4300,7 +4228,7 @@ static void ConsumePendingCapture() {
 // 涔嬫墍浠ラ渶瑕佸畠锛氳矾绾?A 鐨勮闃呮椿鐫€锛坧e: total 鍦ㄦ定锛変絾 caphit 涓€鐩存槸 0锛岃鏄庢父鎴忔牴鏈?
 // 涓嶈蛋閭?8 涓?Apply* UFunction 鏉ユ寕浼ゅ銆傚洖璋冮噷鍙啓涓や釜鎸囬拡锛堜笉纰板涓绘湇鍔★級锛?
 // 瑙﹀彂鐐圭敤瀹夸富鑷繁鐨勪激瀹充簨浠舵祦锛圕haracterOnDamaged 閽╁瓙锛夛紝鍚嶅瓧鍦?on_draw 閲岃В鏋愩€?
-static constexpr int kPeRing = 256;
+static constexpr int kPeRing = 4096;
 static std::uintptr_t g_pe_ring_fn[kPeRing];
 static std::uintptr_t g_pe_ring_obj[kPeRing];
 static unsigned long long g_pe_ring_seq = 0;
@@ -4319,120 +4247,20 @@ static void PeRingPush(std::uintptr_t function, std::uintptr_t object) {
 // 伤害事件里的 victim 是宿主编码过的 UE 对象句柄：低 32 位 = GObjects 下标 + 1，
 // 高 32 位 = serial（见 adapter EncodeObjectHandle）。这里只还原 actor 指针，
 // 序列号由后续「类指针/HP」校验兜底；解不出就跳过这一发，不猜。
-// 宿主句柄的打包方式用本地玩家 pawn 在线校准：这版 Core 的 id 高低 32 位含义与
-// 仓库源码里的 EncodeObjectHandle(serial<<32 | index+1) 不一定一致，直接按低 32 位
-// 取下标会解到别的对象（日志里 boss 的 victim 被解成座椅/0x0 就是这个原因）。
-static int g_handle_pack = 0;   // 0=未校准, 1=低32位是 index+1, 2=高32位是 index+1
-
-static std::uintptr_t DecodeHandleWithPack(std::uint64_t id, int pack) {
-    if (id == 0) return 0;
-    const std::uint32_t raw = (pack == 2)
-        ? static_cast<std::uint32_t>(id >> 32)
-        : static_cast<std::uint32_t>(id & 0xFFFFFFFFull);
-    if (raw == 0) return 0;
-    const std::uintptr_t obj = reinterpret_cast<std::uintptr_t>(g_ue.ObjectAt(raw - 1u));
-    return obj >= 0x10000 ? obj : 0;
-}
-
-static bool ObjectLooksLikeCharacter(std::uintptr_t obj) {
-    if (obj < 0x10000) return false;
-    std::uintptr_t asc = 0;
-    if (ue::Reader::SafePtr(obj + 0x940, &asc) && AscLooksLikeAsc(asc)) return true;
-    return FindAscInActor(obj) >= 0x10000;
-}
-
 static std::uintptr_t ActorFromDamageHandle(AnomalyGenerationHandleV1 handle) {
     if (handle.id == 0) return 0;
-    if (g_handle_pack != 0) return DecodeHandleWithPack(handle.id, g_handle_pack);
-    // 未校准：两种打包都解一次，优先能当角色用的那个。
-    const std::uintptr_t low = DecodeHandleWithPack(handle.id, 1);
-    const std::uintptr_t high = DecodeHandleWithPack(handle.id, 2);
-    if (high >= 0x10000 && ObjectLooksLikeCharacter(high)) return high;
-    if (low >= 0x10000) return low;
-    return high;
-}
-
-// 武装失败原因诊断（前 10 次）：v=victim actor, asc=解析出的 ASC, ge=LastDamageGEDef 的类,
-// hp=读到的当前 HP。只在真的没武装时打一行，不会刷屏。
-static void PendArm(std::uintptr_t victim, std::uintptr_t asc, std::uint64_t victim_id);
-static int g_arm_diag = 0;
-
-// 记录武装失败/成功的 victim 指针，等 on_draw（render 线程）再解析类名——
-// Game 线程不能调 DecodeName。
-struct ArmDbgRec { std::uintptr_t victim; std::uintptr_t cls; int code; };
-static ArmDbgRec g_arm_dbg[12] = {};
-static int g_arm_dbg_n = 0;
-
-static void ArmDbgPush(std::uintptr_t victim, int code) {
-    if (g_arm_dbg_n >= 12) return;
-    std::uintptr_t cls = 0;
-    if (victim >= 0x10000) ue::Reader::SafePtr(victim + 0x10, &cls);
-    ArmDbgRec& r = g_arm_dbg[g_arm_dbg_n++];
-    r.victim = victim;
-    r.cls = cls;
-    r.code = code;
-}
-static void ArmDiag(const char* why, std::uintptr_t victim, std::uintptr_t asc,
-                    std::uintptr_t ge, float hp) {
-    if (g_arm_diag >= 10) return;
-    ++g_arm_diag;
-    char b[192];
-    std::snprintf(b, sizeof(b), "arm[%d]: %s v=0x%llX asc=0x%llX ge=0x%llX hp=%.0f",
-                  g_arm_diag, why, (unsigned long long)victim, (unsigned long long)asc,
-                  (unsigned long long)ge, hp);
-    PushLog(b);
-}
-
-// 放宽 ASC 校验后（+0x940 用 HP 布局兜底）必须再验一次 GE 的继承链，防止把某个
-// 恰好长得像 HP 的组件当成 ASC、再拿垃圾指针去 apply。这里不查名字（Game 线程禁止
-// DecodeName），只沿 SuperStruct 比对缓存的 GameplayEffect UClass。
-static bool GeClassLooksValid(std::uintptr_t ge) {
-    if (ge < 0x10000) return false;
-    if (g_cls_ge < 0x10000) return true;   // 还没解析到基类：放行，后续 UI 线程会补
-    std::uintptr_t cls = ge;
-    for (int depth = 0; depth < 10 && cls >= 0x10000; ++depth) {
-        if (cls == static_cast<std::uintptr_t>(g_cls_ge)) return true;
-        std::uintptr_t super = 0;
-        if (!ue::Reader::SafePtr(cls + 0x40, &super) || super < 0x10000) break;
-        cls = super;
-    }
-    return false;
-}
-
-// 事件真值诊断：宿主自己怎么称呼这一发的 victim / 伤害来源。用来判定到底是
-// 宿主把命中对象记错了，还是我们的句柄解码错了（participant_path_utf8 / source_name_utf8）。
-static int g_evt_diag = 0;
-static void EventDiag(const AnomalyNteDamageEventV1& ev) {
-    if (g_evt_diag >= 12 || g_ctx == nullptr || g_ctx->nte_combat == nullptr) return;
-    const auto* combat = static_cast<const AnomalyNteCombatServiceV1*>(g_ctx->nte_combat);
-    if (combat->participant_path_utf8 == nullptr) return;
-    ++g_evt_diag;
-    char vp[192] = {0};
-    char src[128] = {0};
-    std::size_t vn = sizeof(vp) - 1;
-    std::size_t sn = sizeof(src) - 1;
-    combat->participant_path_utf8(combat->user, ev.victim, vp, &vn);
-    vp[vn < sizeof(vp) ? vn : sizeof(vp) - 1] = 0;
-    if (combat->source_name_utf8 != nullptr && ev.source_id != 0) {
-        combat->source_name_utf8(combat->user, ev.source_id, src, &sn);
-        src[sn < sizeof(src) ? sn : sizeof(src) - 1] = 0;
-    }
-    char b[420];
-    std::snprintf(b, sizeof(b),
-                  "evt[%d]: seq=%llu final=%lld vid=0x%llX aid=0x%llX sid=%llu vpath=%s src=%s",
-                  g_evt_diag, (unsigned long long)ev.sequence,
-                  static_cast<long long>(ev.final_damage),
-                  (unsigned long long)ev.victim.id, (unsigned long long)ev.attacker.id,
-                  (unsigned long long)ev.source_id, vp[0] ? vp : "-", src[0] ? src : "-");
-    PushLog(b);
+    const std::uint32_t raw = static_cast<std::uint32_t>(handle.id & 0xFFFFFFFFull);
+    if (raw == 0) return 0;
+    const std::uintptr_t actor =
+        reinterpret_cast<std::uintptr_t>(g_ue.ObjectAt(raw - 1u));
+    return actor >= 0x10000 ? actor : 0;
 }
 
 // 事件驱动武装（KB 11.10 的第 1、2 条）：这一击打中谁，就取谁的
 // LastDamageGEDef(0x2378) → +0x10 的 UClass 作为回放 GE，连同当前 HP 记进回放表。
 // 自喂（回放自己造成的伤害）由 ReplayArm 的「同一 victim + 同一 GE」短路挡掉。
-static void ArmFromDamageEventLegacy(const AnomalyNteDamageEventV1& ev) {
+static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
     if (ev.final_damage <= 0) return;
-    EventDiag(ev);
     // 高倍速下回放自己每秒产生上百个伤害事件：victim 句柄与我们记录的一致就直接
     // 认作自喂，不解析对象/名字（O(1)），否则每秒上百次 DecodeName 会拖慢 UI 线程。
     for (int i = 0; i < g_rt_n; ++i) {
@@ -4441,285 +4269,23 @@ static void ArmFromDamageEventLegacy(const AnomalyNteDamageEventV1& ev) {
             return;
         }
     }
-    const std::uintptr_t local = ResolvePlayerPawn();
-    if (g_handle_pack == 0 && ev.attacker.id != 0 && local >= 0x10000) {
-        // 攻击者通常就是本地玩家 pawn：用它作为句柄打包方式的地面真值。
-        if (DecodeHandleWithPack(ev.attacker.id, 1) == local) {
-            g_handle_pack = 1;
-            PushLog("decode: handle pack = low(index+1)");
-        } else if (DecodeHandleWithPack(ev.attacker.id, 2) == local) {
-            g_handle_pack = 2;
-            PushLog("decode: handle pack = high(index+1)");
-        }
-    }
-    const std::uintptr_t attacker = ActorFromDamageHandle(ev.attacker);
-    // 攻击者就是本地玩家时，顺手刷新施法 ASC。这是"换地图/换角色后不用手动刷新"的关键：
-    // 旧版靠 MonScan 写 g_player_asc 且不再校验，多玩家场景会串到别的玩家身上。
-    if (local >= 0x10000 && attacker == local) {
-        std::uintptr_t src_asc = 0;
-        if (ue::Reader::SafePtr(attacker + 0x940, &src_asc) && AscLooksLikeAsc(src_asc) &&
-            src_asc != g_player_asc) {
-            g_player_asc = src_asc;
-            g_player_pawn = local;
-            PushLog("player: caster refreshed from local pawn");
-        }
-    } else if (g_player_asc < 0x10000 && attacker >= 0x10000) {
-        // 兜底：world→GI→LocalPlayer 链偶尔解析不出来（开局那几帧），先拿这一发的攻击者
-        // 当初始施法 ASC；一旦能识别本地玩家就会被上面的分支纠正。
-        std::uintptr_t src_asc = 0;
-        if (ue::Reader::SafePtr(attacker + 0x940, &src_asc) && AscLooksLikeAsc(src_asc)) {
-            g_player_asc = src_asc;
-            g_player_pawn = attacker;
-            PushLog("player: caster bootstrapped from attacker");
-        }
-    }
     const std::uintptr_t victim = ActorFromDamageHandle(ev.victim);
-    if (victim < 0x10000) { ArmDiag("no-victim", 0, 0, 0, 0.0f); ArmDbgPush(0, 1); return; }
-    if (victim == local || victim == g_player_pawn || victim == g_player_pawn_ref) {
-        ArmDiag("self", victim, 0, 0, 0.0f);
-        ArmDbgPush(victim, 0);
-        return;
-    }
+    if (victim < 0x10000) return;
+    if (victim == g_player_pawn || victim == g_player_pawn_ref) return;
     std::uintptr_t asc = 0;
     if (!ue::Reader::SafePtr(victim + 0x940, &asc) || !AscLooksLikeAsc(asc))
         asc = FindAscInActor(victim);
-    if (asc < 0x10000) {                     // 建筑 / 载具 / 没有 ASC 的普通 NPC
-        ArmDiag("no-asc", victim, asc, 0, 0.0f);
-        ArmDbgPush(victim, 2);
-        return;
-    }
-    if (asc == g_player_asc) {               // 不把玩家自己当回放目标
-        ArmDiag("caster-target", victim, asc, 0, 0.0f);
-        ArmDbgPush(victim, 3);
-        return;
-    }
+    if (asc < 0x10000) return;
     const std::uintptr_t ge = LastDamageGeClass(asc);
-    if (ge < 0x10000 || !GeClassLooksValid(ge)) {   // 目标身上没有伤害 GE（普通 NPC 等）
-        ArmDiag("no-ge", victim, asc, ge, 0.0f);
-        ArmDbgPush(victim, 4);
-        PendArm(victim, asc, ev.victim.id);
-        return;
-    }
+    if (ge < 0x10000) return;
     float hp = 0.0f;
-    if (!ReadAscHP(asc, &hp) || hp <= 0.0f) {
-        ArmDiag("no-hp", victim, asc, ge, hp);
-        ArmDbgPush(victim, 5);
-        return;
-    }
-    ArmDbgPush(victim, 100);
-    ReplayArm(asc, "-", ge, hp, ev.victim.id);
-}
-
-// ---- host-anchored participant resolution ------------------------------------------
-// 这版 Core 的对象句柄解出来的不是目标 actor（日志里 boss 的 victim 被解成座椅/单元格），
-// 但宿主 participant_path_utf8 给出的 actor 路径是可信的，末段就是类名。按类名在
-// GObjects 里找实例（对象 +0x10 的类对象的 FName id 等于类名 id），结果按类缓存。
-struct PathNameCache { std::uint64_t id; char name[64]; };
-static PathNameCache g_path_names[8] = {};
-static bool BuildMonsterLevelList(std::uintptr_t world);
-static int g_mon_level_n = 0;
-static std::uintptr_t g_mon_levels[64] = {};
-
-static bool ClassNameIsPlayer(const char* name) {
-    return name != nullptr && (name[0] == 'p' || name[0] == 'P') &&
-        std::strstr(name, "layer") != nullptr;
-}
-
-static void CombatParticipantClassName(AnomalyGenerationHandleV1 h, char* out, std::size_t cap) {
-    if (out == nullptr || cap == 0) return;
-    out[0] = 0;
-    if (h.id == 0 || g_ctx == nullptr || g_ctx->nte_combat == nullptr) return;
-    for (int i = 0; i < 8; ++i) {
-        if (g_path_names[i].id == h.id) {
-            std::snprintf(out, cap, "%s", g_path_names[i].name);
-            return;
-        }
-    }
-    const auto* combat = static_cast<const AnomalyNteCombatServiceV1*>(g_ctx->nte_combat);
-    if (combat->participant_path_utf8 == nullptr) return;
-    char path[192] = {0};
-    std::size_t size = sizeof(path) - 1;
-    if (combat->participant_path_utf8(combat->user, h, path, &size).code != ANOMALY_STATUS_V1_OK)
-        return;
-    path[size < sizeof(path) ? size : sizeof(path) - 1] = 0;
-    const char* dot = std::strrchr(path, '.');
-    const char* name = dot != nullptr ? dot + 1 : std::strrchr(path, '/');
-    if (name == nullptr) name = path;
-    std::snprintf(out, cap, "%s", name);
-    for (int i = 0; i < 8; ++i) {
-        if (g_path_names[i].id == 0 || g_path_names[i].id == h.id) {
-            g_path_names[i].id = h.id;
-            std::snprintf(g_path_names[i].name, sizeof(g_path_names[i].name), "%s", name);
-            break;
-        }
-    }
-}
-
-// The host resolves the handle correctly (participant_path_utf8 proves it) even though the
-// plugin cannot turn it into a pointer. snapshot_by_handle returns the object's own FName
-// id; match that against the level actor arrays, whose pointers are trustworthy, instead of
-// walking GObjects through the wrong accessor.
-static std::uint32_t HostNameIdForHandle(AnomalyGenerationHandleV1 h) {
-    if (h.id == 0 || g_ctx == nullptr || g_ctx->ue5_objects == nullptr) return 0;
-    const auto* objs = static_cast<const AnomalyUe5ObjectsServiceV1*>(g_ctx->ue5_objects);
-    if (objs->snapshot_by_handle == nullptr) return 0;
-    AnomalyUe5ObjectSnapshotV1 snap{};
-    snap.struct_size = sizeof(snap);
-    if (objs->snapshot_by_handle(objs->user, h, &snap).code != ANOMALY_STATUS_V1_OK) return 0;
-    return snap.name_id;
-}
-
-static std::uintptr_t FindActorByNameId(std::uint32_t nid) {
-    if (nid == 0) return 0;
-    for (int lv = 0; lv < g_mon_level_n; ++lv) {
-        std::uintptr_t arr = 0;
-        unsigned int num = 0;
-        if (!ue::Reader::SafePtr(g_mon_levels[lv] + 0xA0, &arr) ||
-            !ue::Reader::SafeU32(g_mon_levels[lv] + 0xA8, &num) ||
-            arr < 0x10000 || num == 0) continue;
-        const unsigned int cap = num < 6000u ? num : 6000u;
-        for (unsigned int i = 0; i < cap; ++i) {
-            std::uintptr_t act = 0;
-            if (!ue::Reader::SafePtr(arr + 8ull * i, &act) || act < 0x10000) continue;
-            std::uint32_t own = 0;
-            if (!ue::Reader::SafeU32(act + 0x18, &own) || own != nid) continue;
-            return act;
-        }
-    }
-    return 0;
-}
-
-static std::uintptr_t ResolveParticipantByPath(AnomalyGenerationHandleV1 h, bool require_ge,
-                                               std::uintptr_t* asc_out) {
-    if (asc_out != nullptr) *asc_out = 0;
-    const std::uint32_t nid = HostNameIdForHandle(h);
-    if (nid == 0) return 0;
-    if (g_mon_level_n == 0) {
-        const std::uintptr_t world = ReadWorldFresh();
-        if (world >= 0x10000) BuildMonsterLevelList(world);
-    }
-    std::uintptr_t actor = FindActorByNameId(nid);
-    if (actor < 0x10000) {
-        // Level list may be stale (map switch): rebuild once and retry.
-        g_mon_level_n = 0;
-        const std::uintptr_t world = ReadWorldFresh();
-        if (world >= 0x10000 && BuildMonsterLevelList(world)) actor = FindActorByNameId(nid);
-    }
-    if (actor < 0x10000) return 0;
-    std::uintptr_t asc = 0;
-    if (!ue::Reader::SafePtr(actor + 0x940, &asc) || !AscLooksLikeAsc(asc))
-        asc = FindAscInActor(actor);
-    if (asc < 0x10000) return 0;
-    float hp = 0.0f;
-    if (!ReadAscHP(asc, &hp) || hp <= 0.0f) return 0;
-    if (require_ge) {
-        const std::uintptr_t ge = LastDamageGeClass(asc);
-        if (ge < 0x10000 || !GeClassLooksValid(ge)) return 0;
-    }
-    if (asc_out) *asc_out = asc;
-    return actor;
-}
-
-// 事件驱动武装（Game 线程）：只做指针读取。宿主 names/objects 服务要取 State 锁，
-// 不能在 PE 回调/Game 线程里调，否则会卡死；名字解析一律留给 on_draw。
-static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
-    if (ev.final_damage <= 0) return;
-    for (int i = 0; i < g_rt_n; ++i) {
-        if (g_rt[i].victim_id != 0 && g_rt[i].victim_id == ev.victim.id) {
-            g_rt[i].last_hit_ms = NowMs();
-            return;
-        }
-    }
-    std::uintptr_t victim = ActorFromDamageHandle(ev.victim);
-    std::uintptr_t asc = 0;
-    if (victim >= 0x10000) {
-        if (!ue::Reader::SafePtr(victim + 0x940, &asc) || !AscLooksLikeAsc(asc))
-            asc = FindAscInActor(victim);
-    }
-    std::uintptr_t ge = asc >= 0x10000 ? LastDamageGeClass(asc) : 0;
-    if (victim < 0x10000) {
-        ArmDiag("no-victim", 0, 0, 0, 0.0f);
-        ArmDbgPush(0, 1);
-        return;
-    }
-    if (asc < 0x10000) {
-        ArmDiag("no-asc", victim, asc, ge, 0.0f);
-        ArmDbgPush(victim, 2);
-        return;
-    }
-    if (asc == g_player_asc) {
-        ArmDiag("caster-target", victim, asc, ge, 0.0f);
-        ArmDbgPush(victim, 3);
-        return;
-    }
-    if (ge < 0x10000 || !GeClassLooksValid(ge)) {
-        ArmDiag("no-ge", victim, asc, ge, 0.0f);
-        ArmDbgPush(victim, 4);
-        PendArm(victim, asc, ev.victim.id);
-        return;
-    }
-    float hp = 0.0f;
-    if (!ReadAscHP(asc, &hp) || hp <= 0.0f) {
-        ArmDiag("no-hp", victim, asc, ge, hp);
-        ArmDbgPush(victim, 5);
-        return;
-    }
-    ArmDbgPush(victim, 100);
-    ReplayArm(asc, "-", ge, hp, ev.victim.id);
+    if (!ReadAscHP(asc, &hp) || hp <= 0.0f) return;
+    char name[48] = {0};
+    ObjectClassName(victim, name, sizeof(name));
+    ReplayArm(asc, name, ge, hp, ev.victim.id);
 }
 
 struct PeNameCount { char name[64]; char obj[48]; int count; };
-
-// LastDamageGEDef 偶尔比伤害事件晚一帧写入；no-ge 时把 victim 挂起，100ms 后重试，
-// 最多 800ms。这样"打一下、GE 晚到"的情况也能武装，不依赖扫描。
-struct PendingArm {
-    std::uint64_t victim_id;
-    std::uintptr_t asc;
-    std::uint64_t due_ms;
-    int tries;
-    char name[48];
-};
-static PendingArm g_pending_arm[4] = {};
-static int g_pending_arm_n = 0;
-
-static void PendArm(std::uintptr_t victim, std::uintptr_t asc, std::uint64_t victim_id) {
-    if (victim < 0x10000 || asc < 0x10000) return;
-    const std::uint64_t now = NowMs();
-    for (int i = 0; i < g_pending_arm_n; ++i) {
-        if (g_pending_arm[i].asc == asc) { g_pending_arm[i].due_ms = now + 100; return; }
-    }
-    if (g_pending_arm_n >= 4) return;
-    PendingArm& p = g_pending_arm[g_pending_arm_n++];
-    p.victim_id = victim_id;
-    p.asc = asc;
-    p.due_ms = now + 100;
-    p.tries = 0;
-    std::snprintf(p.name, sizeof(p.name), "%s", "-");
-    static_cast<void>(victim);
-}
-
-static void TickPendingArms() {
-    if (g_pending_arm_n == 0) return;
-    const std::uint64_t now = NowMs();
-    for (int i = 0; i < g_pending_arm_n; ) {
-        PendingArm& p = g_pending_arm[i];
-        if (now < p.due_ms) { ++i; continue; }
-        ++p.tries;
-        p.due_ms = now + 100;
-        const std::uintptr_t ge = AscStillValid(p.asc) ? LastDamageGeClass(p.asc) : 0;
-        float hp = 0.0f;
-        if (ge >= 0x10000 && GeClassLooksValid(ge) && ReadAscHP(p.asc, &hp) && hp > 0.0f) {
-            ReplayArm(p.asc, p.name, ge, hp, p.victim_id);
-            g_pending_arm[i] = g_pending_arm[--g_pending_arm_n];
-            continue;
-        }
-        if (p.tries >= 8) {
-            g_pending_arm[i] = g_pending_arm[--g_pending_arm_n];
-            continue;
-        }
-        ++i;
-    }
-}
 
 // 高倍速下（例如 100 发/秒）每帧要清掉积压的伤害事件，否则宿主 512 条的环会溢出、
 // next_damage_event 直接返回 NOT_FOUND，武装就永久停摆。expired 时用 latest 重新对齐。
@@ -4791,24 +4357,12 @@ static void CensusTick() {
     ArmFromDamageEvent(ev);
     ++g_census_hits;
     char b[256];
-    const std::uintptr_t diag_victim = ActorFromDamageHandle(ev.victim);
-    std::uintptr_t diag_asc = 0;
-    if (diag_victim >= 0x10000) {
-        if (!ue::Reader::SafePtr(diag_victim + 0x940, &diag_asc) || !AscLooksLikeAsc(diag_asc))
-            diag_asc = FindAscInActor(diag_victim);
-    }
-    const std::uintptr_t diag_ge = LastDamageGeClass(diag_asc);
-    char dn[64] = {0};
-    std::snprintf(b, sizeof(b),
-                  "hit[%d]: seq=%llu final=%lld victim=0x%llX asc=0x%llX ge=0x%llX",
+    std::snprintf(b, sizeof(b), "hit[%d]: seq=%llu dmg=%lld basic=%lld final=%lld flags=0x%X",
                   g_census_hits, (unsigned long long)ev.sequence,
-                  static_cast<long long>(ev.final_damage),
-                  (unsigned long long)diag_victim, (unsigned long long)diag_asc,
-                  (unsigned long long)diag_ge);
+                  static_cast<long long>(ev.display_damage),
+                  static_cast<long long>(ev.basic_damage),
+                  static_cast<long long>(ev.final_damage), ev.flags);
     PushLog(b);
-    // 旧的 PE 环形窗口 dump 在这里停止：第一次命中要对 256~4096 条事件做 DecodeName，
-    // 曾在命中瞬间把 UI 线程卡死（日志停在半行 hitwin 上）。需要时再看 arm[] 诊断。
-    return;
     LogHitTarget();
     {
         char dn[64] = {0};
@@ -4906,10 +4460,8 @@ static void CensusTick() {
 // 鈫?ULocalPlayer鈫扨layerController(0x30) 鈫?AController::Pawn(0x308)銆?
 // 涓嶄緷璧?g_pc_inst / g_player_asc锛堣繖涓や釜鍦ㄩ儴鍒嗕細璇濋噷鏄┖锛屽鑷?token 涓庢柦鍔犻兘澶辫触锛夈€?
 static std::uintptr_t ResolvePlayerPawn() {
-    // 优先读实时 GWorld：g_gworld_ptr 是 TickFeatures 每 30 帧刷一次的缓存，
-    // 换地图后的半秒里可能还指着旧世界，会解析出旧 pawn。
-    std::uintptr_t world = ReadWorldFresh();
-    if (world < 0x10000) world = g_gworld_ptr;
+    std::uintptr_t world = g_gworld_ptr;
+    if (world < 0x10000) world = (g_world_fixed >= 0x10000) ? g_world_fixed : ReadWorldFresh();
     if (world < 0x10000) return 0;
     __try {
         const std::uintptr_t gi = *reinterpret_cast<std::uintptr_t*>(world + 0x230);
@@ -4933,41 +4485,33 @@ static bool AscLooksLikeAsc(std::uintptr_t asc) {
     if (asc < 0x10000) return false;
     std::uintptr_t cls = 0;
     if (!ue::Reader::SafePtr(asc + 0x10, &cls) || cls < 0x10000) return false;
-    // 蓝图怪物/召唤物的 ASC 可能是 HTAbilitySystemComponent 的子类，类指针不完全相等；
-    // 这类对象仍然满足 HP/MaxHP 布局，所以类匹配失败后再用血量布局兜底。
-    if (g_cls_asc >= 0x10000 && cls == static_cast<std::uintptr_t>(g_cls_asc)) return true;
+    if (g_cls_asc >= 0x10000) return cls == static_cast<std::uintptr_t>(g_cls_asc);
     float hp = 0.0f, mx = 0.0f;
     if (!SafeF32(asc + 0x1A38, &hp) || !SafeF32(asc + 0x1A3C, &mx)) return false;
     return hp > 0.0f && mx >= hp && mx < 1.0e9f;
 }
 
-// 缓存指针是否还有效：换场景/重生后旧 ASC 可能已经释放，必须先验对象头再验 HP/MaxHP。
+// 缓存指针是否还有效：换场景/重生后旧 ASC 可能已经释放，必须先验类指针再验 MaxHP，
+// 否则回放会对着一个已经死掉的对象空放（表现就是“重进后怎么打都不掉血”）。
 static bool AscStillValid(std::uintptr_t asc) {
     if (asc < 0x10000) return false;
     std::uintptr_t cls = 0;
     if (!ue::Reader::SafePtr(asc + 0x10, &cls) || cls < 0x10000) return false;
-    float hp = 0.0f, mx = 0.0f;
-    if (!SafeF32(asc + 0x1A38, &hp) || !SafeF32(asc + 0x1A3C, &mx)) return false;
-    return hp >= 0.0f && mx > 0.0f && mx < 1.0e9f && hp <= mx * 2.0f;
+    if (g_cls_asc >= 0x10000 && cls != static_cast<std::uintptr_t>(g_cls_asc)) return false;
+    float mx = 0.0f;
+    if (!SafeF32(asc + 0x1A3C, &mx) || !(mx > 0.0f) || mx > 1.0e9f) return false;
+    return true;
 }
 
 // 绫绘寚閽堢獥鍙ｆ壂鎻忥細鎬墿鐨?ASC 瀛楁涓嶄竴瀹氬湪 +0x940锛堥偅鏄?AHTAbilityCharacter 鐨勫竷灞€锛夈€?
 static std::uintptr_t FindAscInActor(std::uintptr_t act) {
     if (act < 0x10000 || g_cls_asc < 0x10000) return 0;
-    // 不同怪物蓝图把 ASC 放在不同偏移（AHTAbilityCharacter 是 0x940，其他子类可能在
-    // 0x300~0x1400 之间），而且类可能是 HTAbilitySystemComponent 的子类。先按类指针
-    // 精确匹配，再用 HP/MaxHP 布局兜底；后续还有 GE 继承链校验兜底防误判。
-    for (std::uintptr_t off = 0x300; off <= 0x1400; off += 8) {
+    for (std::uintptr_t off = 0x400; off <= 0xC00; off += 8) {
         std::uintptr_t p = 0;
         if (!ue::Reader::SafePtr(act + off, &p) || p < 0x10000) continue;
         std::uintptr_t cls = 0;
-        if (!ue::Reader::SafePtr(p + 0x10, &cls) || cls < 0x10000) continue;
+        if (!ue::Reader::SafePtr(p + 0x10, &cls)) continue;
         if (cls == static_cast<std::uintptr_t>(g_cls_asc)) return p;
-        float hp = 0.0f, mx = 0.0f;
-        if (SafeF32(p + 0x1A38, &hp) && SafeF32(p + 0x1A3C, &mx) &&
-            hp > 0.0f && mx >= hp && mx < 1.0e9f) {
-            return p;
-        }
     }
     return 0;
 }
@@ -4975,9 +4519,11 @@ static std::uintptr_t FindAscInActor(std::uintptr_t act) {
 // 鍒嗗抚鎵弿锛埪?.1锛氭寜閽洖璋冮噷鍋氬叏琛ㄩ亶鍘嗕細鎶婃父鎴忓崱姝伙級銆傛瘡甯ф渶澶氬鐞?kMonBudget 涓?actor銆?
 static constexpr int kMonBudget = 128;
 static int g_mon_on = 0;
+static int g_mon_level_n = 0;
 static int g_mon_level_i = 0;
 static unsigned int g_mon_actor_i = 0;
 static unsigned int g_mon_actor_n = 0;
+static std::uintptr_t g_mon_levels[64] = {};
 static std::uintptr_t g_mon_arr = 0;
 static int g_mon_found = 0;
 static int g_mon_scanned = 0;
@@ -5051,7 +4597,6 @@ void TickMonsterScan() {
     }
     int budget = kMonBudget;
     char nm[72] = {0};
-    const std::uintptr_t local_pawn = ResolvePlayerPawn();
     while (budget > 0 && g_mon_level_i < g_mon_level_n) {
         if (g_mon_arr == 0) {
             std::uintptr_t arr = 0;
@@ -5078,8 +4623,7 @@ void TickMonsterScan() {
         std::uintptr_t act = 0;
         const unsigned int i = g_mon_actor_i++;
         --budget;
-        // 触发上限只限制日志条数，不再中断扫描：否则前面的垃圾候选会把真怪挤出窗口。
-        const bool log_mon = (g_mon_found < 24);
+        if (g_mon_found >= 12) { g_mon_actor_i = g_mon_actor_n; continue; }
         if (!ue::Reader::SafePtr(g_mon_arr + 8ull * i, &act) || act < 0x10000) continue;
         std::uintptr_t cls = 0;
         if (!ue::Reader::SafePtr(act + 0x10, &cls) || cls < 0x10000) continue;
@@ -5094,56 +4638,39 @@ void TickMonsterScan() {
         if ((nm[0] == 'p' || nm[0] == 'P') && std::strstr(nm, "layer") != nullptr) {
             std::uintptr_t pasc = 0;
             if (ue::Reader::SafePtr(act + 0x940, &pasc) && AscLooksLikeAsc(pasc)) {
-                // hub 里会同时扫到多个玩家的 pawn：只认本地玩家，避免施法 ASC 串到别人身上。
-                const std::uintptr_t local = ResolvePlayerPawn();
-                if (local >= 0x10000 && act == local) {
-                    const bool changed_player = (g_player_asc != pasc);
-                    g_player_asc = pasc;
-                    g_player_pawn = act;
-                    if (changed_player) {
-                        char pb[160];
-                        std::snprintf(pb, sizeof(pb), "mon: player %s actor=0x%llX asc=0x%llX",
-                                      nm, (unsigned long long)act, (unsigned long long)pasc);
-                        PushLog(pb);
-                    }
+                const bool changed_player = (g_player_asc != pasc);
+                g_player_asc = pasc;
+                g_player_pawn = act;
+                if (changed_player) {
+                    char pb[160];
+                    std::snprintf(pb, sizeof(pb), "mon: player %s actor=0x%llX asc=0x%llX",
+                                  nm, (unsigned long long)act, (unsigned long long)pasc);
+                    PushLog(pb);
                 }
             }
         }
-        // 放开命中对象验证：不再只认 mon_/boss_ 前缀，任何在 +0x940 持有
-        // HP/MaxHP 布局 ASC 的 actor 都进候选表（本地玩家除外）。真正武装前还有
-        // LastDamageGEDef + GE 继承链校验，建筑/载具/普通 NPC 会在那里被拒。
+        const bool hostile = std::strstr(nm, "mon_") != nullptr ||
+                             std::strstr(nm, "boss_") != nullptr ||
+                             std::strstr(nm, "Mon_") != nullptr ||
+                             std::strstr(nm, "Boss_") != nullptr ||
+                             std::strstr(nm, "Abyss") != nullptr ||
+                             std::strstr(nm, "abyss") != nullptr;
+        if (!hostile) { RememberClassName(nm); continue; }
+        if (std::strstr(nm, "bullet") != nullptr || std::strstr(nm, "Effect") != nullptr) continue;
         std::uintptr_t asc = 0;
-        if (!ue::Reader::SafePtr(act + 0x940, &asc) || !AscLooksLikeAsc(asc)) {
-            const bool named = std::strstr(nm, "mon_") != nullptr ||
-                               std::strstr(nm, "boss_") != nullptr ||
-                               std::strstr(nm, "Mon_") != nullptr ||
-                               std::strstr(nm, "Boss_") != nullptr;
-            if (!named) { RememberClassName(nm); continue; }
+        if (!ue::Reader::SafePtr(act + 0x940, &asc) || !AscLooksLikeAsc(asc))
             asc = FindAscInActor(act);
-        }
-        if (std::strstr(nm, "bullet") != nullptr || std::strstr(nm, "Effect") != nullptr ||
-            ((nm[0] == 'p' || nm[0] == 'P') && std::strstr(nm, "layer") != nullptr) ||
-            act == local_pawn || asc < 0x10000) {
-            RememberClassName(nm);
-            continue;
-        }
         float hp = 0.0f, maxhp = 0.0f, atk = 0.0f;
         const bool hp_ok = SafeF32(asc + 0x1A38, &hp);
         SafeF32(asc + 0x1A3C, &maxhp);
         SafeF32(asc + 0x1A50, &atk);
-        const bool hostile_name = std::strstr(nm, "mon_") != nullptr ||
-                                  std::strstr(nm, "boss_") != nullptr ||
-                                  std::strstr(nm, "Mon_") != nullptr ||
-                                  std::strstr(nm, "Boss_") != nullptr;
-        if (log_mon || hostile_name) {
-            char b[224];
-            std::snprintf(b, sizeof(b),
-                          "mon[%d]: %s actor=0x%llX asc=0x%llX hp=%.1f/%.1f atk=%.1f hpok=%d",
-                          g_mon_found, nm, (unsigned long long)act, (unsigned long long)asc,
-                          hp, maxhp, atk, hp_ok ? 1 : 0);
-            PushLog(b);
-            if (log_mon) ++g_mon_found;
-        }
+        char b[224];
+        std::snprintf(b, sizeof(b),
+                      "mon[%d]: %s actor=0x%llX asc=0x%llX hp=%.1f/%.1f atk=%.1f hpok=%d",
+                      g_mon_found, nm, (unsigned long long)act, (unsigned long long)asc,
+                      hp, maxhp, atk, hp_ok ? 1 : 0);
+        PushLog(b);
+        ++g_mon_found;
         if (asc >= 0x10000 && hp > 0.0f) {
             // 记进候选表：自动流程靠"谁的 HP 掉了"来认受害者，而不是靠先扫到的第一只。
             bool known = false;
@@ -5547,8 +5074,6 @@ void MonTrackTick() {
 void AutoTargetTick() {
     if (g_ui_state.damage == 0) { g_cap_on = 0; return; }
     g_cap_on = 1;
-    // 扫描的推进（DecodeName）在 on_draw 里；面板不可见时不要空转看门狗/重扫。
-    if (g_last_draw_ms == 0 || NowMs() - g_last_draw_ms > 1500) return;
     static std::uint64_t next_scan_allowed = 0;
     static std::uint64_t scan_started_ms = 0;
     static std::uint64_t next_refresh_ms = 0;
@@ -5634,13 +5159,13 @@ void DrawCaptureUi(const AnomalyUiServiceV1* ui) {
         }
     }
     if (ui->text) {
-        const bool bound = (g_rt_n > 0);
-        const bool listening = (g_ui_state.damage != 0);
+        const bool bound = (g_rt_n > 0) && (g_mon_list_n > 0);
+        const bool fighting = (g_rt_n > 0);
         char l1[96];
         const int n1 = std::snprintf(
             l1, sizeof(l1), "%s=%s %s=%s",
-            "\xE7\xBB\x91\xE5\xAE\x9A", bound ? "\xE5\xB7\xB2\xE9\x94\x81\xE5\xAE\x9A" : "\xE6\x9C\xAA\xE9\x94\x81\xE5\xAE\x9A",
-            "\xE8\xA7\xA6\xE5\x8F\x91", listening ? "\xE7\x9B\x91\xE5\x90\xAC\xE4\xB8\xAD" : "\xE5\xBE\x85\xE5\x91\xBD");
+            "\xE7\xBB\x91\xE5\xAE\x9A", bound ? "\xE5\xB0\xB1\xE7\xBB\xAA" : "\xE6\x9C\xAA\xE5\xB0\xB1\xE7\xBB\xAA",
+            "\xE8\xA7\xA6\xE5\x8F\x91", fighting ? "\xE6\x88\x98\xE6\x96\x97\xE4\xB8\xAD" : "\xE5\xBE\x85\xE6\x9C\xBA");
         if (n1 > 0) {
             AnomalyStringViewV1 v{l1, static_cast<std::size_t>(n1)};
             ui->text(ui->user, v);
@@ -5908,18 +5433,8 @@ void ReplayTick() {
         t.hp = hp;
         ++i;
     }
-    if (g_rt_n == 0) {
-        g_shot_clock_ms = 0;
-        return;
-    }
-    if (g_gec_ufn == 0 || g_gea_ufn == 0) {
-        // UFunction 解析要查名字服务，放在 Game 线程每秒试一次即可；解析失败不刷屏。
-        static std::uint64_t next_resolve = 0;
-        if (now >= next_resolve) {
-            next_resolve = now + 1000;
-            ResolveGeHelpersUiThread();
-        }
-    }
+    if (g_gec_ufn == 0 || g_gea_ufn == 0) ResolveGeHelpersUiThread();
+    if (g_rt_n == 0) return;
     if (g_gec_ufn == 0 || g_gea_ufn == 0) return;
     static std::uint64_t last_report = 0;
     if (now - last_report >= 5000) {
@@ -5935,49 +5450,6 @@ void ReplayTick() {
     }
     g_ge_shots = shots;
     g_ge_req = 1;
-}
-
-// Game 线程引擎：宿主只在插件"已启动"时派发 on_update，与窗口是否可见无关；
-// on_draw 在窗口隐藏时会被跳过，所以事件消费/武装/回放节奏都必须放在这里。
-// 本函数里禁止 DecodeName（宿主 names 的锁）：武装只做指针/偏移读取，名字留给 on_draw。
-static void DrainArmRequests() {
-    const LONG seq = InterlockedCompareExchange(&g_arm_seq, 0, 0);
-    if (seq == g_arm_seen) return;
-    g_arm_seen = seq;
-    const std::uintptr_t ge = g_arm_ge;
-    const std::uintptr_t asc = g_arm_asc;
-    const std::uintptr_t recv = g_arm_recv;
-    if (ge < 0x10000 || asc < 0x10000) return;
-    // apply 的 receiver 通常就是施法者 ASC（玩家）；没有别的来源时用它当施法者。
-    if (g_player_asc < 0x10000 && recv >= 0x10000 && recv != asc &&
-        AscLooksLikeAsc(recv)) {
-        float rhp = 0.0f;
-        if (ReadAscHP(recv, &rhp) && rhp > 0.0f) {
-            g_player_asc = recv;
-            PushLog("player: caster from apply receiver");
-        }
-    }
-    if (asc == g_player_asc) return;
-    float hp = 0.0f;
-    if (!AscStillValid(asc) || !ReadAscHP(asc, &hp) || hp <= 0.0f) return;
-    if (!GeClassLooksValid(ge)) return;
-    ReplayArm(asc, "-", ge, hp, 0);
-}
-
-void TickReplayEngine() {
-    if (g_ctx == nullptr) return;
-    g_cap_on = (g_ui_state.damage != 0) ? 1 : 0;
-    static int sub_try = 0;
-    if (g_cap_on != 0 && g_pe_subscribed == 0 && (++sub_try % 15) == 0)
-        EnsureSubscription();
-    if (g_cap_on == 0 && g_pe_subscribed != 0) ReleaseCaptureSubscription();
-    // 事件路径是主路径；扫描 + HP 监视作为兜底（只处理扫描表里的怪，扫描推进在 on_draw）。
-    AutoTargetTick();
-    MonTrackTick();
-    CensusTick();
-    TickPendingArms();
-    DrainArmRequests();
-    ReplayTick();
 }
 
 // Game-thread turn: one context, then one application per live target, so every
@@ -6030,6 +5502,12 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     }
     if (ctx == nullptr || ui == nullptr || ui->begin_window == nullptr) return;
     ++g_draw_count;
+    // 宿主 names 服务只能在 render 线程调：解析一次 OnDamaged 的名字 id，
+    // PE 回调（Game 线程）只做整数比较。
+    if (g_ondmg_nid == 0) {
+        std::uint32_t nid = 0;
+        if (g_ue.NameId("OnDamaged", &nid) && nid != 0) g_ondmg_nid = nid;
+    }
     {
         const int cfg_damage = g_ui_state.damage;
         const int cfg_chain = g_ui_state.chain;
@@ -6043,31 +5521,8 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
             g_cfg_save_due_ms = NowMs() + 400;
         }
     }
-    // Game 线程只记指针，这里（render 线程）才解析类名。
-    for (int i = 0; i < g_arm_dbg_n; ) {
-        const ArmDbgRec rec = g_arm_dbg[i];
-        g_arm_dbg[i] = g_arm_dbg[--g_arm_dbg_n];
-        char nm[64] = {0};
-        if (rec.victim >= 0x10000) ObjectClassName(rec.victim, nm, sizeof(nm));
-        char b[192];
-        std::snprintf(b, sizeof(b), "dbg: arm code=%d v=0x%llX cls=0x%llX class=%s",
-                      rec.code, (unsigned long long)rec.victim, (unsigned long long)rec.cls,
-                      nm[0] ? nm : "?");
-        PushLog(b);
-    }
-    g_last_draw_ms = NowMs();
-    // 宿主 names 服务只能在 render 线程调：这里解析 OnDamaged 的名字 id，
-    // PE 回调（Game 线程）只做整数比较。
-    if (g_ondmg_nid == 0) {
-        std::uint32_t nid = 0;
-        if (g_ue.NameId("OnDamaged", &nid) && nid != 0) g_ondmg_nid = nid;
-    }
-    TickMonsterScan();   // 分帧扫描，逐 actor DecodeName：只能在 render 线程推进
     if (g_apply_hook_enabled) InstallApplyHook();
     else ReleaseHooks();
-    // 目标识别完全由伤害事件驱动：不再自动扫描全场对象（1690 个 actor/轮，每轮都要调
-    // 宿主 resolve_utf8，是卡顿和"多玩家场景串 ASC"的来源）。这里只维护订阅开关。
-    g_cap_on = (g_ui_state.damage != 0) ? 1 : 0;
     // Gate 闂?Apply 闂佸憡鍔曢幊姗€宕曠€靛憡瀚柛鎰典簼閺嗗繘鏌?x7682F55闂佹寧绋戦¨鈧紒杈ㄧ箖缁嬪寮捄銊︽緰濠电偞娼欓鍡樼閼恒儳鈻?true闂佹寧绋戦張顒€螞閵堝鍋戞い鎺戝€昏ぐ灞角庨崶锝呭⒉濞寸厧鎳橀弻宀冪疀閵壯冭€挎繛?Apply 闂佸憡鑹鹃悧鍡涙嚐閻斿摜鈻旈柛婵嗗缁€瀣槈閹绢垰浜鹃梺鍦焾閸婂潡骞?
     ProbeFunctionsService();
     DumpDamageChain512();
@@ -6088,9 +5543,16 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     if (g_probe_on) ProbeScanStep();
     TickChronosDump();
     TickFeatures();
+    if (g_cap_on != 0 && !g_pe_subscribed && (g_draw_count % 30) == 0) EnsureSubscription();
+    if (g_cap_on == 0 && g_pe_subscribed != 0) ReleaseCaptureSubscription();
     CollectApplyUfns();
     ConsumePendingCapture();
     ConsumeEcsCapture();
+    CensusTick();
+    AutoTargetTick();
+    TickMonsterScan();
+    MonTrackTick();      // 兜底：伤害事件没解码出 victim 时，按候选怪 HP 下降补一次
+    ReplayTick();
     if (g_ui_state.damage != 0 && (g_draw_count % 300) == 0) {
         char gb[160];
         std::snprintf(gb, sizeof(gb), "gate: cap=%d sub=%d found=%d list=%d rt=%d ufn=%d/%d",
@@ -6099,7 +5561,7 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
         PushLog(gb);
     }
     TickApplyCaptureReplay();
-    if (g_cap_on != 0 && (g_draw_count % 600) == 0) {
+    if (g_cap_on != 0 && (g_draw_count % 120) == 0) {
         char peel[128];
         int pn = 0;
         peel[0] = 0;
