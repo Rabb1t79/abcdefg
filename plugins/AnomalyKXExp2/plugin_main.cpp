@@ -181,6 +181,9 @@ static constexpr int kMaxReplayTargets = 8;
 static ReplayTarget g_rt[kMaxReplayTargets] = {};
 static int g_rt_n = 0;
 static std::uint64_t g_shot_clock_ms = 0;   // 上次拍发时刻（steady_clock 毫秒）
+static double g_apply_budget = 0.0;         // 严格速率累积器：不足一发的部分留到下帧
+static std::uint64_t g_apply_clock_ms = 0;
+static int g_rr_target = 0;                 // 多目标轮转：每次 apply 换一个目标
 static int g_ge_probe = 0;             // 1 = 閫愪釜璇?GE锛堟壘鑳界湡鐨勬帀琛€鐨勯偅涓級
 static int g_ge_probe_idx = 0;
 static int g_ge_probe_prev = -1;       // 涓婁竴鍙戠敤鐨?GE 涓嬫爣锛堝紓姝ュ埌璐﹁璁板埌瀹冨ご涓婏級
@@ -5229,6 +5232,7 @@ void AutoTargetTick() {
 static int g_rep_dmg = 0;
 static int g_rep_fail = 0;
 static int g_rep_shots = 0;
+static int g_rep_ok = 0;   // 成功重放（真正打掉血）的次数
 
 void DrawCaptureUi(const AnomalyUiServiceV1* ui) {
     if (ui == nullptr) return;
@@ -5279,11 +5283,12 @@ void DrawCaptureUi(const AnomalyUiServiceV1* ui) {
             ui->text(ui->user, v);
         }
         char l2[128];
+        // 语义：伤害=总次数（所有施加），失败=失败次数（不变），重放=成功重放的次数。
         const int n2 = std::snprintf(
             l2, sizeof(l2), "%s=%d %s=%d %s=%d",
-            "\xE4\xBC\xA4\xE5\xAE\xB3", g_rep_dmg,
+            "\xE4\xBC\xA4\xE5\xAE\xB3", g_rep_shots,
             "\xE5\xA4\xB1\xE8\xB4\xA5", g_rep_fail,
-            "\xE9\x87\x8D\xE6\x94\xBE", g_rep_shots);
+            "\xE9\x87\x8D\xE6\x94\xBE", g_rep_ok);
         if (n2 > 0) {
             AnomalyStringViewV1 v{l2, static_cast<std::size_t>(n2)};
             ui->text(ui->user, v);
@@ -5497,17 +5502,25 @@ void ReplayTick() {
     if (g_ui_state.damage == 0) {
         if (g_rt_n != 0) { g_rt_n = 0; PushLog("replay: cleared"); }
         g_shot_clock_ms = 0;
+        g_apply_clock_ms = 0;
+        g_apply_budget = 0.0;
         g_ge_shots = 0;
         return;
     }
     const std::uint64_t now = NowMs();
-    const int interval = GeRateIntervalMs();
-    if (g_shot_clock_ms == 0) g_shot_clock_ms = now;
-    if (now < g_shot_clock_ms + static_cast<std::uint64_t>(interval)) return;
-    int shots = static_cast<int>((now - g_shot_clock_ms) / static_cast<std::uint64_t>(interval));
-    if (shots < 1) shots = 1;
-    if (shots > 4) shots = 4;   // 卡帧时最多补 4 发，避免一次追账把游戏顶死
-    g_shot_clock_ms += static_cast<std::uint64_t>(shots) * static_cast<std::uint64_t>(interval);
+    // 严格按 UI 里填的“每秒重复次数”发放：毫秒累积，整数部分本帧施加，余数留到下帧。
+    // 不再用 8ms 最小间隔，也不按帧截断（只防一次长卡顿后的爆炸性补发）。
+    int rate = static_cast<int>(g_ui_state.replay);
+    if (rate < 1) rate = 1;
+    if (rate > 512) rate = 512;
+    if (g_apply_clock_ms == 0) { g_apply_clock_ms = now; return; }
+    const std::uint64_t elapsed = now - g_apply_clock_ms;
+    g_apply_clock_ms = now;
+    g_apply_budget += static_cast<double>(elapsed) * static_cast<double>(rate) / 1000.0;
+    int applies = static_cast<int>(g_apply_budget);
+    if (applies <= 0) return;
+    g_apply_budget -= static_cast<double>(applies);
+    if (applies > 32) applies = 32;   // 只防一次长卡顿后的爆炸补发；每发对每个目标各施加一次
     for (int i = 0; i < g_rt_n; ) {
         ReplayTarget& t = g_rt[i];
         float hp = 0.0f;
@@ -5524,6 +5537,7 @@ void ReplayTick() {
             const float delta = t.hp - hp;
             if (delta > 0.5f) {
                 ++t.landed;
+                ++g_rep_ok;
                 g_rep_dmg += static_cast<int>(delta);
                 t.dmg_sum += delta;          // 估算“每次 apply 打出多少”
                 t.applied_sum += t.applied;
@@ -5561,7 +5575,7 @@ void ReplayTick() {
             PushLog(b);
         }
     }
-    g_ge_shots = shots;
+    g_ge_shots = applies;
     g_ge_req = 1;
 }
 
@@ -5581,9 +5595,9 @@ static bool SafeWriteI32(std::uintptr_t addr, std::int32_t value) {
 }
 void ReplayApplyStep() {
     g_ge_req = 0;
-    const int shots = g_ge_shots > 0 ? g_ge_shots : 1;
+    const int applies = g_ge_shots > 0 ? g_ge_shots : 0;
     g_ge_shots = 0;
-    if (g_ui_state.damage == 0 || g_rt_n == 0) return;
+    if (g_ui_state.damage == 0 || g_rt_n == 0 || applies <= 0) return;
     if (g_gec_ufn == 0 || g_gea_ufn == 0) return;
     const std::uintptr_t src = PlayerAscForApply();
     if (src < 0x10000) return;
@@ -5594,7 +5608,7 @@ void ReplayApplyStep() {
     }
     if (pe < 0x10000) return;
     g_cap_suppress = 1;
-    for (int s = 0; s < shots; ++s) {
+    for (int k = 0; k < applies; ++k) {
         // 每一发都用新的 effect context：同一个 ctx 复用到多发表演上，语义没验证过。
         unsigned char ctx[0x18] = {0};
         reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
