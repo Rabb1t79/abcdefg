@@ -4369,6 +4369,33 @@ static void EventDiag(const AnomalyNteDamageEventV1& ev) {
 // 事件驱动武装（KB 11.10 的第 1、2 条）：这一击打中谁，就取谁的
 // LastDamageGEDef(0x2378) → +0x10 的 UClass 作为回放 GE，连同当前 HP 记进回放表。
 // 自喂（回放自己造成的伤害）由 ReplayArm 的「同一 victim + 同一 GE」短路挡掉。
+// 白名单：NPC（AHTNPCCharacter 后代）与载具等无关目标不解析、不武装。
+// 名字 id 在 render 线程每帧解析 2 个，武装/扫描只做整数比较。
+static const char* const kExcludeNames[] = {
+#include "exclude_names.inc"
+};
+static std::uint32_t g_exclude_ids[256] = {};
+static int g_exclude_id_n = 0;
+static int g_exclude_cursor = 0;
+static constexpr int kExcludeNameCount =
+    static_cast<int>(sizeof(kExcludeNames) / sizeof(kExcludeNames[0]));
+static void ResolveExcludeIdsStep() {
+    if (g_ue.names == nullptr) return;
+    for (int n = 0; n < 2 && g_exclude_cursor < kExcludeNameCount; ++n) {
+        const char* name = kExcludeNames[g_exclude_cursor++];
+        if (name == nullptr) continue;
+        std::uint32_t id = 0;
+        if (g_ue.NameId(name, &id) && id != 0 && g_exclude_id_n < 256)
+            g_exclude_ids[g_exclude_id_n++] = id;
+    }
+}
+static bool IsExcludedClass(std::uint32_t id) {
+    for (int i = 0; i < g_exclude_id_n; ++i) {
+        if (g_exclude_ids[i] == id) return true;
+    }
+    return false;
+}
+
 static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
     if (ev.final_damage <= 0) return;
     EventDiag(ev);
@@ -4408,6 +4435,17 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
         ArmDiag("self", victim, 0, 0, 0.0f);
         ArmDbgPush(victim, 0);
         return;
+    }
+    // 白名单：NPC / 载具 / 座椅等无关目标不解析。
+    {
+        std::uintptr_t vcls = 0;
+        std::uint32_t vcid = 0;
+        if (ue::Reader::SafePtr(victim + 0x10, &vcls) &&
+            ue::Reader::SafeU32(vcls + 0x18, &vcid) && IsExcludedClass(vcid)) {
+            ArmDiag("excluded", victim, 0, 0, 0.0f);
+            ArmDbgPush(victim, 6);
+            return;
+        }
     }
     std::uintptr_t asc = 0;
     if (!ue::Reader::SafePtr(victim + 0x940, &asc) || !AscLooksLikeAsc(asc))
@@ -4887,6 +4925,7 @@ void TickMonsterScan() {
         ++g_mon_scanned;
         unsigned int nid = 0;
         if (!ue::Reader::SafeU32(cls + 0x18, &nid)) continue;
+        if (IsExcludedClass(nid)) continue;   // NPC/载具/座椅等无关目标不解析
         // 只有“dump 预设怪物类名命中”或“+0x940 已是 ASC 形态（玩家/未收录的怪）”才解析名字；
         // 其它环境 actor 直接跳过，扫描里不再逐 actor 调宿主 names（卡顿主因）。
         const bool preset = IsPresetMonster(nid);
@@ -5835,6 +5874,7 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     }
     g_last_draw_ms = NowMs();
     ResolveMonsterIdsStep();
+    ResolveExcludeIdsStep();
     TickMonsterScan();   // 分帧扫描，逐 actor DecodeName：只能在 render 线程推进
     if (g_apply_hook_enabled) InstallApplyHook();
     else ReleaseHooks();
