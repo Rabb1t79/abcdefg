@@ -4381,7 +4381,7 @@ static constexpr int kExcludeNameCount =
     static_cast<int>(sizeof(kExcludeNames) / sizeof(kExcludeNames[0]));
 static void ResolveExcludeIdsStep() {
     if (g_ue.names == nullptr) return;
-    for (int n = 0; n < 2 && g_exclude_cursor < kExcludeNameCount; ++n) {
+    for (int n = 0; n < 1 && g_exclude_cursor < kExcludeNameCount; ++n) {
         const char* name = kExcludeNames[g_exclude_cursor++];
         if (name == nullptr) continue;
         std::uint32_t id = 0;
@@ -4448,8 +4448,10 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
         }
     }
     std::uintptr_t asc = 0;
+    // 事件路径只认 +0x940。FindAscInActor 要扫 0x300..0x1400（每个受害者 ~570 次
+    // SEH 保护读），战斗里每帧十几条事件时会直接吃掉上百毫秒——这里不做。
     if (!ue::Reader::SafePtr(victim + 0x940, &asc) || !AscLooksLikeAsc(asc))
-        asc = FindAscInActor(victim);
+        asc = 0;
     if (asc < 0x10000) {                     // 建筑 / 载具 / 没有 ASC 的普通 NPC
         ArmDiag("no-asc", victim, asc, 0, 0.0f);
         ArmDbgPush(victim, 2);
@@ -4589,7 +4591,7 @@ static void CensusTick() {
     }
     if (g_census_hits >= 2) {
         g_census_reported = 2;
-        DrainDamageEvents(combat, 16);   // 普查结束后只做武装，每帧最多清 16 条
+        DrainDamageEvents(combat, 4);   // 每帧最多清 4 条：事件武装是重活，别把一帧吃穿
         return;
     }
     AnomalyNteDamageEventV1 ev{};
@@ -4864,8 +4866,8 @@ static constexpr int kMonsterNameCount =
     static_cast<int>(sizeof(kMonsterNames) / sizeof(kMonsterNames[0]));
 static void ResolveMonsterIdsStep() {
     if (g_ue.names == nullptr) return;
-    // 每帧只解析 2 个：对不存在的名字 find_utf8 要扫整张名表，一次做完会卡启动。
-    for (int n = 0; n < 2 && g_monster_resolve_cursor < kMonsterNameCount; ++n) {
+    // 每帧只解析 1 个：对不存在的名字 find_utf8 要扫整张名表，一次做完会卡启动。
+    for (int n = 0; n < 1 && g_monster_resolve_cursor < kMonsterNameCount; ++n) {
         const char* name = kMonsterNames[g_monster_resolve_cursor++];
         if (name == nullptr) continue;
         std::uint32_t id = 0;
