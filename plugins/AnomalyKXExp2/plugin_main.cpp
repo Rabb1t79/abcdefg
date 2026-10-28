@@ -5451,7 +5451,6 @@ static int GeRateIntervalMs() {
 // the target that is currently being hit.
 void ReplayDropTarget(int index) {
     if (index < 0 || index >= g_rt_n) return;
-    g_rep_fail += g_rt[index].applied;   // 目标消失时未结算的施加计为失败，保证 总=成功+失败
     for (int i = index; i + 1 < g_rt_n; ++i) g_rt[i] = g_rt[i + 1];
     --g_rt_n;
 }
@@ -5538,7 +5537,6 @@ void ReplayTick() {
             const float delta = t.hp - hp;
             if (delta > 0.5f) {
                 ++t.landed;
-                g_rep_ok += t.applied;       // 本窗口的施加整体计为成功
                 g_rep_dmg += static_cast<int>(delta);
                 t.dmg_sum += delta;          // 估算“每次 apply 打出多少”
                 t.applied_sum += t.applied;
@@ -5546,7 +5544,6 @@ void ReplayTick() {
                 if (t.paused != 0) { t.paused = 0; PushLog("replay: resumed (damage landed)"); }
             } else {
                 ++t.blocked;
-                g_rep_fail += t.applied;     // 本窗口的施加整体计为失败
                 if (t.blocked >= 4 && t.paused == 0) {
                     t.paused = 1;
                     char b[160];
@@ -5635,20 +5632,22 @@ void ReplayApplyStep() {
         }
         for (int i = 0; i < g_rt_n; ++i) {
             ReplayTarget& t = g_rt[i];
-            if (t.asc < 0x10000 || t.ge_class < 0x10000) continue;
-            if (!AscStillValid(t.asc)) continue;   // 目标已释放/换世界：不要对悬空 ASC 施加
+            ++g_rep_shots;   // 计划施加一次（发送计数，与 HP 采样无关）
+            if (t.asc < 0x10000 || t.ge_class < 0x10000 || t.paused != 0 ||
+                !AscStillValid(t.asc)) {
+                ++g_rep_fail;   // 目标无效/暂停：这次算失败
+                continue;
+            }
             unsigned char params[0x38] = {0};
             const float level = 1.0f;
             std::memcpy(params + 0x00, &t.ge_class, 8);
             std::memcpy(params + 0x08, &t.asc, 8);
             std::memcpy(params + 0x10, &level, 4);
             std::memcpy(params + 0x18, ctx, 0x18);
-            // 空 context 下 GE 只按基础幅度结算（实测约 400/次），玩家真实命中约 900；
-            // 与挑战 boss 完全一致：每发 shot 只施加一次 GE，不做倍率补偿。
             reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
                                        reinterpret_cast<void*>(g_gea_ufn), params);
             ++t.applied;
-            ++g_rep_shots;
+            ++g_rep_ok;     // 已发送：这次算成功重放
         }
     }
     g_cap_suppress = 0;
