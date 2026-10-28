@@ -1032,11 +1032,6 @@ void TickFeatures() {
     if ((++tick % 30) != 0) return;   // 濠?30 闁汇埄鍨庨崶褎顏熼柣鐘叉处濞叉垹绮╅弶鎴旀瀻闁宠棄鎳愮粈澶愭⒑椤掆偓閻忔繈宕㈤妶澶婄睄闁冲搫鍊归崺鍌氼熆閹壆绨块悷娆欑畵瀹曘儲鎯旈姀鈽嗘敵婵炴垶鏌ㄩ幊蹇涘棘娴ｅ壊鍤?
     if (g_resolve.damage && g_resolve.volley && g_resolve.chronos && g_resolve.gm) return;
     if (!g_sig_ok || !g_names_ok) return;
-    // 类解析用的 GObjects 访问器在本 Core 不匹配（itemStride 24 vs 8），FindClassById 永远
-    // 找不到类；每 30 tick 全表扫三次就是每次 ~190ms 的掉帧来源。连续失败 30 次后停手。
-    static int heavy_tries = 0;
-    if (heavy_tries >= 30) return;
-    if (++heavy_tries == 30) PushLog("feat: class resolve stopped after 30 tries");
     // retry every frame until resolved (services may appear after first frames)
     void* probe = g_ue.ObjectAt(0);
     g_probe = (unsigned long long)probe;
