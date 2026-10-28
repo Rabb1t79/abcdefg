@@ -153,6 +153,8 @@ void StopHeartbeat();
 static bool AscLooksLikeAsc(std::uintptr_t asc);
 static bool AscStillValid(std::uintptr_t asc);
 static std::uintptr_t FindAscInActor(std::uintptr_t act);
+static bool ReadAscHP(std::uintptr_t asc, float* out);
+static bool GeClassLooksValid(std::uintptr_t ge);
 static std::uintptr_t g_gec_ufn = 0;
 static std::uintptr_t g_gea_ufn = 0;
 static int g_ge_apply_rc = 0;
@@ -998,8 +1000,8 @@ void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t fun
     ApplyTargetCapture(function, object, parameters);
     // 涓嬮潰涓夊鍘嗗彶鎹曡幏鍦?UFunction 鏈В鏋愬墠浼氬姣忎釜浜嬩欢璋冪敤涓€娆?DecodeName锛堝涓?
     // resolve_utf8 鈫?State::mutex锛夈€傚畠浠睘浜庡凡鍏抽棴鐨勫疄楠岃矾寰勶紝榛樿涓嶅惎鐢ㄣ€?
+    OnDamagedCapture(object, function, parameters);
     if (g_legacy_capture != 0) {
-        OnDamagedCapture(object, function, parameters);
         SendEventCapture(object, function, parameters);
         ApplyGeCapture(object, function, parameters);
     }
@@ -1254,7 +1256,9 @@ void ReleaseHooks() {
 
 static void*  g_rq_args[8] = {nullptr};
 static std::uintptr_t g_player_pawn_ref = 0;
+static std::uintptr_t g_player_asc = 0;   // 施法 ASC（OnDamaged 过滤/回放都要用，声明放前面）
 static std::uintptr_t g_ondmg_ufn = 0;
+static std::uint32_t g_ondmg_nid = 0;   // "OnDamaged" 的 FName id：Game 线程只比 id，不 DecodeName
 static std::uintptr_t g_od_recv = 0;
 static unsigned char  g_od_params[0x148] = {0};
 static int g_od_remaining = 0;
@@ -1316,21 +1320,36 @@ static constexpr bool kReplayExec = false;
 
 // ===== OnDamaged 闂佺顫夊ú婵嬬嵁?+ 闂佸湱顭堥ˇ鏉款渻閸岀偞鈷掗柟缁㈠枛濞呫垽鏌￠埀顒勫箻閸涱垳顦╅梺鍦暯閸嬫捇鏌￠崼婵愭Ш閻㈩垵娅ｉ埀顒傤攰閸╂牕顭囬棃娑掓敠闁归偊浜濈缓娲倵閸︻収鍔滅紒杈ㄧ箖缁嬪顓奸崼銏㈢暫濠电姴顭堥崐妤冩偖椤愶箑绀嗘い鎰靛墰缁€?====
 static void OnDamagedCapture(std::uintptr_t object, std::uintptr_t function, void* parameters) {
-    if (parameters == nullptr || function == 0 || g_player_pawn_ref < 0x10000) return;
-    if (g_ondmg_ufn == 0) {
-        unsigned int nid = 0;
-        char nm[48] = {0};
-        if (!ue::Reader::SafeU32(function + 0x18, &nid)) return;
-        DecodeName(nid, nm, sizeof(nm));
-        if (std::strcmp(nm, "OnDamaged") != 0) return;
-        g_ondmg_ufn = function;
-        PushLog("ondmg: ufn resolved");
+    if (parameters == nullptr || function == 0) return;
+    // UFunction 名字用 name id 比较，不在 Game 线程调 DecodeName。
+    if (g_ondmg_nid == 0) {
+        std::uint32_t nid = 0;
+        if (!g_ue.NameId("OnDamaged", &nid) || nid == 0) return;
+        g_ondmg_nid = nid;
     }
-    if (function != g_ondmg_ufn) return;
+    std::uint32_t fn_nid = 0;
+    if (!ue::Reader::SafeU32(function + 0x18, &fn_nid) || fn_nid != g_ondmg_nid) return;
     std::uintptr_t inst = 0, causer = 0;
     ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(parameters) + 0x138, &inst);
     ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(parameters) + 0x140, &causer);
-    if (inst != g_player_pawn_ref && causer != g_player_pawn_ref) return;
+    if (g_player_pawn_ref >= 0x10000 && inst != g_player_pawn_ref && causer != g_player_pawn_ref)
+        return;
+    // 直接武装：受害者自己的 OnDamaged 实参里就有伤害 GE 和它的 ASC，不需要句柄/扫描/名字。
+    {
+        std::uintptr_t ge = 0, ge_class = 0, victim_asc = 0;
+        if (ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(parameters) + 0x130, &ge) &&
+            ge >= 0x10000 &&
+            ue::Reader::SafePtr(ge + 0x10, &ge_class) && ge_class >= 0x10000 &&
+            ue::Reader::SafePtr(object + 0x940, &victim_asc) && victim_asc >= 0x10000 &&
+            g_player_asc >= 0x10000 && victim_asc != g_player_asc) {
+            float hp = 0.0f;
+            if (ReadAscHP(victim_asc, &hp) && hp > 0.0f && GeClassLooksValid(ge_class)) {
+                ReplayArm(victim_asc, "-", ge_class, hp, 0);
+                PushLog("ondmg: armed victim from OnDamaged args");
+            }
+        }
+    }
+    if (g_legacy_capture == 0) return;
     std::memcpy(g_od_params, parameters, sizeof(g_od_params));
     g_od_recv = object;
     // OnDamaged 闂佸憡鐟ラ崐褰掑汲閻旂儤鏆滈柛鎰╁妿濠€浼存煥濞戞ɑ绠絋Game_parameters.hpp闂?x148闂佹寧绋戦¨鈧紒?
@@ -2904,7 +2923,6 @@ static int g_asc_dead = 0;
 static std::uintptr_t g_monster_asc = 0;
 static std::uintptr_t g_player_pawn = 0;   // MonScan 椤烘墜鎹炲埌鐨勭帺瀹?pawn锛堜笉渚濊禆 world鈫扜I 閾撅級
 static std::uintptr_t g_player_source = 0;
-static std::uintptr_t g_player_asc = 0;
 
 static int g_asc_mode = 0;
 static int g_rev_phase = 0;
@@ -4640,6 +4658,7 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
         if (pactor >= 0x10000 && pasc >= 0x10000 && pasc != g_player_asc) {
             g_player_asc = pasc;
             g_player_pawn = pactor;
+            g_player_pawn_ref = pactor;   // OnDamaged 过滤用它判断"这一发是否玩家参与"
         }
     }
     if (victim_is_player) return;   // 玩家挨打：不把玩家当回放目标
