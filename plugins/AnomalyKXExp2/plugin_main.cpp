@@ -4625,10 +4625,21 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
     if (victim_is_player || ClassNameIsPlayer(aname)) {
         const AnomalyGenerationHandleV1 ph = victim_is_player ? ev.victim : ev.attacker;
         std::uintptr_t pasc = 0;
-        if (ResolveParticipantByPath(ph, false, &pasc) >= 0x10000 && pasc >= 0x10000 &&
-            pasc != g_player_asc) {
+        std::uintptr_t pactor = ResolveParticipantByPath(ph, false, &pasc);
+        if (pactor < 0x10000 || pasc < 0x10000) {
+            // 路径反查不可用时直接解句柄：boss 的 victim 已经证明这条对部分对象有效。
+            pactor = ActorFromDamageHandle(ph);
+            pasc = 0;
+            if (pactor >= 0x10000) {
+                if (!ue::Reader::SafePtr(pactor + 0x940, &pasc) || !AscLooksLikeAsc(pasc))
+                    pasc = FindAscInActor(pactor);
+            }
+            if (pactor >= 0x10000 && pasc >= 0x10000)
+                PushLog("player: caster armed from participant handle");
+        }
+        if (pactor >= 0x10000 && pasc >= 0x10000 && pasc != g_player_asc) {
             g_player_asc = pasc;
-            PushLog("player: caster resolved from combat path");
+            g_player_pawn = pactor;
         }
     }
     if (victim_is_player) return;   // 玩家挨打：不把玩家当回放目标
