@@ -1321,12 +1321,8 @@ static constexpr bool kReplayExec = false;
 // ===== OnDamaged 闂佺顫夊ú婵嬬嵁?+ 闂佸湱顭堥ˇ鏉款渻閸岀偞鈷掗柟缁㈠枛濞呫垽鏌￠埀顒勫箻閸涱垳顦╅梺鍦暯閸嬫捇鏌￠崼婵愭Ш閻㈩垵娅ｉ埀顒傤攰閸╂牕顭囬棃娑掓敠闁归偊浜濈缓娲倵閸︻収鍔滅紒杈ㄧ箖缁嬪顓奸崼銏㈢暫濠电姴顭堥崐妤冩偖椤愶箑绀嗘い鎰靛墰缁€?====
 static void OnDamagedCapture(std::uintptr_t object, std::uintptr_t function, void* parameters) {
     if (parameters == nullptr || function == 0) return;
-    // UFunction 名字用 name id 比较，不在 Game 线程调 DecodeName。
-    if (g_ondmg_nid == 0) {
-        std::uint32_t nid = 0;
-        if (!g_ue.NameId("OnDamaged", &nid) || nid == 0) return;
-        g_ondmg_nid = nid;
-    }
+    // name id 由 on_draw（render 线程）解析好；这里只做整数比较，不碰宿主 names 服务。
+    if (g_ondmg_nid == 0) return;
     std::uint32_t fn_nid = 0;
     if (!ue::Reader::SafeU32(function + 0x18, &fn_nid) || fn_nid != g_ondmg_nid) return;
     std::uintptr_t inst = 0, causer = 0;
@@ -4142,11 +4138,13 @@ static int            g_pend_fresh = 0;
 // ground truth that does not depend on the broken object handle decode.
 static std::uintptr_t g_arm_ge = 0;
 static std::uintptr_t g_arm_asc = 0;
+static std::uintptr_t g_arm_recv = 0;
 static volatile LONG g_arm_seq = 0;
 static LONG g_arm_seen = 0;
-static void QueueArmFromCapture(std::uintptr_t ge, std::uintptr_t asc) {
+static void QueueArmFromCapture(std::uintptr_t ge, std::uintptr_t asc, std::uintptr_t recv) {
     g_arm_ge = ge;
     g_arm_asc = asc;
+    g_arm_recv = recv;
     InterlockedIncrement(&g_arm_seq);
 }
 
@@ -4195,7 +4193,7 @@ static void StoreCapture(const unsigned char* raw, std::uintptr_t receiver,
         c.hp > 0.0f &&
         (std::strstr(c.ge, "Dmg") != nullptr || std::strstr(c.ge, "Damage") != nullptr ||
          std::strstr(c.ge, "dmg") != nullptr)) {
-        QueueArmFromCapture(c.ge_class, c.target_asc);
+        QueueArmFromCapture(c.ge_class, c.target_asc, c.receiver);
     }
     // FBufData.DynamicGrantedTags @ raw+0x18锛欶GameplayTagContainer = 涓や釜 TArray
     {
@@ -4622,48 +4620,16 @@ static std::uintptr_t ResolveParticipantByPath(AnomalyGenerationHandleV1 h, bool
     return actor;
 }
 
-// 事件驱动武装：受害者/施法者都以宿主给出的 participant path 为准，句柄解码只当快速路径。
+// 事件驱动武装（Game 线程）：只做指针读取。宿主 names/objects 服务要取 State 锁，
+// 不能在 PE 回调/Game 线程里调，否则会卡死；名字解析一律留给 on_draw。
 static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
     if (ev.final_damage <= 0) return;
-    EventDiag(ev);
     for (int i = 0; i < g_rt_n; ++i) {
         if (g_rt[i].victim_id != 0 && g_rt[i].victim_id == ev.victim.id) {
             g_rt[i].last_hit_ms = NowMs();
             return;
         }
     }
-
-    char vname[64] = {0};
-    char aname[64] = {0};
-    CombatParticipantClassName(ev.victim, vname, sizeof(vname));
-    CombatParticipantClassName(ev.attacker, aname, sizeof(aname));
-    const bool victim_is_player = ClassNameIsPlayer(vname);
-
-    // 施法 ASC：path 是 player_* 的那个参与者就是本地玩家。
-    if (victim_is_player || ClassNameIsPlayer(aname)) {
-        const AnomalyGenerationHandleV1 ph = victim_is_player ? ev.victim : ev.attacker;
-        std::uintptr_t pasc = 0;
-        std::uintptr_t pactor = ResolveParticipantByPath(ph, false, &pasc);
-        if (pactor < 0x10000 || pasc < 0x10000) {
-            // 路径反查不可用时直接解句柄：boss 的 victim 已经证明这条对部分对象有效。
-            pactor = ActorFromDamageHandle(ph);
-            pasc = 0;
-            if (pactor >= 0x10000) {
-                if (!ue::Reader::SafePtr(pactor + 0x940, &pasc) || !AscLooksLikeAsc(pasc))
-                    pasc = FindAscInActor(pactor);
-            }
-            if (pactor >= 0x10000 && pasc >= 0x10000)
-                PushLog("player: caster armed from participant handle");
-        }
-        if (pactor >= 0x10000 && pasc >= 0x10000 && pasc != g_player_asc) {
-            g_player_asc = pasc;
-            g_player_pawn = pactor;
-            g_player_pawn_ref = pactor;   // OnDamaged 过滤用它判断"这一发是否玩家参与"
-        }
-    }
-    if (victim_is_player) return;   // 玩家挨打：不把玩家当回放目标
-
-    // 目标：句柄解出来的对象只有 ASC+GE 都成立才可信，否则按 path 反查。
     std::uintptr_t victim = ActorFromDamageHandle(ev.victim);
     std::uintptr_t asc = 0;
     if (victim >= 0x10000) {
@@ -4671,15 +4637,6 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
             asc = FindAscInActor(victim);
     }
     std::uintptr_t ge = asc >= 0x10000 ? LastDamageGeClass(asc) : 0;
-    if (!(asc >= 0x10000 && ge >= 0x10000 && GeClassLooksValid(ge))) {
-        std::uintptr_t pasc = 0;
-        const std::uintptr_t pv = ResolveParticipantByPath(ev.victim, true, &pasc);
-        if (pv >= 0x10000 && pasc >= 0x10000) {
-            victim = pv;
-            asc = pasc;
-            ge = LastDamageGeClass(asc);
-        }
-    }
     if (victim < 0x10000) {
         ArmDiag("no-victim", 0, 0, 0, 0.0f);
         ArmDbgPush(0, 1);
@@ -5989,7 +5946,17 @@ static void DrainArmRequests() {
     g_arm_seen = seq;
     const std::uintptr_t ge = g_arm_ge;
     const std::uintptr_t asc = g_arm_asc;
+    const std::uintptr_t recv = g_arm_recv;
     if (ge < 0x10000 || asc < 0x10000) return;
+    // apply 的 receiver 通常就是施法者 ASC（玩家）；没有别的来源时用它当施法者。
+    if (g_player_asc < 0x10000 && recv >= 0x10000 && recv != asc &&
+        AscLooksLikeAsc(recv)) {
+        float rhp = 0.0f;
+        if (ReadAscHP(recv, &rhp) && rhp > 0.0f) {
+            g_player_asc = recv;
+            PushLog("player: caster from apply receiver");
+        }
+    }
     if (asc == g_player_asc) return;
     float hp = 0.0f;
     if (!AscStillValid(asc) || !ReadAscHP(asc, &hp) || hp <= 0.0f) return;
@@ -6089,6 +6056,12 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
         PushLog(b);
     }
     g_last_draw_ms = NowMs();
+    // 宿主 names 服务只能在 render 线程调：这里解析 OnDamaged 的名字 id，
+    // PE 回调（Game 线程）只做整数比较。
+    if (g_ondmg_nid == 0) {
+        std::uint32_t nid = 0;
+        if (g_ue.NameId("OnDamaged", &nid) && nid != 0) g_ondmg_nid = nid;
+    }
     TickMonsterScan();   // 分帧扫描，逐 actor DecodeName：只能在 render 线程推进
     if (g_apply_hook_enabled) InstallApplyHook();
     else ReleaseHooks();
