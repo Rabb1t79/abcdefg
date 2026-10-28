@@ -195,7 +195,9 @@ static int g_load_count = 0;
 static unsigned long long g_probe = 0;
 static int g_find_rc = -1;
 static unsigned int g_id_pc = 0, g_id_asc = 0, g_id_vb = 0;
+static unsigned int g_id_ai = 0, g_id_mon = 0;   // /Script/HTGame.HTAICharacter / HTMonsterCharacter
 static unsigned long long g_cls_pc = 0;
+static unsigned long long g_cls_ai = 0, g_cls_mon = 0;
 static unsigned long long g_cls_asc = 0;
 static unsigned long long g_cls_vb = 0;
 static unsigned int g_probe_nid = 0;
@@ -1037,6 +1039,18 @@ void TickFeatures() {
         if (FindFuncByName(vb_cls, "GetRallyState")) g_resolve.volley = 1;
         if (FindFuncByName(vb_cls, "AwardPoint")) g_resolve.volley = 1;
         if (FindFuncByName(vb_cls, "Test_ForceWin")) g_resolve.volley = 1;
+    }
+    // 怪物基类路径：扫描时按继承链判断，不依赖类名前缀（覆盖名字不含 mon_/boss_ 的怪）。
+    static int ai_tries = 0, mon_tries = 0;
+    if (g_id_ai == 0) g_id_ai = FindNameIdByPath("/Script/HTGame.HTAICharacter");
+    if (g_cls_ai == 0 && g_id_ai != 0 && ai_tries < 10) {
+        ++ai_tries;
+        g_cls_ai = (unsigned long long)g_ue.FindClassById(g_id_ai);
+    }
+    if (g_id_mon == 0) g_id_mon = FindNameIdByPath("/Script/HTGame.HTMonsterCharacter");
+    if (g_cls_mon == 0 && g_id_mon != 0 && mon_tries < 10) {
+        ++mon_tries;
+        g_cls_mon = (unsigned long long)g_ue.FindClassById(g_id_mon);
     }
 }
 
@@ -4563,6 +4577,18 @@ static bool BuildMonsterLevelList(std::uintptr_t world) {
     return g_mon_level_n > 0;
 }
 
+// 按继承链判断 UClass 是否派生自某个基类（UStruct::SuperStruct @0x40）。
+static bool ClassDerivesFrom(std::uintptr_t cls, std::uintptr_t base) {
+    if (cls < 0x10000 || base < 0x10000) return false;
+    for (int depth = 0; depth < 16 && cls >= 0x10000; ++depth) {
+        if (cls == base) return true;
+        std::uintptr_t super = 0;
+        if (!ue::Reader::SafePtr(cls + 0x40, &super)) return false;
+        cls = super;
+    }
+    return false;
+}
+
 void TickMonsterScan() {
     if (g_mon_on == 0) return;
     if (g_gworld_ptr == 0) { g_mon_on = 0; PushLog("mon: no GWorld"); return; }
@@ -4629,7 +4655,9 @@ void TickMonsterScan() {
         const bool hostile = std::strstr(nm, "mon_") != nullptr ||
                              std::strstr(nm, "boss_") != nullptr ||
                              std::strstr(nm, "Mon_") != nullptr ||
-                             std::strstr(nm, "Boss_") != nullptr;
+                             std::strstr(nm, "Boss_") != nullptr ||
+                             ClassDerivesFrom(cls, (std::uintptr_t)g_cls_ai) ||
+                             ClassDerivesFrom(cls, (std::uintptr_t)g_cls_mon);
         if (!hostile) { RememberClassName(nm); continue; }
         if (std::strstr(nm, "bullet") != nullptr || std::strstr(nm, "Effect") != nullptr) continue;
         std::uintptr_t asc = 0;
