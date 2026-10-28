@@ -5451,6 +5451,7 @@ static int GeRateIntervalMs() {
 // the target that is currently being hit.
 void ReplayDropTarget(int index) {
     if (index < 0 || index >= g_rt_n) return;
+    g_rep_fail += g_rt[index].applied;   // 目标消失时未结算的施加计为失败，保证 总=成功+失败
     for (int i = index; i + 1 < g_rt_n; ++i) g_rt[i] = g_rt[i + 1];
     --g_rt_n;
 }
@@ -5537,7 +5538,7 @@ void ReplayTick() {
             const float delta = t.hp - hp;
             if (delta > 0.5f) {
                 ++t.landed;
-                ++g_rep_ok;
+                g_rep_ok += t.applied;       // 本窗口的施加整体计为成功
                 g_rep_dmg += static_cast<int>(delta);
                 t.dmg_sum += delta;          // 估算“每次 apply 打出多少”
                 t.applied_sum += t.applied;
@@ -5545,7 +5546,7 @@ void ReplayTick() {
                 if (t.paused != 0) { t.paused = 0; PushLog("replay: resumed (damage landed)"); }
             } else {
                 ++t.blocked;
-                ++g_rep_fail;
+                g_rep_fail += t.applied;     // 本窗口的施加整体计为失败
                 if (t.blocked >= 4 && t.paused == 0) {
                     t.paused = 1;
                     char b[160];
