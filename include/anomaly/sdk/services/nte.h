@@ -15,7 +15,7 @@
 #define ANOMALY_NTE_NAVIGATION_SERVICE_V1_ID "anomaly.nte.navigation"
 #define ANOMALY_NTE_NAVIGATION_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
-#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 6u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 8u
 #define ANOMALY_NTE_ENTITIES_SERVICE_V1_ID "anomaly.nte.entities"
 #define ANOMALY_NTE_ENTITIES_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_ACTORS_SERVICE_V1_ID "anomaly.nte.actors"
@@ -316,6 +316,7 @@ typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_V1_HAS_ENGINE_TORQUE_RATIO (1u << 5u)
 #define ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES 128u
+#define ANOMALY_NTE_VEHICLE_CUSTOMIZATION_LABEL_MAX_UTF8_BYTES 128u
 #define ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES 128u
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER (1u << 1u)
@@ -356,6 +357,22 @@ typedef struct AnomalyNteVehicleSpeedTargetV1 {
     float top_speed_kmh;
     float minimum_speed_kmh;
 } AnomalyNteVehicleSpeedTargetV1;
+
+typedef struct AnomalyNteVehicleCustomizationCatalogSnapshotV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint64_t sequence;
+    uint32_t entry_count;
+    uint32_t reserved;
+} AnomalyNteVehicleCustomizationCatalogSnapshotV1;
+typedef struct AnomalyNteVehicleCustomizationOptionV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint32_t kind;
+    uint32_t module_type;
+    char option_id[ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES + 1u];
+    char label[ANOMALY_NTE_VEHICLE_CUSTOMIZATION_LABEL_MAX_UTF8_BYTES + 1u];
+} AnomalyNteVehicleCustomizationOptionV1;
 
 typedef struct AnomalyNteVehicleServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
@@ -399,11 +416,16 @@ typedef struct AnomalyNteVehicleServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *set_fine_speed_tuning_enabled)(
         void* user, uint32_t enabled);
     AnomalyStatusV1 (ANOMALY_CALL *revoke_fine_speed_authorization)(void* user);
-    // V6: apply an absolute speed target selected by the plugin. scope is one of
-    // ANOMALY_NTE_VEHICLE_SPEED_TARGET_CURRENT or ..._OTHER_LOADED. Core identifies and
-    // validates matching live vehicles but does not define the user-facing calibration.
-    AnomalyStatusV1 (ANOMALY_CALL *set_speed_target)(
-        void* user, const AnomalyNteVehicleSpeedTargetV1* request);
+    // V7-V8: customization catalog addressed by the vehicle row id. An empty id keeps the
+    // behaviour of using the currently selected summon vehicle. These slots keep the v8
+    // table layout the vehicle plugin is built against; callers must check the status.
+    AnomalyStatusV1 (ANOMALY_CALL *customization_catalog_snapshot)(
+        void* user, AnomalyStringViewV1 vehicle_row_id,
+        AnomalyNteVehicleCustomizationCatalogSnapshotV1* snapshot);
+    AnomalyStatusV1 (ANOMALY_CALL *customization_option_at)(
+        void* user, AnomalyStringViewV1 vehicle_row_id, uint32_t index,
+        AnomalyNteVehicleCustomizationOptionV1* option);
+    AnomalyStatusV1 (ANOMALY_CALL *repair_current_vehicle)(void* user);
 } AnomalyNteVehicleServiceV1;
 
 

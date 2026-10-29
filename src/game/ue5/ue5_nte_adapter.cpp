@@ -15660,7 +15660,9 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleSetOtherVehiclesEngineTorqueRatioThunk,
             VehicleSetOtherVehiclesMinSpeedRatioThunk,
             VehicleAuthorizeFineSpeedThunk, VehicleSetFineSpeedTuningEnabledThunk,
-            VehicleRevokeFineSpeedAuthorizationThunk, VehicleSetSpeedTargetThunk};
+            VehicleRevokeFineSpeedAuthorizationThunk,
+            VehicleCustomizationSnapshotThunk, VehicleCustomizationOptionThunk,
+            VehicleUnsupportedRepairThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -16024,12 +16026,22 @@ private:
         return lease ? static_cast<State*>(lease.User())->VehicleRevokeFineSpeedAuthorization() : StoppedStatus();
     }
 
-    static AnomalyStatusV1 ANOMALY_CALL VehicleSetSpeedTargetThunk(
-        void* user,
-        const AnomalyNteVehicleSpeedTargetV1* request) noexcept {
-        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? static_cast<State*>(lease.User())->VehicleSetSpeedTarget(request)
-                     : StoppedStatus();
+    // V7-V8 compatibility slots. The customization catalog is not implemented on this
+    // baseline yet; callers must check the status and keep the summon/speed features usable.
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCustomizationSnapshotThunk(
+        void* /*user*/, AnomalyStringViewV1 /*vehicle_row_id*/,
+        AnomalyNteVehicleCustomizationCatalogSnapshotV1* /*snapshot*/) noexcept {
+        return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCustomizationOptionThunk(
+        void* /*user*/, AnomalyStringViewV1 /*vehicle_row_id*/, std::uint32_t /*index*/,
+        AnomalyNteVehicleCustomizationOptionV1* /*option*/) noexcept {
+        return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleUnsupportedRepairThunk(void*) noexcept {
+        return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSetEngineTorqueRatioThunk(
