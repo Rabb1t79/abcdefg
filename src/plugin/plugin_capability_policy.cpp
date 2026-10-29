@@ -11,7 +11,7 @@ struct ServiceCapabilityMapping {
     std::string_view capability;
 };
 
-constexpr std::array<std::string_view, 45> kKnownCapabilities{
+constexpr std::array<std::string_view, 47> kKnownCapabilities{
     "commands",
     "configuration",
     "diagnostics",
@@ -26,6 +26,7 @@ constexpr std::array<std::string_view, 45> kKnownCapabilities{
     "nte-actor-snapshot",
     "nte-build",
     "nte-combat-read",
+    "nte-damage-chain",
     "nte-entity-snapshot",
     "nte-esc-menu-button",
     "nte-player-hold",
@@ -50,6 +51,7 @@ constexpr std::array<std::string_view, 45> kKnownCapabilities{
     "ui-window",
     "ue5-build",
     "ue5-ahud",
+    "ue5-functions",
     "ue5-names",
     "ue5-objects",
     "ue5-world",
@@ -59,7 +61,7 @@ constexpr std::array<std::string_view, 45> kKnownCapabilities{
     "websocket",
 };
 
-constexpr std::array<ServiceCapabilityMapping, 45> kServiceCapabilities{{
+constexpr std::array<ServiceCapabilityMapping, 47> kServiceCapabilities{{
     {"anomaly.plugin-state", "configuration"},
     {"anomaly.config", "configuration"},
     {"anomaly.storage", "storage"},
@@ -84,6 +86,7 @@ constexpr std::array<ServiceCapabilityMapping, 45> kServiceCapabilities{{
     {"anomaly.ue5.ahud", "ue5-ahud"},
     {"anomaly.ue5.framework", "game-events"},
     {"anomaly.ue5.process-event", "game-events"},
+    {"anomaly.ue5.functions", "ue5-functions"},
     {"anomaly.ue5.names", "ue5-names"},
     {"anomaly.ue5.objects", "ue5-objects"},
     {"anomaly.ue5.world", "ue5-world"},
@@ -91,6 +94,7 @@ constexpr std::array<ServiceCapabilityMapping, 45> kServiceCapabilities{{
     {"anomaly.nte.build", "nte-build"},
     {"anomaly.nte.session", "nte-session-snapshot"},
     {"anomaly.nte.metrics", "nte-snapshot-metrics"},
+    {"anomaly.nte.damage-chain", "nte-damage-chain"},
     {"anomaly.nte.player", "nte-player-snapshot"},
     {"anomaly.nte.player-teleport", "nte-player-teleport"},
     {"anomaly.nte.player-hold", "nte-player-hold"},
