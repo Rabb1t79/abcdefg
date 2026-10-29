@@ -1,0 +1,376 @@
+# 内建插件
+
+运行包默认提供面向用户的内建插件。它们和第三方插件一样，都是独立的目录包（`manifest.json` + `plugin.dll`），可以在 **Plugins** 页启停、重载与查看状态。
+
+> [!NOTE]
+> 坐标、实体 ESP 和 WalletCollector 等功能都依赖 [Profile](nte-profiles.md)。活动 Profile 缺少签名、偏移或校验未通过时，插件仍然可以加载，但对应功能会显示为不可用。
+
+> [!NOTE]
+> `Nearby Pickup`、`Movement Hold Probe`、`Map Spawn Exporter`、`Teleport Landmarks Probe` 与
+> Navmesh Demo 属于开发者测试包：默认构建与发布的运行包都不含它们，只有用 `build.cmd testplugins`
+> 构建的运行包才会带上（见[从源码构建](../developer-guide/building.md)）。其余插件随发布运行包提供。
+
+## 换肤器 Lite
+
+`换肤器 Lite`（`b1ank.skin-changer`）提供角色配饰、滑翔翼与觉醒外观预览，以及自定义车牌。
+车牌页开启 **应用车牌** 后，文字会跟随之后驾驶的受支持载具；关闭开关恢复原车牌。
+**动态车牌** 使用循环滚动，可调整滚动间隔。可用字符和车牌宽度显示在面板中。
+这些修改仅影响本机外观，觉醒预览不提供战斗增益。
+
+## Coordinate Display
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.builtin.nte-position` |
+| **作用** | 只读显示当前玩家坐标、会话（World）状态与快照采样指标。 |
+| **依赖服务** | `anomaly.ui`；`anomaly.nte.session`、`anomaly.nte.player`、`anomaly.nte.metrics`（均为 V1，可选） |
+| **需要 Profile** | 是（玩家 / 会话数据依赖已验证符号） |
+
+该插件只读取数据，不修改游戏状态。可以用它快速确认坐标和会话数据是否正常。
+
+## Teleport
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.builtin.nte-teleport` |
+| **作用** | 手动输入或读取当前坐标后传送玩家；支持准心方向传送、面朝方向定距传送，以及导入 JSON 点位分类管理。 |
+| **依赖服务** | `anomaly.ui`、`anomaly.config`；`anomaly.input`、`anomaly.json`、`anomaly.scheduler`、`anomaly.plugin-state`、`anomaly.nte.session/player/player-teleport`（均为 V1，可选） |
+| **需要 Profile** | 是（玩家、会话与传送桥接依赖已验证符号） |
+
+准心传送沿当前相机朝向前进预设距离，并把目标 Z 轴钳制在相机高度加安全抬升之上，
+避免落到地下；向前传送沿水平朝向移动预设距离。两个快捷键都可以在插件窗口中重新捕获。
+点击 **Import points** 会从 JSON 文件路径（相对路径基于插件私有状态目录）读取点位数组，
+支持 `color`、`name`、`x/y/z`，可选 `category`；缺少 `category` 时会按 `1. Name` 这类
+前缀派生分类。导入结果会在插件停用时随设置一起持久化。
+
+## 999夜脚本
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.local.nte.night999` |
+| **作用** | 999夜副本全自动刷怪循环。 |
+| **依赖服务** | `anomaly.ui`；`anomaly.core`、`anomaly.nte.session/player/player-teleport/navigation/combat/skills/skill-invocation/actors/entities/pickup`、`anomaly.ue5.names/objects/world/framework`、`anomaly.interop.signature`（均为 V1，可选） |
+| **需要 Profile** | 是（会话与玩家快照、传送桥接、反射定位与自动战斗都依赖已验证符号） |
+
+**此脚本适用于999夜赤龙古堡地图**。窗口分 **开始** / **设置** 两个标签页。
+
+**开始**页：**循环次数** 输入框（**0 = 无限循环**）、**开始脚本 / 停止脚本** 两个按钮，以及下面的
+实时状态行（`第 N/M 轮 · 当前步骤`）。
+
+**设置**页：三个传送点（营地、1 号战斗点、2 号战斗点）各占三行坐标（X / Y / Z），可以直接改，
+也可以点 **读取当前坐标为营地** / **读取当前坐标为1号战斗点** / **读取当前坐标为2号战斗点** 把
+玩家当前坐标填进去（当帧即可看到）；再往下是预载延迟，以及自动战斗的开关与参数。
+
+一轮循环固定六步：传送至营地 → 刷新怪物 → 传送至 1 号战斗点 → 自动战斗 → 传送至 2 号战斗点 →
+自动战斗，然后回到营地开始下一轮（按设定次数循环，**0 = 无限**；每次传送落地后先稳定 2 秒）。
+
+自动战斗的结束判据（命中任意一条即结束，然后进入下一轮）：
+
+- **首次接敌超时**（默认 15 秒，可改）：开打后一次怪都没遇到过，判定这个点没怪；
+- **搜索半径内**连续 5 秒找不到怪（共享模块自带，必须先见过怪才开始计时）——半径就是这个点
+  的「打完」定义，所以要覆盖整个战斗点；
+- 普攻或技能调用失败（打不动）。
+
+判定不使用伤害读数：伤害流读不到时（偏移失效或参与者句柄对不上），「多久没伤害」会在怪还
+活着时成立，脚本就会在没打完的点上传送走。伤害只用于模块内部换靶，不参与本点是否完成的判定。
+
+## NTE 伤害仪表盘
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.local.damage-dashboard` |
+| **作用** | 实时显示玩家角色造成的战斗伤害、命中与技能分布。 |
+| **依赖服务** | `anomaly.ui`；`anomaly.core`、`anomaly.diagnostics`、`anomaly.notifications`、`anomaly.nte.combat`、`anomaly.nte.session`、`anomaly.json`、`anomaly.config`（均为 V1，可选） |
+| **需要 Profile** | 是（战斗快照与伤害事件依赖已验证的 NTE Combat 服务） |
+
+仪表盘显示本场总伤害、命中数、最高单次伤害和暴击率，并提供生命 / 护盾、队伍伤害分布、
+按角色分组的技能伤害、承受伤害来源、限时与固定增益以及最近命中记录。同名技能会合并，
+四名角色切换时累计数据不会中断。
+
+插件只统计当前玩家操控角色造成的伤害。窗口宽度可拖拽，高度自动贴合内容；战斗统计数据
+来自只读 `anomaly.nte.combat` 服务，不修改角色属性或游戏状态。
+
+## Quick Ultimate
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.builtin.nte-quick-ultimate` |
+| **作用** | 按住 `Alt` 和数字键 `1`、`2`、`3`、`4` 时，自动切换到对应角色槽位并持续发送 `Q`，松开数字键或 `Alt` 后停止。 |
+| **依赖服务** | `anomaly.input`、`anomaly.ui`、`anomaly.localization`（均为 V1） |
+| **需要 Profile** | 否 |
+
+插件只在当前游戏的 `UnrealWindow` 位于前台时发送按键，并模拟普通数字键按下和释放，确保切换动作不携带 `Alt`
+修饰状态。数字键释放后会立即开始发送 `Q`：每次按下 `20ms`、松开后等待 `80ms`，按住期间持续循环。松开当前
+数字键或 `Alt` 后，插件会等待当前 `Q` 释放，再清理按键状态。同时按住多个数字键时，最后按下的数字优先。
+
+该插件只确认按键已经发送，不能确认游戏最终接受了切换或终极技能。请保持游戏默认的角色槽位键和终极技能键为
+`1-4` 与 `Q`。
+
+## Nearby Pickup
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.local.nte-pickup-demo` |
+| **作用** | 点击一次拾取半径内的 `PropBox_`、`InteractBox_` 与随机物品 Actor，并显示 Host 确认状态。 |
+| **依赖服务** | `anomaly.ui`、`anomaly.localization`、`anomaly.nte.pickup`（V1） |
+| **需要 Profile** | 是；拾取反射 ABI、对象/名称/玩家/实体布局必须通过 `nte-pickup-layout-v1`。 |
+
+界面中的 `nearby`、`triggered`、`confirmed`、`checking`、`unconfirmed` 和 `skipped` 均来自
+框架 ABI。`triggered` 只表示交互调用完成；确认窗口最多 2 秒，超时会保留 `OK` 并单独显示
+`unconfirmed`，不会把请求整体标为失败。确认期间按钮保持禁用；框架通过后续实体缓存或
+`bInteractFinish` 变化快速确认，只在截止时做一次最终可交互检查。
+
+## Entity ESP
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.builtin.entity-esp` |
+| **作用** | 使用 UE 原生 AHUD 绘制实体的世界空间包围盒与标签。 |
+| **依赖服务** | `anomaly.config`、`anomaly.ui`、`anomaly.ue5.ahud`；`anomaly.core`、`anomaly.nte.entities`、`anomaly.ue5.names`（均可选） |
+| **需要 Profile** | 是（实体快照、名称解析和 AHUD 绘制依赖已验证符号） |
+
+插件窗口和设置菜单继续使用 ImGui；实体边界框和标签由 AHUD 在 Game 线程绘制，即使管理菜单折叠也会显示。设置项通过 `anomaly.config` 持久化。
+
+## Pink Paw Heist ESP
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.builtin.pink-paw-heist-esp` |
+| **作用** | 显示粉爪大劫案中的战利品和撤离点，战利品可按最低价值筛选。 |
+| **依赖服务** | `anomaly.ui`、`anomaly.config`、`anomaly.interop.signature`、`anomaly.ue5.framework`、`anomaly.ue5.ahud`、`anomaly.ue5.names`；`anomaly.websocket`、`anomaly.nte.session/player/player-teleport/entities/actors`、`anomaly.font`、`anomaly.texture`（均为 V1，可选） |
+| **需要 Profile** | 是；物品与撤离点绘制需要已验证的 `ue5.ahud`，通用会话、玩家、实体与 Actor 服务也由 Profile 控制；Pink Paw 专用拾取签名和布局由插件自带 |
+
+插件窗口和设置菜单继续使用 ImGui；物品边框、标签与撤离点改由 UE 原生 AHUD 绘制，即使管理菜单
+折叠也会显示。窗口中仍会列出物品名称、价值、坐标和撤离点状态。RobBank 可拾取判定和 native
+pickup 调用只存在于插件内；宿主提供签名扫描、Game 回调、AHUD 绘制、名称解析、原始内存读取
+以及上述通用 NTE 服务。
+
+开发者模式下可点击“开始循环进本、拾取、撤离”：从大世界进入银行，或接管当前银行副本，按当前
+最低价值筛选拾取；开启“显示门禁卡”时，每轮也会尝试拾取每张门禁卡一次。门禁卡属于辅助目标，
+其零价值对象仍保留在地图上不会阻止撤离；达到价值阈值的战利品仍需确认不再可拾取。每轮先等待
+实际发现战利品，不能将刚加载时仅出现撤离点的空列表判为完成。物品价格按单件解析，未识别价格
+的物品不会阻塞其他已就绪的目标；
+面板会显示已发现、已就绪和符合筛选的数量。刷新确认没有剩余目标后，自动前往已开启
+的撤离点并发送游戏的正常撤离请求，确认离开副本后等待 8 秒再进下一轮。面板显示当前阶段和已完成
+轮数。
+
+“银行循环次数”设为 0 时不限次数；设为正数时，在确认最后一轮撤离回外部地图后自动停止。
+次数与“自动跳过银行过场动画”选项会保存，开始循环后本轮运行使用的设置固定。跳过默认开启，
+在循环运行期间，确认控制器正在播放已识别的银行入场序列后，等待开场约 2 秒；跳过按钮及其父
+控件可见、对话窗口已激活、按钮启用且可交互时，调用游戏对话窗口的跳过流程，由游戏处理后续
+序列与窗口，每次播放只请求一次。入场动画晚于战利品就绪时仍会检查；面板显示跳过请求次数。
+其他过场仍等待正常播放，接口不可用时面板会提示。
+
+“停止循环”会停止后续操作。循环不会随热重载或重启自动恢复。入场条件不满足、拾取未确认、
+找不到可用撤离点或等待超时会停止并显示具体阶段的原因，不会将失败操作计为完成。切图导致
+拾取上下文失效时，会重新准备战利品数据，即使先前的列表已经稳定。
+
+在粉爪地图中，插件还会通过 Runtime 的本地 `anomaly.websocket` 服务广播兼容的坐标消息、完整战利品
+快照以及战利品增量；离开粉爪地图时会发送清空事件。插件设置中的 WebSocket 实时定位默认开启，
+默认监听地址为 `ws://127.0.0.1:14514`，端口可在窗口中修改。战利品筛选由地图前端完成，不受 ESP
+菜单的价值或可拾取筛选影响。
+
+## Custom UID
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.local.nte.fake-uid` |
+| **作用** | 通过签名解析与对象 / 名称服务，修改界面上显示的 UID。 |
+| **依赖服务** | `anomaly.config`、`anomaly.interop.signature`、`anomaly.scheduler`、`anomaly.ue5.names`、`anomaly.ue5.objects`；`anomaly.ui`、`anomaly.window`（可选） |
+| **需要 Profile** | 通用对象与名称服务需要；FakeUID 专用签名和布局由插件自带 |
+
+> [!NOTE]
+> Custom UID 的 Manifest 当前声明 `builds: ["nte-*"]`，但插件内置的签名和布局只在已知游戏版本上验证过。宿主仅提供通用签名扫描、调度、对象快照和名称解析；插件会在运行时检查自己的签名、对象布局和 vtable，检查不通过时显示为不可用，不会强行写入。
+
+## Camera Tools
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.local.nte.camera-tools` |
+| **作用** | 保持角色跟随时增加视距并调整视角 FOV，或切换为可移动的自由相机；可选让场景跟随相机加载。 |
+| **依赖服务** | `anomaly.core`、`anomaly.config`、`anomaly.input`、`anomaly.ui`、`anomaly.localization`、`anomaly.interop.signature`、`anomaly.interop.hook`；`anomaly.nte.session`、`anomaly.nte.player`、`anomaly.nte.player-teleport` |
+| **需要 Profile** | 否（相机签名和布局由插件自带，并在加载时校验） |
+
+额外视距默认为 `0`，即完全使用游戏默认视距；插件不设置人为上限。视角 FOV 默认为 `0`，含义是**完全不干预镜头**：此时输入框显示的是插件读到的游戏当前视角（本作实测为 `80`；尚未读到之前保持 `0`），上下步进也从这个数开始，不会从 `0` 跳到最小值。输入 `0` 或点击 **恢复游戏默认** 回到该状态，并把读到的游戏视角写回去；其它取值会收敛到 `15` 到 `170` 度之间，并在插件运行期间持续写回该镜头值。自由相机和“场景跟随相机加载”默认关闭，激活键为 `F6`。启用该选项后，插件只在自由相机已激活时让场景按本地 PlayerController 的自由相机位置和旋转加载；关闭时完全保留游戏原始加载位置。
+
+## WalletCollector
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.local.nte-interactbox-collector` |
+| **作用** | 扫描当前地图的钱包刷新点，按目标数量规划路线，自动移动到各点并通过拾取服务确认钱包已收集。 |
+| **依赖服务** | `anomaly.core`、`anomaly.ui`、`anomaly.localization`、`anomaly.nte.player`、`anomaly.nte.pickup`、`anomaly.interop.signature`、`anomaly.ue5.names`、`anomaly.ue5.objects`；`anomaly.nte.session`、`anomaly.nte.navigation`、`anomaly.nte.map-landmarks`、`anomaly.ue5.framework`（均为 V1，可选） |
+| **需要 Profile** | 是；玩家、拾取、寻路和地图地标服务由活动 Profile 的 Feature Gate 提供，钱包点签名与 UE5 对象 / 数据表布局还会在插件运行时校验。 |
+
+窗口中的 **目标钱包数量** 默认是 `10`，可在 `1` 到 `500` 之间调整。点击 **开始捡钱包** 后，插件会等待扫描完成，以玩家当前位置为起点规划路线，逐点移动、等待交互并验证拾取结果；寻路停滞时会尝试其他接近方向，拾取未确认时会自动重试，仍未确认的点会计入“跳过”。**停止** 会停止当前移动并清空未完成路线。
+
+默认使用 **寻路捡钱包**。地图地标服务可用时，插件会利用它优化跨区路线；服务不可用时按常规寻路继续处理。
+
+## Free Fly
+
+| | |
+| --- | --- |
+| **ID** | `local.nte.free-fly` |
+| **作用** | 按住 WASD 水平飞行、空格上升、Ctrl 下降，让角色在空中自由移动并穿过墙体；开关快捷键可在面板里捕获并保存。 |
+| **依赖服务** | `anomaly.ui`、`anomaly.input`；`anomaly.config`、`anomaly.nte.session`、`anomaly.nte.player`、`anomaly.nte.player-teleport`、`anomaly.nte.player-hold`（均为 V1，可选） |
+| **需要 Profile** | 是（玩家、会话与传送桥接依赖已验证符号） |
+
+飞行期间角色由插件独占控制：被冻结抑制的常规移动改由插件按同一套按键驱动。位移通过
+`anomaly.nte.player-teleport` 落位，宿主以 `bSweep=false` 执行，不经过碰撞检测，因此可以直接
+穿过墙体；重力冻结优先走 `player` 服务表尾的 hold 入口，独立服务作为回退。相机朝向不可用时
+`WASD` 退化为沿世界坐标轴移动。开关快捷键默认 F6，可以在插件窗口里重新捕获并持久化。
+
+落位是按需触发的（有输入、或角色偏离目标超过 15 厘米），不是逐帧：宿主传送走 ProcessEvent，
+逐帧调用会明显掉帧。停用、`on_stop` 与 `on_unload` 都会 `release` hold 交还重力并关闭控制，
+不会留下持久修改。
+
+> [!WARNING]
+> 在离地较高的位置关闭飞行时角色会原地自由落体，可能受到坠落伤害；建议先降到贴近地面再关闭。
+
+## Jelly
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.plugin.jelly` |
+| **作用** | 让镜头内的人物、载具与其他动态模型持续挤压、拉伸（近似保持体积），停止时把所有改动过的组件恢复原位。 |
+| **依赖服务** | `anomaly.core`、`anomaly.interop.signature`、`anomaly.ue5.names`、`anomaly.ue5.objects`、`anomaly.ue5.framework`、`anomaly.nte.actors`、`anomaly.nte.player`、`anomaly.nte.session`、`anomaly.ui`；`anomaly.localization`、`anomaly.config`（均为 V1，可选） |
+| **需要 Profile** | 是；调用入口与对象注册表在加载时校验，反射属性按名字与活动反射比对 |
+
+**强度** 与 **频率** 决定挤压幅度与快慢，**最大生效目标** 限制同时生效的模型数，
+**果冻停止时间** 在每次弹跳之间留一段回到原样的静止时间。开启 **模型自转** 后模型绕竖轴转动，
+速度由 **自转速度** 调整（停止时间只作用于形变，自转照常）。**包含物理模拟的整车（驾驶中的车）**
+决定是否连同物理刚体一起缩放，关闭后这类车辆完全不变形，随车配件也一起恢复原状。
+
+隐藏、静态、实例化与多部件模型会被跳过：窗口里的 **最近跳过** 与
+`Anomaly\logs\anomaly-runtime.log` 中 `jelly:` 开头的行会说明每个类被拒的原因。
+
+## UI Buttons
+
+| | |
+| --- | --- |
+| **ID** | `local.ui-buttons` |
+| **作用** | 列出游戏内全部 UI 按钮，按 可点击 / 不可点击 / 隐藏 分类并给出原因；鼠标停在按钮上按快捷键识别按钮；直接调用按钮的点击事件，不模拟鼠标。 |
+| **依赖服务** | `anomaly.core`、`anomaly.ui`；`anomaly.input`、`anomaly.nte.ui-buttons`（均为 V1，可选） |
+| **需要 Profile** | 是；按钮扫描、遮挡判定与点击全部由 `anomaly.nte.ui-buttons` 提供，活动 Profile 必须通过 `nte-ui-buttons-layout-v1`。 |
+
+插件只是按钮服务的调试面板，自身不扫描对象也不调用游戏函数。点 **扫描按钮** 生成按钮目录，
+**点击** 会在 Host 重新确认按钮仍然可点之后执行。被其他界面遮挡、禁用或锁定的按钮默认不能点；
+**强制点击** 跳过这一判定，可能让游戏进入异常状态，只用于调试。
+
+除普通按钮外，目录还列出页签 / 单选框（类型显示为 **Radio**）和列表条目（**List entry**），
+例如冒险手册左侧的页签和角色列表。已选中的页签仍显示为可点击；未解锁的页签和锁定的条目归为不可点击。
+
+**按钮拾取**：鼠标停在游戏里的按钮上按 F8（可在面板里改键），面板顶部会显示光标下的按钮，
+嵌套时最内层排第一。**3 秒后拾取** 用于不方便按快捷键的场景。勾选 **显示界面层** 可以看到各个
+界面层当前显示的界面，以及哪些界面被判定为遮挡下层。
+
+## Deserted
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.builtin.nte.deserted` |
+| **作用** | 一个勾选框：勾选后人群与车流都不再生成（街上空无一人），取消勾选恢复勾选前的数值。不影响站桩 NPC。 |
+| **依赖服务** | `anomaly.ui`；`anomaly.core`、`anomaly.interop.signature`、`anomaly.ue5.names`、`anomaly.ue5.objects`、`anomaly.input`（均为 V1，可选） |
+| **需要 Profile** | 否（自行按 AOB 特征码定位人群/车辆生成器，依赖 `memory-read`/`memory-write` capability） |
+
+插件直接改两组已有的旋钮，不新增或替换游戏的生成逻辑：
+
+- 人群：`HTMassCrowdSpawner` 的默认密度档与其每个 Density Profile 上的**昼/夜/晴/雨/雪环境倍率**；
+- 车辆：`MassSpawner` 的生成数量倍率与生成上限，以及 `HTMassVehicleSpawner` 的保底在线车辆数。
+
+勾选时先读取这些字段的**当前值**作为初始值并落盘，再把它们压到最低；只有勾选、取消勾选各写一次，
+不做周期性检测与回写。停用或重载插件时同样恢复初始值，避免把世界留在空街上。窗口热键固定 F8，
+开关热键可改、默认未绑定；勾选状态与初始值持久化在插件存储目录。
+
+## 开发者模式调试插件
+
+启用会话开发者模式后，插件列表还会显示 `Teleport Landmarks Probe`
+（`anomaly.builtin.teleport-landmarks-probe`）。它枚举框架提供的全部可传送地标，逐项显示
+`TeleportID`、所属世界、世界坐标、楼层、类型和覆盖目的坐标，并允许从选项中提交
+`Normal` 或 `SellingIndulgences` 传送。该插件只消费
+`anomaly.nte.map-landmarks`，不保存签名或偏移，也不自行扫描对象、解析 DataTable 或调用
+UE `ProcessEvent`；关闭开发者模式后不会出现在已安装插件视图中，也不会执行传送请求。
+
+### Movement Hold Probe
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.local.nte.movement-hold-probe` |
+| **作用** | 用一个按钮切换宿主的角色按住（`anomaly.nte.player-hold`），并实时显示重力系数、速度与移动模式，用于在真实客户端上验证传送到达窗口的按住行为。 |
+| **依赖服务** | `anomaly.core`、`anomaly.nte.player-hold`（可选）、`anomaly.nte.player`（可选） |
+| **需要 Profile** | 是；`anomaly.nte.player` 与 `anomaly.nte.player-hold` 由活动 Profile 提供，服务未发布时面板照常显示并提示尚未可用。 |
+
+面板显示 `held` / `refused`、实时重力系数与速度，以及 `mode`（`EMovementMode` 值，`3` 即
+`MOVE_Falling`）。冻结期间 **mode=3 是正常的**：宿主只把重力与速度按住，不改变角色所处的状态
+（游戏每帧都会把自己的模式写回去，改它没有意义）。真正决定传送是否会摔死的是角色**当时站在
+哪里**——宿主现在先传送、再在终点冻结，所以坠落锚点在终点。`refused` 表示宿主拒绝了冻结
+（原因写在宿主日志里），此时角色按没有冻结的方式落地。
+
+### Map Spawn Exporter
+
+开发者模式下还可以使用 `Map Spawn Exporter`（`anomaly.builtin.map-spawn-exporter`）。点击
+**Scan static map** 后，它在插件侧枚举 UE 对象注册表中的静态 DataTable，解析 `TeleportPoint`
+和带反射坐标字段的 Monster spawn 行，以及 OracleStone 和 RandomItem 行；不遍历 UWorld 的
+Actor/Entity 快照。点击 **Export JSON** 会通过 Host storage 原子写出插件存储目录中的
+`map-spawns.json`，文件包含点位类型、行 ID、地图名、来源表和三维坐标。候选 DataTable 未加载
+或当前 Profile 不支持时，该类别显示为不可用，不会用已加载对象推断点位。
+
+### DLL Loader
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.builtin.dll-loader` |
+| **作用** | 在插件启用或重载时加载指定的原生 DLL，并在插件停用或重载时释放该 DLL 的加载引用。 |
+| **依赖服务** | `anomaly.config`、`anomaly.ui` |
+| **需要 Profile** | 否 |
+
+默认目标为 `dumper-7.dll`。把目标 DLL 放进 `Anomaly\plugins\DllLoader\` 后启用该插件即可加载；也可以在插件窗口输入包内相对路径或绝对路径。路径修改在渲染回调中只保存在内存，随后从 **Plugins** 页重载该插件，生命周期会先保存设置、释放旧 DLL，再加载新路径。将路径清空并重载可禁用 DLL 加载。
+
+
+### NTE Vehicle
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.local.nte-vehicle` |
+| **作用** | 提供当前驾驶载具快照、载具目录和召唤、车速倍率、发动机扭矩、车轮摩擦调校，以及已加载非玩家载具的目标速度控制。默认 10 倍车速、0.5～10 倍精细范围、70 km/h 基准和批量目标范围均由插件管理；Core 只校验数值、识别目标对象并执行实际读写。停用插件后会请求恢复当前载具的原始参数。 |
+| **依赖服务** | `anomaly.ui`、`anomaly.nte.vehicle` v6、`anomaly.nte.player` |
+| **需要 Profile** | 是；只有活动 Profile 的原生符号、布局校验、Game 线程和反射绑定通过时，Core 才发布载具服务。 |
+
+Debug 密钥和固定 SHA-256 摘要校验由插件持有，Core 不维护密钥或解锁状态。插件不会记录输入内容，输入框使用密码掩码，验证失败时精细车速调校保持锁定。请勿将密钥写入日志、Issue、PR 或公开截图中。
+
+### Time Accel
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.builtin.nte-time-accel` |
+| **作用** | 给本地世界设置时间膨胀倍率，整体加速游戏节奏（动画、物理、本地移动、演出，含玩家角色）；支持「加速 N 秒」与「持续加速」，到点或停止后恢复 1 倍。 |
+| **依赖服务** | `anomaly.ui`、`anomaly.core`（可选）、`anomaly.ue5.names/objects/process-event`（可选）、`anomaly.nte.player`（可选）、`anomaly.input`（可选）、`anomaly.storage`（可选）、`anomaly.scheduler`（可选） |
+| **需要 Profile** | 否（通过 `anomaly.core::write_memory` 写世界设置；依赖 `memory-read`/`memory-write` capability） |
+
+该插件只在**开发者模式**下可用（`audience` 为 `developer`，且运行时校验开发者模式开关）。
+倍率、时长与三个功能键（加速一次 / 持续加速 / 立即恢复）都可在窗口内调整，改动即持久化；
+三个功能键默认未绑定。时间膨胀是本地世界设置，服务端权威的结算（伤害、技能 CD 等）不会因此变快。
+
+## autofish
+
+`autofish`（`b1ank.autofish`）支持普通钓鱼点的自动抛竿、咬钩后提竿、跟随绿条遛鱼和连续钓鱼。
+先打开钓鱼界面并对准水面；更换钓鱼点后手动抛竿一次，再开启 **启用自动钓鱼**。
+
+**鱼饵用完自动购买** 可选择鱼饵种类与每次购买数量，显示单价、总花费和库存。
+现有已装备鱼饵用完时，优先装备所选鱼饵的已有库存；没有库存才购买，等待到账后继续。
+该功能消耗游戏内货币，余额不足或请求未完成会暂停，避免重复购买。
+
+**自动卖鱼** 显示仓库数量与锁定数量，达到可调阈值后调用游戏的一键卖鱼流程，沿用其保留规则。
+出售只在钓鱼间隙执行，库存减少后继续钓鱼。配置与抛竿点由后台任务保存。
+收鱼展示会加速；该插件不提供秒咬钩或跳过遛鱼的实验功能。
+
+## 管理插件
+
+在 **Plugins** 页你可以：
+
+- 搜索 / 过滤 / 排序已安装插件。
+- 启用、停用或重载单个插件。
+- 查看插件状态、失败原因和回调耗时。
+- 通过 **Open / Hide** 控制插件窗口；**Reload all** 显式触发全量重载。
+
+下载安装第三方插件见[第三方插件](third-party-plugins.md)；自己写插件见[插件开发](../developer-guide/plugin-development.md)。

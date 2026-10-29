@@ -1,0 +1,30 @@
+cmake_minimum_required(VERSION 3.22)
+
+project(PinkPawHeistEsp LANGUAGES CXX)
+
+if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "Pink Paw Heist ESP targets Windows x64")
+endif()
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+find_package(AnomalySDK CONFIG REQUIRED)
+
+set(PINK_PAW_HEIST_ESP_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}/package/PinkPawHeistESP")
+
+anomaly_add_plugin(anomaly_pink_paw_heist_esp
+    SOURCES plugin.cpp rob_bank_runtime.cpp
+    MANIFEST manifest.json
+    PACKAGE_NAME PinkPawHeistESP
+    OUTPUT_DIRECTORY "${PINK_PAW_HEIST_ESP_PACKAGE_DIRECTORY}")
+
+# plugin.cpp includes shared headers as `plugins/common/...`, which resolves against
+# the owning Anomaly checkout when this directory is configured on its own.
+target_include_directories(anomaly_pink_paw_heist_esp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+
+target_compile_definitions(anomaly_pink_paw_heist_esp PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+
+# `anomaly_add_plugin` installs the package into Anomaly/plugins/PinkPawHeistESP.

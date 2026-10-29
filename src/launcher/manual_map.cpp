@@ -1,0 +1,2710 @@
+#include "anomaly/launcher/manual_map.hpp"
+
+#include "anomaly/core_api.h"
+#include "import_procedure.hpp"
+
+#include <TlHelp32.h>
+#include <Psapi.h>
+#include <winternl.h>
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstring>
+#include <cwctype>
+#include <fstream>
+#include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <span>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+extern "C" void AnomalyRemoteBootstrapBegin();
+extern "C" void AnomalyRemoteBootstrapEnd();
+extern "C" void AnomalyRemoteHijackBegin();
+extern "C" void AnomalyRemoteHijackEnd();
+extern "C" void AnomalyRemoteLoadLibraryBegin();
+extern "C" void AnomalyRemoteLoadLibraryEnd();
+// Data slots inside the hijack trampoline, patched before the block is written into the target.
+extern "C" std::uint64_t AnomalyRemoteHijackStateSlot;
+extern "C" std::uint64_t AnomalyRemoteHijackResumeSlot;
+
+namespace anomaly::launcher {
+namespace {
+
+constexpr DWORD kAttachProcessAccess =
+    PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_READ |
+    PROCESS_VM_WRITE | PROCESS_CREATE_THREAD;
+
+// The hook injected into the launcher signals this immediately before asking it to start the game.
+// The name is duplicated in src/launcher/hook/nte_game_hook.cpp rather than shared through a header,
+// because that DLL runs inside a process this repository does not own and is deliberately
+// free-standing.
+constexpr wchar_t kLauncherArmedEventName[] = L"Local\\Anomaly.NteGameHook.Armed";
+
+// How long capture waits for that signal before falling back to the session's own timing. It only has
+// to cover the hook's startup delay plus injection, so it is far shorter than the discovery budget.
+constexpr DWORD kHookArmedTimeoutMilliseconds = 90000;
+
+// How long a freshly created process is given to publish its loader list. This is a one-time startup
+// cost rather than a user-paced wait: the image, ntdll and kernel32 are in the list within
+// milliseconds of creation, so a process still without them is one that never started.
+constexpr DWORD kLoaderReadyTimeoutMilliseconds = 15000;
+
+std::mutex g_debug_privilege_mutex;
+
+class Handle final {
+public:
+    Handle() = default;
+    explicit Handle(HANDLE value) noexcept : value_(value) {}
+    ~Handle() { Reset(); }
+    Handle(const Handle&) = delete;
+    Handle& operator=(const Handle&) = delete;
+    Handle(Handle&& other) noexcept : value_(std::exchange(other.value_, nullptr)) {}
+    Handle& operator=(Handle&& other) noexcept {
+        if (this != &other) {
+            Reset();
+            value_ = std::exchange(other.value_, nullptr);
+        }
+        return *this;
+    }
+    [[nodiscard]] HANDLE Get() const noexcept { return value_; }
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return value_ != nullptr && value_ != INVALID_HANDLE_VALUE;
+    }
+    void Reset(HANDLE value = nullptr) noexcept {
+        if (*this) CloseHandle(value_);
+        value_ = value;
+    }
+private:
+    HANDLE value_{};
+};
+
+class ScopedPrivilege final {
+public:
+    ScopedPrivilege() = default;
+    ~ScopedPrivilege() {
+        if (enabled_) {
+            AdjustTokenPrivileges(
+                token_.Get(), FALSE, &previous_, 0, nullptr, nullptr);
+        }
+    }
+    ScopedPrivilege(const ScopedPrivilege&) = delete;
+    ScopedPrivilege& operator=(const ScopedPrivilege&) = delete;
+
+    [[nodiscard]] bool Enable(const wchar_t* name, DWORD& error) noexcept {
+        HANDLE token{};
+        if (OpenProcessToken(
+                GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token) == FALSE) {
+            error = GetLastError();
+            return false;
+        }
+        token_.Reset(token);
+
+        LUID identifier{};
+        if (LookupPrivilegeValueW(nullptr, name, &identifier) == FALSE) {
+            error = GetLastError();
+            return false;
+        }
+        TOKEN_PRIVILEGES requested{};
+        requested.PrivilegeCount = 1;
+        requested.Privileges[0].Luid = identifier;
+        requested.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        DWORD previous_size = sizeof(previous_);
+        SetLastError(ERROR_SUCCESS);
+        if (AdjustTokenPrivileges(
+                token_.Get(), FALSE, &requested, sizeof(previous_),
+                &previous_, &previous_size) == FALSE) {
+            error = GetLastError();
+            return false;
+        }
+        error = GetLastError();
+        if (error != ERROR_SUCCESS) return false;
+        enabled_ = true;
+        return true;
+    }
+
+private:
+    Handle token_;
+    TOKEN_PRIVILEGES previous_{};
+    bool enabled_{};
+};
+
+Handle OpenProcessWithAccess(
+    DWORD process_id, DWORD access, DWORD& error) noexcept {
+    Handle process(OpenProcess(access, FALSE, process_id));
+    if (process) {
+        error = ERROR_SUCCESS;
+        return process;
+    }
+    const DWORD initial_error = GetLastError();
+    if (initial_error != ERROR_ACCESS_DENIED) {
+        error = initial_error;
+        return {};
+    }
+
+    std::scoped_lock privilege_lock(g_debug_privilege_mutex);
+    ScopedPrivilege debug_privilege;
+    DWORD privilege_error{};
+    if (!debug_privilege.Enable(SE_DEBUG_NAME, privilege_error)) {
+        error = initial_error;
+        return {};
+    }
+    process.Reset(OpenProcess(access, FALSE, process_id));
+    error = process ? ERROR_SUCCESS : GetLastError();
+    return process;
+}
+
+Handle OpenProcessForAttach(DWORD process_id, DWORD& error) noexcept {
+    return OpenProcessWithAccess(process_id, kAttachProcessAccess, error);
+}
+
+std::set<DWORD> SnapshotProcessIds(
+    std::wstring_view executable_name, DWORD& error) noexcept {
+    std::set<DWORD> result;
+    Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
+    if (!snapshot) {
+        error = GetLastError();
+        return result;
+    }
+    PROCESSENTRY32W entry{.dwSize = sizeof(entry)};
+    if (Process32FirstW(snapshot.Get(), &entry) == FALSE) {
+        error = GetLastError();
+        if (error == ERROR_NO_MORE_FILES) error = ERROR_SUCCESS;
+        return result;
+    }
+    const std::wstring requested(executable_name);
+    do {
+        if (_wcsicmp(entry.szExeFile, requested.c_str()) == 0) {
+            result.insert(entry.th32ProcessID);
+        }
+        entry.dwSize = sizeof(entry);
+    } while (Process32NextW(snapshot.Get(), &entry) != FALSE);
+    error = GetLastError();
+    if (error == ERROR_NO_MORE_FILES) error = ERROR_SUCCESS;
+    return result;
+}
+
+class LocalModule final {
+public:
+    explicit LocalModule(HMODULE value = nullptr) noexcept : value_(value) {}
+    ~LocalModule() { if (value_ != nullptr) FreeLibrary(value_); }
+    LocalModule(const LocalModule&) = delete;
+    LocalModule& operator=(const LocalModule&) = delete;
+    LocalModule(LocalModule&& other) noexcept : value_(std::exchange(other.value_, nullptr)) {}
+    LocalModule& operator=(LocalModule&& other) noexcept {
+        if (this != &other) {
+            if (value_ != nullptr) FreeLibrary(value_);
+            value_ = std::exchange(other.value_, nullptr);
+        }
+        return *this;
+    }
+    [[nodiscard]] HMODULE Get() const noexcept { return value_; }
+private:
+    HMODULE value_{};
+};
+
+struct RemoteAllocation final {
+    HANDLE process{};
+    void* address{};
+    std::size_t size{};
+    bool retained{};
+
+    RemoteAllocation() = default;
+    RemoteAllocation(HANDLE owner, void* value, std::size_t bytes) noexcept
+        : process(owner), address(value), size(bytes) {}
+    ~RemoteAllocation() {
+        if (!retained && process != nullptr && address != nullptr) {
+            VirtualFreeEx(process, address, 0, MEM_RELEASE);
+        }
+    }
+    RemoteAllocation(const RemoteAllocation&) = delete;
+    RemoteAllocation& operator=(const RemoteAllocation&) = delete;
+    RemoteAllocation(RemoteAllocation&& other) noexcept
+        : process(std::exchange(other.process, nullptr)),
+          address(std::exchange(other.address, nullptr)),
+          size(std::exchange(other.size, 0)), retained(std::exchange(other.retained, false)) {}
+    RemoteAllocation& operator=(RemoteAllocation&& other) noexcept {
+        if (this != &other) {
+            if (!retained && process != nullptr && address != nullptr) {
+                VirtualFreeEx(process, address, 0, MEM_RELEASE);
+            }
+            process = std::exchange(other.process, nullptr);
+            address = std::exchange(other.address, nullptr);
+            size = std::exchange(other.size, 0);
+            retained = std::exchange(other.retained, false);
+        }
+        return *this;
+    }
+};
+
+struct RemoteModule final {
+    std::uintptr_t base{};
+    std::filesystem::path path;
+};
+
+using RemoteModuleMap = std::multimap<std::wstring, RemoteModule, std::less<>>;
+
+struct RemoteBootstrapContext final {
+    std::uint64_t image_base{};
+    std::uint64_t exception_table{};
+    std::uint32_t exception_count{};
+    std::uint32_t reserved{};
+    std::uint64_t rtl_add_function_table{};
+    std::uint64_t rtl_delete_function_table{};
+    std::uint64_t tls_callbacks{};
+    std::uint64_t entry_point{};
+    std::uint64_t anomaly_start{};
+    std::uint64_t start_info{};
+    std::uint32_t bootstrap_error{};
+    std::uint32_t runtime_start_error{};
+    std::uint32_t unwind_registered{};
+    // Written by the remote bootstrap as it finishes. Deliveries that own no thread in the target have
+    // nothing to wait on, so this stamp is what reports that the bootstrap ran and returned.
+    std::uint32_t completion_stamp{};
+    // Taken by whichever thread enters the bootstrap first. The value is one; zero means unclaimed.
+    std::uint32_t claim{};
+};
+
+static_assert(offsetof(RemoteBootstrapContext, image_base) == 0);
+static_assert(offsetof(RemoteBootstrapContext, exception_table) == 8);
+static_assert(offsetof(RemoteBootstrapContext, exception_count) == 16);
+static_assert(offsetof(RemoteBootstrapContext, rtl_add_function_table) == 24);
+static_assert(offsetof(RemoteBootstrapContext, rtl_delete_function_table) == 32);
+static_assert(offsetof(RemoteBootstrapContext, tls_callbacks) == 40);
+static_assert(offsetof(RemoteBootstrapContext, entry_point) == 48);
+static_assert(offsetof(RemoteBootstrapContext, anomaly_start) == 56);
+static_assert(offsetof(RemoteBootstrapContext, start_info) == 64);
+static_assert(offsetof(RemoteBootstrapContext, bootstrap_error) == 72);
+static_assert(offsetof(RemoteBootstrapContext, runtime_start_error) == 76);
+static_assert(offsetof(RemoteBootstrapContext, unwind_registered) == 80);
+static_assert(offsetof(RemoteBootstrapContext, completion_stamp) == 84);
+static_assert(offsetof(RemoteBootstrapContext, claim) == 88);
+
+// The stamp a remote payload writes when it returns, in both payload contexts. It is the only
+// completion signal a delivery that owns no thread in the target can wait on.
+constexpr DWORD kCompletionStamp = 0x444F4E45;  // "DONE"
+
+// The state block the hijack trampoline saves into (src/launcher/manual_map_hijack.asm).
+struct RemoteHijackState final {
+    std::uint64_t payload{};
+    std::uint64_t payload_context{};
+    std::uint64_t saved_stack_pointer{};
+    std::byte caller_vectors[6 * 16]{};
+};
+
+static_assert(offsetof(RemoteHijackState, payload) == 0);
+static_assert(offsetof(RemoteHijackState, payload_context) == 8);
+static_assert(offsetof(RemoteHijackState, saved_stack_pointer) == 16);
+static_assert(offsetof(RemoteHijackState, caller_vectors) == 24);
+
+// The context the remote dependency loader is called with (src/launcher/manual_map_load_library.asm).
+struct RemoteLoadLibraryContext final {
+    std::uint64_t path{};
+    std::uint64_t load_library{};
+    std::uint64_t get_last_error{};
+    std::uint64_t module{};
+    std::uint32_t completion_stamp{};
+    std::uint32_t claim{};
+    std::uint32_t last_error{};
+    std::uint32_t reserved{};
+};
+
+static_assert(offsetof(RemoteLoadLibraryContext, path) == 0);
+static_assert(offsetof(RemoteLoadLibraryContext, load_library) == 8);
+static_assert(offsetof(RemoteLoadLibraryContext, get_last_error) == 16);
+static_assert(offsetof(RemoteLoadLibraryContext, module) == 24);
+static_assert(offsetof(RemoteLoadLibraryContext, completion_stamp) == 32);
+static_assert(offsetof(RemoteLoadLibraryContext, claim) == 36);
+static_assert(offsetof(RemoteLoadLibraryContext, last_error) == 40);
+
+struct DelayImportDescriptor final {
+    DWORD attributes{};
+    DWORD name{};
+    DWORD module_handle{};
+    DWORD import_address_table{};
+    DWORD import_name_table{};
+    DWORD bound_import_address_table{};
+    DWORD unload_import_address_table{};
+    DWORD timestamp{};
+};
+
+struct ImportOverride final {
+    std::string_view name;
+    std::uint64_t address{};
+    bool applied{};
+};
+
+struct ParsedImage final {
+    std::vector<std::byte> mapped;
+    std::filesystem::path source_path;
+};
+
+ManualMapResult Failure(
+    ManualMapError error, DWORD win32_error, std::string message,
+    DWORD runtime_error = ERROR_SUCCESS, std::uintptr_t remote_image = 0) {
+    return {error, win32_error, runtime_error, remote_image, std::move(message)};
+}
+
+std::wstring Fold(std::wstring value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(std::towlower(ch));
+    });
+    return value;
+}
+
+bool SameUser(HANDLE process, DWORD& error) noexcept {
+    Handle current_token;
+    Handle target_token;
+    HANDLE token{};
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) == FALSE) {
+        error = GetLastError();
+        return false;
+    }
+    current_token.Reset(token);
+    token = nullptr;
+    if (OpenProcessToken(process, TOKEN_QUERY, &token) == FALSE) {
+        error = GetLastError();
+        return false;
+    }
+    target_token.Reset(token);
+
+    auto token_user = [](HANDLE value, DWORD& failure) -> std::vector<std::byte> {
+        DWORD size{};
+        GetTokenInformation(value, TokenUser, nullptr, 0, &size);
+        if (size == 0 || GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+            failure = GetLastError();
+            return {};
+        }
+        std::vector<std::byte> buffer(size);
+        if (GetTokenInformation(value, TokenUser, buffer.data(), size, &size) == FALSE) {
+            failure = GetLastError();
+            return {};
+        }
+        return buffer;
+    };
+    auto current = token_user(current_token.Get(), error);
+    if (current.empty()) return false;
+    auto target = token_user(target_token.Get(), error);
+    if (target.empty()) return false;
+    error = ERROR_SUCCESS;
+    return EqualSid(
+        reinterpret_cast<TOKEN_USER*>(current.data())->User.Sid,
+        reinterpret_cast<TOKEN_USER*>(target.data())->User.Sid) != FALSE;
+}
+
+bool IsX64Process(HANDLE process, DWORD& error) noexcept {
+    using IsWow64Process2Fn = BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*);
+    const auto function = reinterpret_cast<IsWow64Process2Fn>(GetProcAddress(
+        GetModuleHandleW(L"kernel32.dll"), "IsWow64Process2"));
+    if (function != nullptr) {
+        USHORT process_machine{};
+        USHORT native_machine{};
+        if (function(process, &process_machine, &native_machine) == FALSE) {
+            error = GetLastError();
+            return false;
+        }
+        error = ERROR_SUCCESS;
+        return process_machine == IMAGE_FILE_MACHINE_UNKNOWN &&
+            native_machine == IMAGE_FILE_MACHINE_AMD64;
+    }
+    BOOL wow64{};
+    if (IsWow64Process(process, &wow64) == FALSE) {
+        error = GetLastError();
+        return false;
+    }
+    SYSTEM_INFO system{};
+    GetNativeSystemInfo(&system);
+    error = ERROR_SUCCESS;
+    return wow64 == FALSE && system.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64;
+}
+
+std::filesystem::path ProcessPath(HANDLE process, DWORD& error) {
+    std::wstring path(32768, L'\0');
+    DWORD size = static_cast<DWORD>(path.size());
+    if (QueryFullProcessImageNameW(process, 0, path.data(), &size) == FALSE) {
+        error = GetLastError();
+        return {};
+    }
+    path.resize(size);
+    error = ERROR_SUCCESS;
+    return path;
+}
+
+bool PathsEqual(const std::filesystem::path& left, const std::filesystem::path& right) noexcept {
+    try {
+        return Fold(std::filesystem::absolute(left).lexically_normal().wstring()) ==
+            Fold(std::filesystem::absolute(right).lexically_normal().wstring());
+    } catch (...) {
+        return false;
+    }
+}
+
+bool PathIsWithin(
+    const std::filesystem::path& candidate, const std::filesystem::path& root) noexcept {
+    try {
+        std::wstring candidate_value = Fold(
+            std::filesystem::absolute(candidate).lexically_normal().wstring());
+        std::wstring root_value = Fold(
+            std::filesystem::absolute(root).lexically_normal().wstring());
+        if (candidate_value.empty() || root_value.empty()) return false;
+        if (candidate_value == root_value) return true;
+        if (root_value.back() != L'\\') root_value.push_back(L'\\');
+        return candidate_value.starts_with(root_value);
+    } catch (...) {
+        return false;
+    }
+}
+
+std::set<DWORD> SnapshotLauncherProcessIds(
+    const std::filesystem::path& launcher_directory, DWORD& error) noexcept {
+    constexpr std::array<std::wstring_view, 12> launcher_names{
+        L"NTELauncher.exe", L"NTEGame.exe", L"NTEBrowser.exe", L"NTEWebBooster.exe",
+        L"NTEUpdate.exe", L"NTEErrRep.exe",
+        L"NTEGlobalLauncher.exe", L"NTEGlobalGame.exe", L"NTEGlobalBrowser.exe",
+        L"NTEGlobalWebBooster.exe", L"NTEGlobalUpdate.exe", L"NTEGlobalErrRep.exe"};
+    std::set<DWORD> result;
+    Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
+    if (!snapshot) {
+        error = GetLastError();
+        return result;
+    }
+    PROCESSENTRY32W entry{.dwSize = sizeof(entry)};
+    if (Process32FirstW(snapshot.Get(), &entry) == FALSE) {
+        error = GetLastError();
+        if (error == ERROR_NO_MORE_FILES) error = ERROR_SUCCESS;
+        return result;
+    }
+    do {
+        bool known_launcher{};
+        for (const auto name : launcher_names) {
+            if (_wcsicmp(entry.szExeFile, std::wstring(name).c_str()) == 0) {
+                known_launcher = true;
+                break;
+            }
+        }
+        if (known_launcher && entry.th32ProcessID != GetCurrentProcessId()) {
+            DWORD open_error{};
+            Handle process = OpenProcessWithAccess(
+                entry.th32ProcessID, PROCESS_QUERY_LIMITED_INFORMATION, open_error);
+            if (process) {
+                DWORD path_error{};
+                const auto path = ProcessPath(process.Get(), path_error);
+                if (path_error == ERROR_SUCCESS &&
+                    PathIsWithin(path.parent_path(), launcher_directory)) {
+                    result.insert(entry.th32ProcessID);
+                }
+            }
+        }
+        entry.dwSize = sizeof(entry);
+    } while (Process32NextW(snapshot.Get(), &entry) != FALSE);
+    error = GetLastError();
+    if (error == ERROR_NO_MORE_FILES) error = ERROR_SUCCESS;
+    return result;
+}
+
+bool TerminateExistingLauncherProcesses(
+    const std::filesystem::path& launcher_directory, DWORD& error) noexcept {
+    DWORD snapshot_error{};
+    const auto process_ids = SnapshotLauncherProcessIds(launcher_directory, snapshot_error);
+    if (snapshot_error != ERROR_SUCCESS) {
+        error = snapshot_error;
+        return false;
+    }
+    for (const DWORD process_id : process_ids) {
+        DWORD open_error{};
+        Handle process = OpenProcessWithAccess(
+            process_id, PROCESS_TERMINATE | SYNCHRONIZE, open_error);
+        if (!process) {
+            error = open_error;
+            return false;
+        }
+        if (TerminateProcess(process.Get(), ERROR_PROCESS_ABORTED) == FALSE &&
+            WaitForSingleObject(process.Get(), 0) != WAIT_OBJECT_0) {
+            error = GetLastError();
+            return false;
+        }
+        const DWORD wait = WaitForSingleObject(process.Get(), 5000);
+        if (wait != WAIT_OBJECT_0) {
+            error = wait == WAIT_FAILED ? GetLastError() : ERROR_TIMEOUT;
+            return false;
+        }
+    }
+    error = ERROR_SUCCESS;
+    return true;
+}
+
+DWORD NtStatusToWin32(NTSTATUS status) noexcept {
+    using RtlNtStatusToDosErrorFn = ULONG(WINAPI*)(NTSTATUS);
+    const auto convert = reinterpret_cast<RtlNtStatusToDosErrorFn>(
+        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlNtStatusToDosError"));
+    return convert != nullptr ? convert(status) : ERROR_GEN_FAILURE;
+}
+
+class ScopedCaptureThreadPriority final {
+public:
+    ScopedCaptureThreadPriority() noexcept
+        : previous_(GetThreadPriority(GetCurrentThread())),
+          applied_(SetThreadPriority(
+              GetCurrentThread(), THREAD_PRIORITY_HIGHEST) != FALSE) {}
+
+    ~ScopedCaptureThreadPriority() {
+        if (applied_ && previous_ != THREAD_PRIORITY_ERROR_RETURN) {
+            static_cast<void>(SetThreadPriority(GetCurrentThread(), previous_));
+        }
+    }
+
+private:
+    int previous_{THREAD_PRIORITY_ERROR_RETURN};
+    bool applied_{};
+};
+
+struct FastTargetCaptureResult final {
+    Handle process;
+    std::filesystem::path path;
+    DWORD process_id{};
+    DWORD error{ERROR_NOT_READY};
+};
+
+bool QueryMatchingProcessIds(
+    std::wstring_view requested_name,
+    std::vector<std::byte>& buffer,
+    std::vector<DWORD>& process_ids,
+    DWORD& error) {
+    using NtQuerySystemInformationFn = NTSTATUS(NTAPI*)(
+        SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+    static const auto query = reinterpret_cast<NtQuerySystemInformationFn>(
+        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation"));
+    if (query == nullptr) {
+        error = ERROR_PROC_NOT_FOUND;
+        return false;
+    }
+
+    constexpr NTSTATUS kStatusInfoLengthMismatch =
+        static_cast<NTSTATUS>(0xC0000004UL);
+    ULONG returned{};
+    NTSTATUS status{};
+    for (;;) {
+        status = query(
+            SystemProcessInformation, buffer.data(),
+            static_cast<ULONG>(buffer.size()), &returned);
+        if (status != kStatusInfoLengthMismatch) break;
+        const std::size_t next_size = returned > buffer.size()
+            ? static_cast<std::size_t>(returned) + 64 * 1024
+            : buffer.size() * 2;
+        if (next_size > 32 * 1024 * 1024) {
+            error = ERROR_NOT_ENOUGH_MEMORY;
+            return false;
+        }
+        buffer.resize(next_size);
+    }
+    if (status < 0) {
+        error = NtStatusToWin32(status);
+        return false;
+    }
+
+    process_ids.clear();
+    const std::size_t available = returned == 0
+        ? buffer.size() : static_cast<std::size_t>(returned);
+    std::size_t offset{};
+    while (offset + sizeof(SYSTEM_PROCESS_INFORMATION) <= available) {
+        const auto* process = reinterpret_cast<const SYSTEM_PROCESS_INFORMATION*>(
+            buffer.data() + offset);
+        const std::size_t name_length =
+            static_cast<std::size_t>(process->ImageName.Length) / sizeof(wchar_t);
+        if (process->ImageName.Buffer != nullptr &&
+            name_length == requested_name.size() &&
+            _wcsnicmp(
+                process->ImageName.Buffer, requested_name.data(), name_length) == 0) {
+            const auto process_id = static_cast<DWORD>(
+                reinterpret_cast<std::uintptr_t>(process->UniqueProcessId));
+            if (process_id != 0) process_ids.push_back(process_id);
+        }
+        if (process->NextEntryOffset == 0) break;
+        if (process->NextEntryOffset < sizeof(*process) ||
+            process->NextEntryOffset > available - offset) {
+            error = ERROR_BAD_LENGTH;
+            return false;
+        }
+        offset += process->NextEntryOffset;
+    }
+    error = ERROR_SUCCESS;
+    return true;
+}
+
+bool QueryGrantedAccess(HANDLE handle, ACCESS_MASK& access, DWORD& error) noexcept {
+    using NtQueryObjectFn = NTSTATUS(NTAPI*)(
+        HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+    static const auto query = reinterpret_cast<NtQueryObjectFn>(
+        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryObject"));
+    if (query == nullptr) {
+        error = ERROR_PROC_NOT_FOUND;
+        return false;
+    }
+
+    PUBLIC_OBJECT_BASIC_INFORMATION basic{};
+    const NTSTATUS status = query(
+        handle, ObjectBasicInformation, &basic, sizeof(basic), nullptr);
+    if (status < 0) {
+        error = NtStatusToWin32(status);
+        return false;
+    }
+    access = basic.GrantedAccess;
+    error = ERROR_SUCCESS;
+    return true;
+}
+
+FastTargetCaptureResult CaptureTargetByFastPolling(
+    std::wstring_view requested_target,
+    const std::set<DWORD>& existing_targets,
+    std::chrono::steady_clock::time_point deadline,
+    std::atomic_bool& ready,
+    std::stop_token stop) {
+    FastTargetCaptureResult result;
+    result.error = ERROR_TIMEOUT;
+    ScopedCaptureThreadPriority priority;
+    std::vector<std::byte> buffer(1024 * 1024);
+    std::vector<DWORD> process_ids;
+    process_ids.reserve(4);
+    std::set<DWORD> rejected;
+    ready.store(true, std::memory_order_release);
+
+    while (!stop.stop_requested() &&
+        std::chrono::steady_clock::now() < deadline) {
+        DWORD query_error{};
+        if (!QueryMatchingProcessIds(
+                requested_target, buffer, process_ids, query_error)) {
+            result.error = query_error;
+            return result;
+        }
+
+        for (const DWORD process_id : process_ids) {
+            if (existing_targets.contains(process_id) || rejected.contains(process_id)) {
+                continue;
+            }
+
+            DWORD open_error{};
+            Handle candidate = OpenProcessWithAccess(
+                process_id, kAttachProcessAccess, open_error);
+            if (!candidate) {
+                result.process_id = process_id;
+                result.error = open_error;
+                return result;
+            }
+
+            ACCESS_MASK granted_access{};
+            DWORD access_error{};
+            if (!QueryGrantedAccess(candidate.Get(), granted_access, access_error) ||
+                (granted_access & kAttachProcessAccess) != kAttachProcessAccess) {
+                result.process_id = process_id;
+                result.error = access_error == ERROR_SUCCESS
+                    ? ERROR_ACCESS_DENIED : access_error;
+                return result;
+            }
+
+            DWORD inspection_error{};
+            const auto path = ProcessPath(candidate.Get(), inspection_error);
+            if (inspection_error != ERROR_SUCCESS ||
+                Fold(path.filename().wstring()) != requested_target) {
+                rejected.insert(process_id);
+                continue;
+            }
+
+            result.process = std::move(candidate);
+            result.path = path;
+            result.process_id = process_id;
+            result.error = ERROR_SUCCESS;
+            return result;
+        }
+        static_cast<void>(SwitchToThread());
+    }
+    return result;
+}
+
+RemoteModuleMap SnapshotModules(HANDLE process, DWORD& error) {
+    RemoteModuleMap result;
+    using NtQueryInformationProcessFn = NTSTATUS(NTAPI*)(
+        HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
+    const auto query = reinterpret_cast<NtQueryInformationProcessFn>(
+        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess"));
+    if (query == nullptr) {
+        error = ERROR_PROC_NOT_FOUND;
+        return result;
+    }
+
+    PROCESS_BASIC_INFORMATION basic{};
+    const NTSTATUS query_status = query(
+        process, ProcessBasicInformation, &basic, sizeof(basic), nullptr);
+    if (query_status < 0) {
+        using RtlNtStatusToDosErrorFn = ULONG(WINAPI*)(NTSTATUS);
+        const auto convert = reinterpret_cast<RtlNtStatusToDosErrorFn>(
+            GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlNtStatusToDosError"));
+        error = convert != nullptr ? convert(query_status) : ERROR_GEN_FAILURE;
+        return result;
+    }
+
+    auto read = [process](const void* remote, void* local, std::size_t size) {
+        SIZE_T bytes_read{};
+        return remote != nullptr &&
+            ReadProcessMemory(process, remote, local, size, &bytes_read) != FALSE &&
+            bytes_read == size;
+    };
+    PEB peb{};
+    if (!read(basic.PebBaseAddress, &peb, sizeof(peb))) {
+        error = GetLastError();
+        return result;
+    }
+    if (peb.Ldr == nullptr) {
+        error = ERROR_NOT_READY;
+        return result;
+    }
+
+    PEB_LDR_DATA loader{};
+    if (!read(peb.Ldr, &loader, sizeof(loader))) {
+        error = GetLastError();
+        return result;
+    }
+    const auto list_head = reinterpret_cast<std::uintptr_t>(peb.Ldr) +
+        offsetof(PEB_LDR_DATA, InMemoryOrderModuleList);
+    auto link = reinterpret_cast<std::uintptr_t>(
+        loader.InMemoryOrderModuleList.Flink);
+    std::set<std::uintptr_t> visited;
+    constexpr std::size_t kMaximumLoaderModules = 1024;
+    while (link != list_head) {
+        if (link == 0 || visited.size() >= kMaximumLoaderModules ||
+            !visited.insert(link).second ||
+            link < offsetof(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks)) {
+            error = ERROR_BAD_LENGTH;
+            return {};
+        }
+
+        LDR_DATA_TABLE_ENTRY entry{};
+        const auto entry_address = link -
+            offsetof(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
+        if (!read(
+                reinterpret_cast<const void*>(entry_address),
+                &entry, sizeof(entry))) {
+            error = GetLastError();
+            return {};
+        }
+        if (entry.DllBase != nullptr && entry.FullDllName.Buffer != nullptr &&
+            entry.FullDllName.Length != 0 &&
+            entry.FullDllName.Length % sizeof(wchar_t) == 0 &&
+            entry.FullDllName.Length <= 32766 * sizeof(wchar_t)) {
+            std::wstring path(
+                entry.FullDllName.Length / sizeof(wchar_t), L'\0');
+            if (!read(
+                    entry.FullDllName.Buffer, path.data(),
+                    entry.FullDllName.Length)) {
+                error = GetLastError();
+                return {};
+            }
+            const std::filesystem::path module_path(path);
+            result.emplace(
+                Fold(module_path.filename().wstring()),
+                RemoteModule{
+                    reinterpret_cast<std::uintptr_t>(entry.DllBase),
+                    module_path});
+        }
+        link = reinterpret_cast<std::uintptr_t>(entry.InMemoryOrderLinks.Flink);
+    }
+    if (result.empty()) {
+        error = ERROR_NOT_READY;
+        return result;
+    }
+    error = ERROR_SUCCESS;
+    return result;
+}
+
+// A process CreateProcessW has only just returned from may not have built its loader list yet: the
+// PEB's Ldr is still null, so a module snapshot reports ERROR_NOT_READY and anything that needs a
+// remote module address -- an injection, an import resolution -- has nothing to anchor against.
+// Every Windows process maps its own image, ntdll and kernel32 before anything else runs, so those
+// three are the readiness test.
+bool WaitForLoaderReady(
+    HANDLE process, std::wstring_view executable_name,
+    std::chrono::steady_clock::time_point deadline, RemoteModuleMap& modules, DWORD& error) {
+    do {
+        modules = SnapshotModules(process, error);
+        if (error == ERROR_SUCCESS &&
+            modules.contains(Fold(std::wstring(executable_name))) &&
+            modules.contains(L"ntdll.dll") && modules.contains(L"kernel32.dll")) {
+            return true;
+        }
+        if (error != ERROR_SUCCESS && error != ERROR_NOT_READY &&
+            error != ERROR_PARTIAL_COPY && error != ERROR_BAD_LENGTH) {
+            return false;
+        }
+        Sleep(1);
+    } while (std::chrono::steady_clock::now() < deadline);
+    return false;
+}
+
+template <typename T>
+T* Rva(std::vector<std::byte>& image, std::uint32_t rva, std::size_t count = 1) noexcept {
+    if (count > std::numeric_limits<std::size_t>::max() / sizeof(T)) return nullptr;
+    const std::size_t bytes = count * sizeof(T);
+    if (rva > image.size() || bytes > image.size() - rva) return nullptr;
+    return reinterpret_cast<T*>(image.data() + rva);
+}
+
+template <typename T>
+const T* Rva(const std::vector<std::byte>& image, std::uint32_t rva, std::size_t count = 1) noexcept {
+    if (count > std::numeric_limits<std::size_t>::max() / sizeof(T)) return nullptr;
+    const std::size_t bytes = count * sizeof(T);
+    if (rva > image.size() || bytes > image.size() - rva) return nullptr;
+    return reinterpret_cast<const T*>(image.data() + rva);
+}
+
+IMAGE_NT_HEADERS64* Headers(std::vector<std::byte>& image) noexcept {
+    if (image.size() < sizeof(IMAGE_DOS_HEADER)) return nullptr;
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(image.data());
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0 ||
+        static_cast<std::size_t>(dos->e_lfanew) > image.size() - sizeof(IMAGE_NT_HEADERS64)) {
+        return nullptr;
+    }
+    auto* headers = reinterpret_cast<IMAGE_NT_HEADERS64*>(image.data() + dos->e_lfanew);
+    return headers->Signature == IMAGE_NT_SIGNATURE ? headers : nullptr;
+}
+
+const IMAGE_NT_HEADERS64* Headers(const std::vector<std::byte>& image) noexcept {
+    return Headers(const_cast<std::vector<std::byte>&>(image));
+}
+
+std::optional<ParsedImage> ParseImage(
+    const std::filesystem::path& path, std::string& failure) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error || size < sizeof(IMAGE_DOS_HEADER) || size > 1024ULL * 1024ULL * 1024ULL) {
+        failure = "core image is unavailable or has an invalid size";
+        return std::nullopt;
+    }
+    std::vector<std::byte> file(static_cast<std::size_t>(size));
+    std::ifstream input(path, std::ios::binary);
+    input.read(reinterpret_cast<char*>(file.data()), static_cast<std::streamsize>(file.size()));
+    if (!input) {
+        failure = "core image could not be read";
+        return std::nullopt;
+    }
+    auto* source_headers = Headers(file);
+    if (source_headers == nullptr ||
+        source_headers->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
+        (source_headers->FileHeader.Characteristics & IMAGE_FILE_DLL) == 0 ||
+        source_headers->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+        source_headers->FileHeader.NumberOfSections == 0 ||
+        source_headers->FileHeader.NumberOfSections > 96 ||
+        source_headers->OptionalHeader.SizeOfImage < source_headers->OptionalHeader.SizeOfHeaders ||
+        source_headers->OptionalHeader.SizeOfImage > 1024ULL * 1024ULL * 1024ULL ||
+        source_headers->OptionalHeader.SizeOfHeaders > file.size()) {
+        failure = "core image is not a supported x64 DLL";
+        return std::nullopt;
+    }
+    const auto* sections = IMAGE_FIRST_SECTION(source_headers);
+    const auto section_table_end = reinterpret_cast<const std::byte*>(
+        sections + source_headers->FileHeader.NumberOfSections);
+    if (section_table_end > file.data() + file.size()) {
+        failure = "core image section table is truncated";
+        return std::nullopt;
+    }
+
+    ParsedImage result;
+    result.source_path = std::filesystem::absolute(path);
+    result.mapped.resize(source_headers->OptionalHeader.SizeOfImage);
+    std::memcpy(
+        result.mapped.data(), file.data(), source_headers->OptionalHeader.SizeOfHeaders);
+    for (WORD index = 0; index < source_headers->FileHeader.NumberOfSections; ++index) {
+        const auto& section = sections[index];
+        const std::size_t virtual_size = (std::max)(
+            static_cast<std::size_t>(section.Misc.VirtualSize),
+            static_cast<std::size_t>(section.SizeOfRawData));
+        if (section.VirtualAddress > result.mapped.size() ||
+            virtual_size > result.mapped.size() - section.VirtualAddress ||
+            section.PointerToRawData > file.size() ||
+            section.SizeOfRawData > file.size() - section.PointerToRawData) {
+            failure = "core image section is outside the file or virtual image";
+            return std::nullopt;
+        }
+        if (section.SizeOfRawData != 0) {
+            std::memcpy(
+                result.mapped.data() + section.VirtualAddress,
+                file.data() + section.PointerToRawData,
+                section.SizeOfRawData);
+        }
+    }
+    return result;
+}
+
+bool RelocateImage(
+    std::vector<std::byte>& image, std::uintptr_t remote_base, std::string& failure) {
+    auto* headers = Headers(image);
+    if (headers == nullptr) return false;
+    const std::int64_t delta = static_cast<std::int64_t>(
+        remote_base - static_cast<std::uintptr_t>(headers->OptionalHeader.ImageBase));
+    if (delta == 0) return true;
+    const auto& directory = headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+    if (directory.VirtualAddress == 0 || directory.Size < sizeof(IMAGE_BASE_RELOCATION)) {
+        failure = "core image cannot be relocated";
+        return false;
+    }
+    std::size_t consumed{};
+    while (consumed < directory.Size) {
+        auto* block = Rva<IMAGE_BASE_RELOCATION>(
+            image, directory.VirtualAddress + static_cast<std::uint32_t>(consumed));
+        if (block == nullptr || block->SizeOfBlock < sizeof(*block) ||
+            block->SizeOfBlock > directory.Size - consumed) {
+            failure = "core relocation directory is invalid";
+            return false;
+        }
+        const std::size_t count =
+            (block->SizeOfBlock - sizeof(*block)) / sizeof(WORD);
+        auto* entries = reinterpret_cast<WORD*>(block + 1);
+        for (std::size_t index = 0; index < count; ++index) {
+            const WORD type = entries[index] >> 12;
+            const WORD offset = entries[index] & 0x0fff;
+            if (type == IMAGE_REL_BASED_ABSOLUTE) continue;
+            if (type != IMAGE_REL_BASED_DIR64) {
+                failure = "core image uses an unsupported relocation";
+                return false;
+            }
+            auto* address = Rva<std::uint64_t>(image, block->VirtualAddress + offset);
+            if (address == nullptr) {
+                failure = "core relocation target is outside the image";
+                return false;
+            }
+            *address = static_cast<std::uint64_t>(
+                static_cast<std::int64_t>(*address) + delta);
+        }
+        consumed += block->SizeOfBlock;
+    }
+    headers->OptionalHeader.ImageBase = remote_base;
+    return true;
+}
+
+// Which copy of a dependency to use, in the order that keeps a manual map out of the target's loader: the
+// copy the target itself ships and loads (its own loader has already accepted that file), then a copy
+// beside the core, then the system one. Resolving locally from that same file is what makes the RVA it
+// contributes correct.
+std::filesystem::path DependencyCopy(
+    const std::filesystem::path& target_directory, const std::filesystem::path& image_directory,
+    std::wstring_view name) {
+    std::error_code error;
+    for (const auto& directory : {target_directory, image_directory}) {
+        if (directory.empty()) continue;
+        const auto candidate = directory / std::filesystem::path(name);
+        if (std::filesystem::is_regular_file(candidate, error) && !error) {
+            return candidate;
+        }
+    }
+    return {};
+}
+
+LocalModule LoadLocalDependency(
+    const std::filesystem::path& image_directory, std::wstring_view name,
+    const std::filesystem::path& target_directory) {
+    const auto adjacent =
+        DependencyCopy(target_directory, image_directory, name);
+    std::error_code error;
+    HMODULE module{};
+    if (!adjacent.empty()) {
+        module = LoadLibraryExW(
+            adjacent.c_str(), nullptr,
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    } else {
+        std::wstring system_directory(32768, L'\0');
+        const UINT length = GetSystemDirectoryW(
+            system_directory.data(), static_cast<UINT>(system_directory.size()));
+        if (length != 0 && length < system_directory.size()) {
+            system_directory.resize(length);
+            const auto system_path =
+                std::filesystem::path(system_directory) / std::filesystem::path(name);
+            if (std::filesystem::is_regular_file(system_path, error) && !error) {
+                module = LoadLibraryExW(
+                    system_path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+            }
+        }
+        if (module == nullptr) {
+            module = LoadLibraryExW(
+                std::wstring(name).c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        }
+    }
+    return LocalModule(module);
+}
+
+std::string NarrowPath(const std::filesystem::path& path) {
+    const std::wstring value = path.wstring();
+    if (value.empty()) return {};
+    const int required = WideCharToMultiByte(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (required <= 0) return {};
+    std::string result(static_cast<std::size_t>(required), '\0');
+    if (WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+            result.data(), required, nullptr, nullptr) == 0) {
+        return {};
+    }
+    return result;
+}
+
+// A remote loader thread exits with the module handle it produced, so its exit code is reported in
+// hex where the surrounding diagnostics are read.
+
+std::filesystem::path LocalModulePath(HMODULE module) {
+    if (module == nullptr) return {};
+    std::wstring path(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(
+        module, path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= path.size()) return {};
+    path.resize(length);
+    return path;
+}
+
+std::wstring PathKey(const std::filesystem::path& path) {
+    std::wstring value = path.lexically_normal().wstring();
+    constexpr std::wstring_view extended_prefix{L"\\\\?\\"};
+    constexpr std::wstring_view extended_unc_prefix{L"\\\\?\\UNC\\"};
+    if (value.starts_with(extended_unc_prefix)) {
+        value = L"\\\\" + value.substr(extended_unc_prefix.size());
+    } else if (value.starts_with(extended_prefix)) {
+        value.erase(0, extended_prefix.size());
+    }
+    return Fold(std::move(value));
+}
+
+RemoteModuleMap::const_iterator FindRemoteModule(
+    const RemoteModuleMap& modules, const std::filesystem::path& requested) {
+    const auto range = modules.equal_range(Fold(requested.filename().wstring()));
+    if (range.first == range.second) return modules.end();
+    if (!requested.has_parent_path()) return range.first;
+    const std::wstring requested_key = PathKey(requested);
+    const auto found = std::find_if(range.first, range.second, [&requested_key](const auto& entry) {
+        return PathKey(entry.second.path) == requested_key;
+    });
+    return found == range.second ? modules.end() : found;
+}
+
+std::optional<std::pair<HMODULE, std::filesystem::path>> OwningModule(FARPROC procedure) {
+    HMODULE owner{};
+    if (procedure == nullptr || GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(procedure), &owner) == FALSE) {
+        return std::nullopt;
+    }
+    std::wstring path(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(owner, path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= path.size()) return std::nullopt;
+    path.resize(length);
+    return std::pair(owner, std::filesystem::path(path));
+}
+
+std::optional<std::uintptr_t> RemoteAddressForLocalProcedure(
+    FARPROC procedure, const RemoteModuleMap& modules) {
+    const auto owner = OwningModule(procedure);
+    if (!owner) return std::nullopt;
+    const auto found = FindRemoteModule(modules, owner->second);
+    if (found == modules.end()) return std::nullopt;
+    return found->second.base +
+        (reinterpret_cast<std::uintptr_t>(procedure) -
+         reinterpret_cast<std::uintptr_t>(owner->first));
+}
+
+// Defined below the delivery machinery: loading a dependency into the target runs remote code, and which
+// way in that code is entered is the caller's choice, exactly as it is for the bootstrap.
+bool RemoteLoadLibrary(
+    HANDLE process, const std::filesystem::path& path, RemoteModuleMap& modules,
+    ManualMapDelivery delivery, std::string& failure);
+bool EnsureRemoteModule(
+    HANDLE process, const std::filesystem::path& requested,
+    RemoteModuleMap& modules, ManualMapDelivery delivery, std::string& failure) {
+    const std::wstring name = Fold(requested.filename().wstring());
+    if (FindRemoteModule(modules, requested) != modules.end()) return true;
+    // An API set is not a module: the loader answers it through the schema, and there is nothing to stage. Asking
+    // the target to load one anyway sends a thread into the anti-cheat loader hook for an answer that was never
+    // going to change, and that call can fail to come back at all.
+    const bool api_set = name.starts_with(L"api-ms-") || name.starts_with(L"ext-ms-");
+    if (!RemoteLoadLibrary(process, requested, modules, delivery, failure)) return api_set;
+    if (FindRemoteModule(modules, requested) != modules.end()) return true;
+    if (api_set) return true;
+    // Naming the module matters: a manual map loads a whole import table, and "a dependency is
+    // missing" without saying which one leaves nothing to act on.
+    failure = "remote dependency was not visible after loading: " + NarrowPath(requested);
+    return false;
+}
+
+bool ResolveOneImport(
+    HANDLE process, HMODULE local_module,
+    const IMAGE_THUNK_DATA64& source, IMAGE_THUNK_DATA64& destination,
+    RemoteModuleMap& modules, ManualMapDelivery delivery, std::string& failure,
+    const std::vector<std::byte>& image, ImportOverride* import_override) {
+    ImportProcedureResolver resolver;
+    FARPROC procedure{};
+    if (IMAGE_SNAP_BY_ORDINAL64(source.u1.Ordinal)) {
+        procedure = resolver.Resolve(
+            local_module,
+            reinterpret_cast<const char*>(IMAGE_ORDINAL64(source.u1.Ordinal)));
+    } else {
+        const auto* import = Rva<IMAGE_IMPORT_BY_NAME>(
+            image, static_cast<std::uint32_t>(source.u1.AddressOfData));
+        if (import == nullptr) {
+            failure = "import name is outside the core image";
+            return false;
+        }
+        const std::size_t name_offset = static_cast<std::size_t>(
+            reinterpret_cast<const std::byte*>(import->Name) - image.data());
+        if (name_offset >= image.size() ||
+            std::memchr(import->Name, '\0', image.size() - name_offset) == nullptr) {
+            failure = "import name is not terminated";
+            return false;
+        }
+        if (import_override != nullptr && import_override->name == import->Name) {
+            destination.u1.Function = import_override->address;
+            import_override->applied = true;
+            return true;
+        }
+        procedure = resolver.Resolve(
+            local_module, reinterpret_cast<const char*>(import->Name));
+    }
+    const auto owner = OwningModule(procedure);
+    if (!owner) {
+        failure = "imported procedure could not be resolved";
+        return false;
+    }
+    if (!EnsureRemoteModule(process, owner->second, modules, delivery, failure)) {
+        return false;
+    }
+    const auto remote = RemoteAddressForLocalProcedure(procedure, modules);
+    if (!remote) {
+        failure = "remote imported procedure address could not be resolved";
+        return false;
+    }
+    destination.u1.Function = *remote;
+    return true;
+}
+
+bool ResolveThunkTable(
+    HANDLE process, std::vector<std::byte>& image, HMODULE local_module,
+    DWORD source_rva, DWORD destination_rva,
+    RemoteModuleMap& modules, ManualMapDelivery delivery, std::string& failure,
+    ImportOverride* import_override) {
+    const std::size_t maximum = image.size() / sizeof(IMAGE_THUNK_DATA64);
+    for (std::size_t index = 0; index < maximum; ++index) {
+        auto* source = Rva<IMAGE_THUNK_DATA64>(
+            image, source_rva + static_cast<DWORD>(index * sizeof(IMAGE_THUNK_DATA64)));
+        auto* destination = Rva<IMAGE_THUNK_DATA64>(
+            image, destination_rva + static_cast<DWORD>(index * sizeof(IMAGE_THUNK_DATA64)));
+        if (source == nullptr || destination == nullptr) {
+            failure = "import thunk table is outside the core image";
+            return false;
+        }
+        if (source->u1.AddressOfData == 0) return true;
+        const IMAGE_THUNK_DATA64 source_value = *source;
+        if (!ResolveOneImport(
+                process, local_module, source_value, *destination,
+                modules, delivery, failure, image, import_override)) {
+            return false;
+        }
+    }
+    failure = "import thunk table is not terminated";
+    return false;
+}
+
+bool ResolveImports(
+    HANDLE process, ParsedImage& parsed,
+    RemoteModuleMap& modules, ManualMapDelivery delivery, const std::filesystem::path& target_directory,
+    std::string& failure, ImportOverride* import_override = nullptr) {
+    auto* headers = Headers(parsed.mapped);
+    if (headers == nullptr) return false;
+    const auto image_directory = parsed.source_path.parent_path();
+    const auto& directory = headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (directory.VirtualAddress != 0) {
+        const std::size_t maximum = directory.Size / sizeof(IMAGE_IMPORT_DESCRIPTOR);
+        bool terminated{};
+        for (std::size_t index = 0; index < maximum; ++index) {
+            auto* descriptor = Rva<IMAGE_IMPORT_DESCRIPTOR>(
+                parsed.mapped,
+                directory.VirtualAddress + static_cast<DWORD>(
+                    index * sizeof(IMAGE_IMPORT_DESCRIPTOR)));
+            if (descriptor == nullptr) {
+                failure = "import directory is outside the core image";
+                return false;
+            }
+            if (descriptor->Name == 0) {
+                terminated = true;
+                break;
+            }
+            const char* name = Rva<char>(parsed.mapped, descriptor->Name);
+            if (name == nullptr || std::memchr(
+                    name, '\0', parsed.mapped.size() - descriptor->Name) == nullptr) {
+                failure = "import module name is invalid";
+                return false;
+            }
+            const std::wstring wide_name(name, name + std::strlen(name));
+            const auto preferred = DependencyCopy(target_directory, image_directory, wide_name);
+            std::error_code error;
+            LocalModule local = LoadLocalDependency(image_directory, wide_name, target_directory);
+            if (local.Get() == nullptr) {
+                failure = "local dependency could not be loaded for import resolution";
+                return false;
+            }
+            const auto remote_request = !preferred.empty()
+                ? std::filesystem::absolute(preferred) : LocalModulePath(local.Get());
+            if (remote_request.empty() || !EnsureRemoteModule(
+                    process, remote_request, modules, delivery, failure)) {
+                return false;
+            }
+            const DWORD source = descriptor->OriginalFirstThunk != 0
+                ? descriptor->OriginalFirstThunk : descriptor->FirstThunk;
+            if (!ResolveThunkTable(
+                    process, parsed.mapped, local.Get(),
+                    source, descriptor->FirstThunk, modules, delivery, failure,
+                    import_override)) {
+                return false;
+            }
+        }
+        if (!terminated) {
+            failure = "import directory is not terminated";
+            return false;
+        }
+    }
+
+    const auto& delay =
+        headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT];
+    if (delay.VirtualAddress == 0) return true;
+    const std::size_t maximum = delay.Size / sizeof(DelayImportDescriptor);
+    bool terminated{};
+    for (std::size_t index = 0; index < maximum; ++index) {
+        auto* descriptor = Rva<DelayImportDescriptor>(
+            parsed.mapped,
+            delay.VirtualAddress + static_cast<DWORD>(
+                index * sizeof(DelayImportDescriptor)));
+        if (descriptor == nullptr) {
+            failure = "delay import directory is outside the core image";
+            return false;
+        }
+        if (descriptor->name == 0) {
+            terminated = true;
+            break;
+        }
+        if ((descriptor->attributes & 1U) == 0) {
+            failure = "VA-based delay imports are not supported for x64 images";
+            return false;
+        }
+        const char* name = Rva<char>(parsed.mapped, descriptor->name);
+        if (name == nullptr || std::memchr(
+                name, '\0', parsed.mapped.size() - descriptor->name) == nullptr) {
+            failure = "delay import module name is invalid";
+            return false;
+        }
+        const std::wstring wide_name(name, name + std::strlen(name));
+        const auto adjacent = image_directory / wide_name;
+        std::error_code error;
+        LocalModule local = LoadLocalDependency(image_directory, wide_name, target_directory);
+        if (local.Get() == nullptr) {
+            failure = "delay import dependency could not be loaded";
+            return false;
+        }
+        const auto remote_request = std::filesystem::is_regular_file(adjacent, error) && !error
+            ? std::filesystem::absolute(adjacent) : LocalModulePath(local.Get());
+        if (remote_request.empty() || !EnsureRemoteModule(
+                process, remote_request, modules, delivery, failure) ||
+            !ResolveThunkTable(
+                process, parsed.mapped, local.Get(),
+                descriptor->import_name_table, descriptor->import_address_table,
+                modules, delivery, failure, import_override)) {
+            if (failure.empty()) failure = "delay import dependency could not be resolved";
+            return false;
+        }
+    }
+    if (!terminated) {
+        failure = "delay import directory is not terminated";
+        return false;
+    }
+    return true;
+}
+
+std::optional<DWORD> ExportRva(
+    const std::vector<std::byte>& image, std::string_view requested) {
+    const auto* headers = Headers(image);
+    if (headers == nullptr) return std::nullopt;
+    const auto& data = headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    const auto* exports = Rva<IMAGE_EXPORT_DIRECTORY>(image, data.VirtualAddress);
+    if (data.VirtualAddress == 0 || exports == nullptr) return std::nullopt;
+    const auto* names = Rva<DWORD>(image, exports->AddressOfNames, exports->NumberOfNames);
+    const auto* ordinals = Rva<WORD>(image, exports->AddressOfNameOrdinals, exports->NumberOfNames);
+    const auto* functions = Rva<DWORD>(image, exports->AddressOfFunctions, exports->NumberOfFunctions);
+    if (names == nullptr || ordinals == nullptr || functions == nullptr) return std::nullopt;
+    for (DWORD index = 0; index < exports->NumberOfNames; ++index) {
+        const char* name = Rva<char>(image, names[index]);
+        if (name == nullptr || std::memchr(name, '\0', image.size() - names[index]) == nullptr) {
+            return std::nullopt;
+        }
+        if (requested == name) {
+            const WORD ordinal = ordinals[index];
+            if (ordinal >= exports->NumberOfFunctions) return std::nullopt;
+            const DWORD result = functions[ordinal];
+            if (result >= data.VirtualAddress && result < data.VirtualAddress + data.Size) {
+                return std::nullopt;
+            }
+            return result;
+        }
+    }
+    return std::nullopt;
+}
+
+DWORD SectionProtection(DWORD characteristics) noexcept {
+    const bool execute = (characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
+    const bool read = (characteristics & IMAGE_SCN_MEM_READ) != 0;
+    const bool write = (characteristics & IMAGE_SCN_MEM_WRITE) != 0;
+    if (execute) {
+        if (write) return PAGE_EXECUTE_READWRITE;
+        return read ? PAGE_EXECUTE_READ : PAGE_EXECUTE;
+    }
+    if (write) return PAGE_READWRITE;
+    return read ? PAGE_READONLY : PAGE_NOACCESS;
+}
+
+bool ProtectImage(HANDLE process, void* remote, std::vector<std::byte>& image) {
+    auto* headers = Headers(image);
+    if (headers == nullptr) return false;
+    DWORD previous{};
+    if (VirtualProtectEx(
+            process, remote, image.size(), PAGE_NOACCESS, &previous) == FALSE) {
+        return false;
+    }
+    if (VirtualProtectEx(
+            process, remote, headers->OptionalHeader.SizeOfHeaders,
+            PAGE_READONLY, &previous) == FALSE) {
+        return false;
+    }
+    const auto* sections = IMAGE_FIRST_SECTION(headers);
+    for (WORD index = 0; index < headers->FileHeader.NumberOfSections; ++index) {
+        const auto& section = sections[index];
+        const SIZE_T size = (std::max)(section.Misc.VirtualSize, section.SizeOfRawData);
+        if (size == 0) continue;
+        if (VirtualProtectEx(
+                process,
+                static_cast<std::byte*>(remote) + section.VirtualAddress,
+                size, SectionProtection(section.Characteristics), &previous) == FALSE) {
+            return false;
+        }
+    }
+    return FlushInstructionCache(process, remote, image.size()) != FALSE;
+}
+
+bool ReadRemote(HANDLE process, std::uintptr_t address, void* output, std::size_t size) {
+    SIZE_T read{};
+    return ReadProcessMemory(
+        process, reinterpret_cast<const void*>(address), output, size, &read) != FALSE &&
+        read == size;
+}
+
+// A mapped image is recognised by its headers: an MZ at the base and a PE signature a few bytes further on
+// is what tells every scanner -- a game's anti-cheat, the compatibility database, a forensic tool -- that
+// the private region is a module. The headers and the export table are therefore erased once the image is
+// written, because everything that needed them (relocations, imports, TLS, entry point and AnomalyStart)
+// has been resolved by then.
+//
+// What is left in their place is a marker: one page, no PE structure, that says where the image is. This
+// process uses it to answer "is a core already mapped here" without a header to look at.
+constexpr std::uint64_t kAttachmentMagic = 0xA90A1E5EC0DE1A01ull;
+
+struct AttachmentMarker final {
+    std::uint64_t magic{};
+    std::uint64_t image_base{};
+    std::uint64_t image_size{};
+};
+
+bool HasPrivateMappedCore(HANDLE process) {
+    SYSTEM_INFO system{};
+    GetNativeSystemInfo(&system);
+    std::uintptr_t address = reinterpret_cast<std::uintptr_t>(system.lpMinimumApplicationAddress);
+    const auto maximum = reinterpret_cast<std::uintptr_t>(system.lpMaximumApplicationAddress);
+    std::uintptr_t inspected_allocation{};
+    while (address < maximum) {
+        MEMORY_BASIC_INFORMATION region{};
+        if (VirtualQueryEx(
+                process, reinterpret_cast<const void*>(address), &region, sizeof(region)) == 0) {
+            break;
+        }
+        const auto base = reinterpret_cast<std::uintptr_t>(region.AllocationBase);
+        if (region.State == MEM_COMMIT && region.Type == MEM_PRIVATE && base != 0 &&
+            base != inspected_allocation) {
+            AttachmentMarker marker{};
+            if (region.RegionSize >= sizeof(marker) &&
+                ReadRemote(process, base, &marker, sizeof(marker)) &&
+                marker.magic == kAttachmentMagic) {
+                return true;
+            }
+        }
+        inspected_allocation = base;
+        const auto next = reinterpret_cast<std::uintptr_t>(region.BaseAddress) + region.RegionSize;
+        if (next <= address) break;
+        address = next;
+    }
+    return false;
+}
+
+// Erases what makes the mapped image look like an image, in the target's copy only: the local buffer is
+// still needed for the section protections that are applied right after this.
+bool ScrubMappedImage(HANDLE process, void* remote, std::vector<std::byte>& image) {
+    const auto* headers = Headers(image);
+    if (headers == nullptr) return false;
+    const std::size_t header_bytes = headers->OptionalHeader.SizeOfHeaders;
+    if (header_bytes == 0 || header_bytes > image.size()) return false;
+    const std::vector<std::byte> zeros(header_bytes, std::byte{0});
+    if (WriteProcessMemory(process, remote, zeros.data(), zeros.size(), nullptr) == FALSE) {
+        return false;
+    }
+    // The export table names this image ("AnomalyStart" among others); it is a second signature, and the
+    // table itself is no longer reachable once the headers are gone.
+    const auto& exports = headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (exports.VirtualAddress != 0 && exports.Size != 0 &&
+        exports.VirtualAddress <= image.size() && exports.Size <= image.size() - exports.VirtualAddress) {
+        const std::vector<std::byte> blank(exports.Size, std::byte{0});
+        if (WriteProcessMemory(
+                process, static_cast<std::byte*>(remote) + exports.VirtualAddress,
+                blank.data(), blank.size(), nullptr) == FALSE) {
+            return false;
+        }
+    }
+    return FlushInstructionCache(process, remote, image.size()) != FALSE;
+}
+
+// Writes the marker a later attach looks for, so the erased image can still be recognised as ours.
+bool WriteAttachmentMarker(
+    HANDLE process, void* remote_base, std::size_t image_size, RemoteAllocation& allocation) {
+    const AttachmentMarker marker{
+        .magic = kAttachmentMagic,
+        .image_base = reinterpret_cast<std::uintptr_t>(remote_base),
+        .image_size = image_size,
+    };
+    allocation = RemoteAllocation(
+        process, VirtualAllocEx(
+            process, nullptr, sizeof(marker), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE),
+        sizeof(marker));
+    return allocation.address != nullptr && WriteProcessMemory(
+        process, allocation.address, &marker, sizeof(marker), nullptr) != FALSE;
+}
+RemoteAllocation WriteRemoteWideString(HANDLE process, const std::filesystem::path& path) {
+    const std::wstring value = path.wstring();
+    const std::size_t bytes = (value.size() + 1) * sizeof(wchar_t);
+    RemoteAllocation result(
+        process, VirtualAllocEx(process, nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE),
+        bytes);
+    if (result.address == nullptr || WriteProcessMemory(
+            process, result.address, value.c_str(), bytes, nullptr) == FALSE) {
+        result = {};
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------- remote delivery
+//
+// Getting a payload to run is separate from building it. A freshly created process can be entered
+// from a thread this process is allowed to create; a game that has been running for a while is entered
+// through threads it already owns, because a new thread is the part of an injection that is easiest for
+// the target to notice. All three deliveries run the same bootstrap and the same claim discipline, so
+// only the way in differs.
+
+enum class DeliveryOutcome : std::uint8_t { Completed, TimedOut, Failed };
+
+struct DeliveryResult final {
+    DeliveryOutcome outcome{DeliveryOutcome::Failed};
+    DWORD win32_error{ERROR_SUCCESS};
+    std::string failure;
+    DWORD thread_exit_code{STILL_ACTIVE};
+    bool thread_exit_available{};
+};
+
+// One run of remote code: where to enter, the block it is called with, and where that block reports that
+// it finished and that someone owns it. The bootstrap and the dependency loader are both described this
+// way, so a delivery only has to know how to enter a target.
+struct RemoteExecution final {
+    HANDLE process{};
+    std::uintptr_t code{};
+    std::uintptr_t context{};
+    std::size_t completion_offset{};
+    std::size_t claim_offset{};
+    std::chrono::milliseconds timeout{};
+};
+
+const char* DeliveryName(ManualMapDelivery delivery) noexcept {
+    switch (delivery) {
+        case ManualMapDelivery::ThreadHijack: return "thread hijack";
+        case ManualMapDelivery::Automatic: return "automatic";
+        case ManualMapDelivery::RemoteThread:
+        default: return "remote thread";
+    }
+}
+
+std::vector<DWORD> SnapshotThreads(HANDLE process) {
+    std::vector<DWORD> result;
+    const DWORD process_id = GetProcessId(process);
+    if (process_id == 0) return result;
+    Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0));
+    if (!snapshot) return result;
+    THREADENTRY32 entry{.dwSize = sizeof(entry)};
+    if (Thread32First(snapshot.Get(), &entry) == FALSE) return result;
+    do {
+        if (entry.th32OwnerProcessID == process_id) result.push_back(entry.th32ThreadID);
+        entry.dwSize = sizeof(entry);
+    } while (Thread32Next(snapshot.Get(), &entry) != FALSE);
+    return result;
+}
+
+// The image an address belongs to, asked of the kernel instead of the target's loader list:
+// VirtualQueryEx reports the backing file of any address, including one in a process whose module list
+// was never walked. This is what makes the hijack candidate check independent of PEB access.
+std::wstring MappedImageName(HANDLE process, std::uintptr_t address) {
+    MEMORY_BASIC_INFORMATION region{};
+    if (VirtualQueryEx(
+            process, reinterpret_cast<const void*>(address), &region, sizeof(region)) == 0 ||
+        region.Type != MEM_IMAGE) {
+        return {};
+    }
+    std::wstring path(32768, L'\0');
+    const DWORD length = GetMappedFileNameW(
+        process, reinterpret_cast<void*>(address), path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= path.size()) return {};
+    path.resize(length);
+    return Fold(std::filesystem::path(path).filename().wstring());
+}
+
+// A thread waiting inside one of ntdll's system call stubs is at an ABI boundary: the stub has issued, or
+// is about to issue, a system call, and its argument registers are the only live state. That is the one
+// place in a running game where the instruction pointer can be redirected and put back without corrupting
+// the thread that was using it.
+//
+// A thread that is already blocked has its user-mode return address immediately after the `syscall`
+// instruction, so what identifies it is the pair of bytes just before the instruction pointer. A thread
+// that has not issued the call yet is identified by the bytes at it.
+bool IsSystemCallStub(HANDLE process, std::uintptr_t instruction_pointer) {
+    const std::wstring image = MappedImageName(process, instruction_pointer);
+    if (image != L"ntdll.dll" && image != L"win32u.dll") return false;
+    constexpr std::size_t kLookbehind = 8;
+    if (instruction_pointer < kLookbehind) return false;
+    std::array<std::byte, kLookbehind + 16> code{};
+    SIZE_T read{};
+    if (ReadProcessMemory(
+            process, reinterpret_cast<const void*>(instruction_pointer - kLookbehind),
+            code.data(), code.size(), &read) == FALSE || read < kLookbehind + 4) {
+        // Inside an image but not at a boundary that could be read: not a candidate. A ntdll code page is
+        // readable, so this is a thread somewhere else entirely.
+        return false;
+    }
+    const auto byte_at = [&code](std::size_t index) {
+        return static_cast<std::uint8_t>(code[index]);
+    };
+    const auto at = [&byte_at](std::size_t index) {
+        return byte_at(kLookbehind + index);
+    };
+    if (byte_at(kLookbehind - 2) == 0x0F && byte_at(kLookbehind - 1) == 0x05) return true;
+    return (at(0) == 0x4C && at(1) == 0x8B && at(2) == 0xD1) ||  // mov r10, rcx
+        at(0) == 0xB8 ||                                         // mov eax, ssn
+        at(0) == 0xE9 ||                                         // jmp rel32
+        (at(0) == 0x48 && at(1) == 0xFF && at(2) == 0x25) ||     // jmp [rip + d]
+        (at(0) == 0x0F && at(1) == 0x05);                        // syscall
+}
+
+bool ExecutionCompleted(const RemoteExecution& execution) {
+    DWORD stamp{};
+    return ReadRemote(
+        execution.process, execution.context + execution.completion_offset,
+        &stamp, sizeof(stamp)) && stamp == kCompletionStamp;
+}
+
+bool ExecutionClaimed(const RemoteExecution& execution) {
+    std::uint32_t claim{};
+    return ReadRemote(
+        execution.process, execution.context + execution.claim_offset,
+        &claim, sizeof(claim)) && claim != 0;
+}
+
+bool WaitForCompletion(const RemoteExecution& execution, std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    for (;;) {
+        if (ExecutionCompleted(execution)) return true;
+        if (std::chrono::steady_clock::now() >= deadline) return false;
+        Sleep(5);
+    }
+}
+
+DeliveryResult DeliverWithRemoteThread(const RemoteExecution& execution) {
+    Handle thread(CreateRemoteThread(
+        execution.process, nullptr, 0,
+        reinterpret_cast<LPTHREAD_START_ROUTINE>(execution.code),
+        reinterpret_cast<void*>(execution.context), 0, nullptr));
+    if (!thread) {
+        return {DeliveryOutcome::Failed, GetLastError(),
+            "a thread could not be created in the target"};
+    }
+    const DWORD bounded_timeout = static_cast<DWORD>(std::clamp<std::int64_t>(
+        execution.timeout.count(), 1, static_cast<std::int64_t>(INFINITE - 1)));
+    if (WaitForSingleObject(thread.Get(), bounded_timeout) != WAIT_OBJECT_0) {
+        return {DeliveryOutcome::TimedOut, ERROR_TIMEOUT,
+            "the thread created in the target did not complete before the timeout"};
+    }
+    DeliveryResult result;
+    result.outcome = DeliveryOutcome::Completed;
+    result.thread_exit_available = GetExitCodeThread(thread.Get(), &result.thread_exit_code) != FALSE;
+    if (!result.thread_exit_available) {
+        result.outcome = DeliveryOutcome::Failed;
+        result.win32_error = GetLastError();
+        result.failure = "the thread created in the target reported no exit code";
+    }
+    return result;
+}
+
+// A thread that was redirected out of a stub returns through a single `ret`, so it is out of the
+// trampoline once its instruction pointer is outside the trampoline's code page. Until then the page
+// cannot be freed.
+bool WaitForTrampolineExit(
+    HANDLE thread, std::uintptr_t code_address, std::uintptr_t code_limit,
+    std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    for (;;) {
+        if (SuspendThread(thread) == static_cast<DWORD>(-1)) return false;
+        CONTEXT context{};
+        context.ContextFlags = CONTEXT_CONTROL;
+        const bool read = GetThreadContext(thread, &context) != FALSE;
+        ResumeThread(thread);
+        if (read && (context.Rip < code_address || context.Rip >= code_limit)) return true;
+        if (std::chrono::steady_clock::now() >= deadline) return false;
+        Sleep(1);
+    }
+}
+
+DeliveryResult DeliverWithThreadHijack(const RemoteExecution& execution) {
+    const auto begin = reinterpret_cast<std::uintptr_t>(
+        reinterpret_cast<const void*>(&AnomalyRemoteHijackBegin));
+    const auto end = reinterpret_cast<std::uintptr_t>(
+        reinterpret_cast<const void*>(&AnomalyRemoteHijackEnd));
+    const auto state_slot = reinterpret_cast<std::uintptr_t>(&AnomalyRemoteHijackStateSlot);
+    const auto resume_slot = reinterpret_cast<std::uintptr_t>(&AnomalyRemoteHijackResumeSlot);
+    constexpr std::size_t kTrampolineReservation = 0x2000;
+    constexpr std::size_t kStatePageOffset = 0x1000;
+    if (end <= begin || end - begin > kStatePageOffset / 2 ||
+        state_slot < begin || state_slot + sizeof(std::uint64_t) > end ||
+        resume_slot < begin || resume_slot + sizeof(std::uint64_t) > end) {
+        return {DeliveryOutcome::Failed, ERROR_INVALID_ADDRESS,
+            "hijack trampoline code range is invalid"};
+    }
+    std::vector<std::byte> code(end - begin);
+    std::memcpy(code.data(), reinterpret_cast<const void*>(begin), code.size());
+
+    // A thread parked in a stub only reaches the trampoline when the wait it is in ends, and how long that
+    // takes cannot be known: a thread in a short timed wait returns within a millisecond, one waiting for
+    // something that never happens never returns at all. So candidates are taken in turn, each with a slice
+    // of the budget, and whichever returns to user mode first runs the payload for all of them.
+    // Every thread the process will let this one open: the payload runs as soon as any redirected thread
+    // comes back to user mode, so the budget is spent covering them all rather than waiting on a few.
+    constexpr std::size_t kMaximumCandidates = 64;
+    const auto deadline = std::chrono::steady_clock::now() + execution.timeout;
+    // Short slices on purpose: most threads of a running game are parked in waits that never end, so the
+    // budget is spent looking for one that does return -- a render or worker thread with a frame-sized
+    // wait -- instead of sitting on the first thread for the whole timeout.
+    const auto candidate_slice = std::clamp(
+        std::chrono::milliseconds(execution.timeout.count() / 8),
+        std::chrono::milliseconds(250), std::chrono::milliseconds(2000));
+
+    std::size_t inspected{};
+    std::size_t redirected{};
+    for (const DWORD thread_id : SnapshotThreads(execution.process)) {
+        if (redirected >= kMaximumCandidates || std::chrono::steady_clock::now() >= deadline) break;
+        ++inspected;
+        Handle thread(OpenThread(
+            THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT |
+                THREAD_QUERY_INFORMATION, FALSE, thread_id));
+        if (!thread) continue;
+        if (SuspendThread(thread.Get()) == static_cast<DWORD>(-1)) continue;
+        CONTEXT thread_context{};
+        thread_context.ContextFlags = CONTEXT_CONTROL;
+        if (GetThreadContext(thread.Get(), &thread_context) == FALSE ||
+            !IsSystemCallStub(execution.process, thread_context.Rip)) {
+            ResumeThread(thread.Get());
+            continue;
+        }
+
+        // Each candidate gets its own state block: the saved stack pointer and the caller's vector
+        // registers belong to the thread that was redirected.
+        RemoteAllocation trampoline(
+            execution.process, VirtualAllocEx(
+                execution.process, nullptr, kTrampolineReservation,
+                MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE), kTrampolineReservation);
+        if (trampoline.address == nullptr) {
+            ResumeThread(thread.Get());
+            break;
+        }
+        const auto code_address = reinterpret_cast<std::uintptr_t>(trampoline.address);
+        const auto state_address = code_address + kStatePageOffset;
+        const RemoteHijackState state{
+            .payload = execution.code,
+            .payload_context = execution.context,
+        };
+        const auto write_slot = [&code, begin](std::uintptr_t slot, std::uint64_t value) {
+            std::memcpy(code.data() + (slot - begin), &value, sizeof(value));
+        };
+        write_slot(state_slot, state_address);
+        write_slot(resume_slot, thread_context.Rip);
+        DWORD previous{};
+        if (WriteProcessMemory(
+                execution.process, trampoline.address, code.data(), code.size(),
+                nullptr) == FALSE ||
+            WriteProcessMemory(
+                execution.process, reinterpret_cast<void*>(state_address), &state,
+                sizeof(state), nullptr) == FALSE ||
+            VirtualProtectEx(
+                execution.process, trampoline.address, kStatePageOffset,
+                PAGE_EXECUTE_READ, &previous) == FALSE ||
+            FlushInstructionCache(
+                execution.process, trampoline.address, code.size()) == FALSE) {
+            const DWORD error = GetLastError();
+            ResumeThread(thread.Get());
+            return {DeliveryOutcome::Failed, error,
+                "the hijack trampoline could not be prepared in the target"};
+        }
+        CONTEXT redirected_context = thread_context;
+        redirected_context.Rip = code_address;
+        if (SetThreadContext(thread.Get(), &redirected_context) == FALSE) {
+            const DWORD error = GetLastError();
+            ResumeThread(thread.Get());
+            return {DeliveryOutcome::Failed, error,
+                "the target thread context could not be redirected"};
+        }
+        ResumeThread(thread.Get());
+        ++redirected;
+
+        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+        if (remaining <= std::chrono::milliseconds::zero()) {
+            remaining = std::chrono::milliseconds(1);
+        }
+        if (WaitForCompletion(execution, (std::min)(candidate_slice, remaining))) {
+            if (!WaitForTrampolineExit(
+                    thread.Get(), code_address, code_address + kStatePageOffset,
+                    std::chrono::seconds(5))) {
+                // The entry point finished, so the work itself succeeded; only this page has to stay where
+                // it is while the thread may still be standing in it.
+                trampoline.retained = true;
+            }
+            return {DeliveryOutcome::Completed, ERROR_SUCCESS, {}};
+        }
+        // This thread has not returned to user mode yet, so its trampoline stays: the payload claim makes
+        // it a no-op if it arrives after another candidate has already run it.
+        trampoline.retained = true;
+    }
+    if (redirected == 0) {
+        return {DeliveryOutcome::Failed, ERROR_NOT_FOUND,
+            "no target thread was parked in a system call stub (" +
+                std::to_string(inspected) + " inspected)"};
+    }
+    return {DeliveryOutcome::TimedOut, ERROR_TIMEOUT,
+        "none of the " + std::to_string(redirected) +
+            " redirected threads returned to user mode within the timeout"};
+}
+
+DeliveryResult DeliverExecution(const RemoteExecution& execution, ManualMapDelivery delivery) {
+    switch (delivery) {
+        case ManualMapDelivery::ThreadHijack:
+            return DeliverWithThreadHijack(execution);
+        case ManualMapDelivery::Automatic: {
+            // Which of these can work depends on what the running game is doing at this instant, so each
+            // one gets a share of the timeout and the failure of both is reported together.
+            //
+            // The order is the measured one: a game running with a kernel anti-cheat refuses the thread a
+            // remote thread delivery asks for, and its own parked threads are then the only way in.
+            const auto share = std::chrono::milliseconds((std::max)(
+                static_cast<std::int64_t>(execution.timeout.count()) / 2, std::int64_t{1000}));
+            std::string failures;
+            for (const auto candidate : {ManualMapDelivery::ThreadHijack,
+                     ManualMapDelivery::RemoteThread}) {
+                RemoteExecution attempt = execution;
+                attempt.timeout = share;
+                const auto result = DeliverExecution(attempt, candidate);
+                if (result.outcome == DeliveryOutcome::Completed) return result;
+                if (failures.empty()) failures = result.failure;
+                else failures += "; " + result.failure;
+                // A payload that a thread already claimed is running in the target: trying another
+                // delivery would only queue a second entry point behind it.
+                if (ExecutionClaimed(execution)) {
+                    return {result.outcome, result.win32_error, failures};
+                }
+            }
+            return {DeliveryOutcome::Failed, ERROR_TIMEOUT,
+                "no delivery method could run the entry point (" + failures + ")"};
+        }
+        case ManualMapDelivery::RemoteThread:
+        default:
+            return DeliverWithRemoteThread(execution);
+    }
+}
+
+std::string Hex64(std::uint64_t value) {
+    constexpr char digits[] = "0123456789ABCDEF";
+    std::string text = "0x";
+    for (int shift = 60; shift >= 0; shift -= 4) text.push_back(digits[(value >> shift) & 0xF]);
+    return text;
+}
+
+// Loading a dependency into the target is remote code execution like any other, so it goes through the same
+// deliveries: a target that refuses a thread from outside will refuse it here too, and that is the step a
+// manual map dies on when it cannot be finished. The stub records the module handle and the loader's own
+// error code, which is what makes a refusal reportable instead of guessable.
+bool RemoteLoadLibrary(
+    HANDLE process, const std::filesystem::path& path, RemoteModuleMap& modules,
+    ManualMapDelivery delivery, std::string& failure) {
+    const auto kernel32 = GetModuleHandleW(L"kernel32.dll");
+    ImportProcedureResolver resolver;
+    const auto remote_load_library = RemoteAddressForLocalProcedure(
+        resolver.Resolve(kernel32, "LoadLibraryW"), modules);
+    const auto remote_get_last_error = RemoteAddressForLocalProcedure(
+        resolver.Resolve(kernel32, "GetLastError"), modules);
+    if (!remote_load_library || !remote_get_last_error) {
+        failure = "the target's LoadLibraryW address could not be resolved";
+        return false;
+    }
+
+    const std::wstring value = path.wstring();
+    const std::size_t bytes = (value.size() + 1) * sizeof(wchar_t);
+    RemoteAllocation argument(
+        process, VirtualAllocEx(process, nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE),
+        bytes);
+    if (argument.address == nullptr || WriteProcessMemory(
+            process, argument.address, value.c_str(), bytes, nullptr) == FALSE) {
+        failure = "the dependency path could not be written into the target";
+        return false;
+    }
+
+    const auto* stub_begin = reinterpret_cast<const std::byte*>(
+        reinterpret_cast<const void*>(&AnomalyRemoteLoadLibraryBegin));
+    const auto* stub_end = reinterpret_cast<const std::byte*>(
+        reinterpret_cast<const void*>(&AnomalyRemoteLoadLibraryEnd));
+    if (stub_end <= stub_begin || static_cast<std::size_t>(stub_end - stub_begin) > 4096) {
+        failure = "the dependency loader code range is invalid";
+        return false;
+    }
+    const std::size_t stub_size = static_cast<std::size_t>(stub_end - stub_begin);
+    RemoteAllocation stub(
+        process, VirtualAllocEx(
+            process, nullptr, stub_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE), stub_size);
+    if (stub.address == nullptr || WriteProcessMemory(
+            process, stub.address, stub_begin, stub_size, nullptr) == FALSE) {
+        failure = "the dependency loader could not be written into the target";
+        return false;
+    }
+    DWORD previous{};
+    if (VirtualProtectEx(
+            process, stub.address, stub_size, PAGE_EXECUTE_READ, &previous) == FALSE ||
+        FlushInstructionCache(process, stub.address, stub_size) == FALSE) {
+        failure = "the dependency loader could not be made executable in the target";
+        return false;
+    }
+
+    RemoteLoadLibraryContext context{
+        .path = reinterpret_cast<std::uintptr_t>(argument.address),
+        .load_library = *remote_load_library,
+        .get_last_error = *remote_get_last_error,
+    };
+    RemoteAllocation remote_context(
+        process, VirtualAllocEx(
+            process, nullptr, sizeof(context), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE),
+        sizeof(context));
+    if (remote_context.address == nullptr || WriteProcessMemory(
+            process, remote_context.address, &context, sizeof(context), nullptr) == FALSE) {
+        failure = "the dependency loader context could not be written into the target";
+        return false;
+    }
+
+    const auto result = DeliverExecution(
+        RemoteExecution{
+            .process = process,
+            .code = reinterpret_cast<std::uintptr_t>(stub.address),
+            .context = reinterpret_cast<std::uintptr_t>(remote_context.address),
+            .completion_offset = offsetof(RemoteLoadLibraryContext, completion_stamp),
+            .claim_offset = offsetof(RemoteLoadLibraryContext, claim),
+            .timeout = std::chrono::seconds(15),
+        },
+        delivery);
+    // A redirected thread can still be standing in these blocks, so nothing is released unless this
+    // process owned the only thread that could reach them.
+    const bool cancellable = delivery == ManualMapDelivery::RemoteThread;
+    if (result.outcome != DeliveryOutcome::Completed) {
+        argument.retained = true;
+        stub.retained = true;
+        remote_context.retained = true;
+        // How far the loader got is what makes the failure actionable: not entered, entered and stuck in
+        // LoadLibraryW, or finished with a result that was never reported.
+        RemoteLoadLibraryContext observed = context;
+        static_cast<void>(ReadProcessMemory(
+            process, remote_context.address, &observed, sizeof(observed), nullptr));
+        const char* stage = observed.claim == 0
+            ? "the loader was never entered"
+            : observed.module == 0 ? "LoadLibraryW did not return"
+                                   : "LoadLibraryW returned but the loader did not report back";
+        failure = "the target could not be made to load " + NarrowPath(path) + ": " +
+            result.failure + " (" + DeliveryName(delivery) + "; " + stage + ")";
+        return false;
+    }
+    if (!cancellable) {
+        argument.retained = true;
+        stub.retained = true;
+        remote_context.retained = true;
+    }
+    if (ReadProcessMemory(
+            process, remote_context.address, &context, sizeof(context), nullptr) == FALSE) {
+        failure = "the dependency loader result could not be read";
+        return false;
+    }
+    DWORD snapshot_error{};
+    modules = SnapshotModules(process, snapshot_error);
+    if (snapshot_error != ERROR_SUCCESS) {
+        failure = "remote modules could not be refreshed";
+        return false;
+    }
+    if (FindRemoteModule(modules, path) == modules.end()) {
+        // The module handle plus the loader's own error is what says why the target refused the module.
+        failure = "the target did not load " + NarrowPath(path) + ": LoadLibraryW returned " +
+            Hex64(context.module) + ", error " + std::to_string(context.last_error);
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+AttachableProcess InspectAttachableProcess(DWORD process_id) noexcept {
+    AttachableProcess result;
+    result.process_id = process_id;
+    if (process_id == 0 || process_id == GetCurrentProcessId()) {
+        result.inspection_error = ERROR_INVALID_PARAMETER;
+        return result;
+    }
+    Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id));
+    if (!process) {
+        result.inspection_error = GetLastError();
+        return result;
+    }
+    DWORD error{};
+    result.executable_path = ProcessPath(process.Get(), error);
+    if (error != ERROR_SUCCESS) {
+        result.inspection_error = error;
+        return result;
+    }
+    result.executable_name = result.executable_path.filename().wstring();
+    result.owned_by_current_user = SameUser(process.Get(), error);
+    if (error != ERROR_SUCCESS || !result.owned_by_current_user) {
+        result.inspection_error = error;
+        return result;
+    }
+    result.x64 = IsX64Process(process.Get(), error);
+    if (error != ERROR_SUCCESS || !result.x64) {
+        result.inspection_error = error;
+        return result;
+    }
+    Handle attach_process = OpenProcessForAttach(process_id, error);
+    result.inspection_error = attach_process ? ERROR_SUCCESS : error;
+    return result;
+}
+
+std::vector<AttachableProcess> EnumerateAttachableProcesses(
+    std::wstring_view executable_name) noexcept {
+    std::vector<AttachableProcess> result;
+    try {
+        Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
+        if (!snapshot) return result;
+        PROCESSENTRY32W entry{.dwSize = sizeof(entry)};
+        if (Process32FirstW(snapshot.Get(), &entry) == FALSE) return result;
+        const std::wstring folded_requested = Fold(std::wstring(executable_name));
+        do {
+            if (folded_requested.empty() || Fold(entry.szExeFile) == folded_requested) {
+                result.push_back(InspectAttachableProcess(entry.th32ProcessID));
+            }
+            entry.dwSize = sizeof(entry);
+        } while (Process32NextW(snapshot.Get(), &entry) != FALSE);
+    } catch (...) {
+        result.clear();
+    }
+    std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) {
+        return left.process_id < right.process_id;
+    });
+    return result;
+}
+
+static ManualMapResult ManualMapRuntimeCoreWithHandle(
+    const ManualMapOptions& options, const AttachableProcess& inspected,
+    const Handle& process) noexcept {
+    try {
+        if (HasPrivateMappedCore(process.Get())) {
+            return Failure(
+                ManualMapError::AlreadyAttached, ERROR_ALREADY_EXISTS,
+                "an externally mapped Anomaly core is already present");
+        }
+
+        std::string image_failure;
+        auto parsed = ParseImage(options.core_path, image_failure);
+        if (!parsed) {
+            return Failure(
+                ManualMapError::ImageInvalid, ERROR_BAD_EXE_FORMAT,
+                std::move(image_failure));
+        }
+        auto* headers = Headers(parsed->mapped);
+        const auto start_rva = ExportRva(parsed->mapped, ANOMALY_CORE_START_ENTRY);
+        if (headers == nullptr || !start_rva) {
+            return Failure(
+                ManualMapError::ImageInvalid, ERROR_PROC_NOT_FOUND,
+                "core image does not export AnomalyStart");
+        }
+
+        const auto& source_tls =
+            headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];
+        if (source_tls.VirtualAddress != 0) {
+            const auto* source_tls_directory = Rva<IMAGE_TLS_DIRECTORY64>(
+                parsed->mapped, source_tls.VirtualAddress);
+            if (source_tls.Size < sizeof(IMAGE_TLS_DIRECTORY64) ||
+                source_tls_directory == nullptr) {
+                return Failure(
+                    ManualMapError::ImageInvalid, ERROR_BAD_EXE_FORMAT,
+                    "core TLS directory is outside the image");
+            }
+            if (source_tls_directory->StartAddressOfRawData !=
+                    source_tls_directory->EndAddressOfRawData ||
+                source_tls_directory->SizeOfZeroFill != 0) {
+                return Failure(
+                    ManualMapError::ImageInvalid, ERROR_NOT_SUPPORTED,
+                    "core image requires loader-managed static TLS");
+            }
+        }
+
+        const auto cxx_throw_rva = ExportRva(
+            parsed->mapped, ANOMALY_CORE_MANUAL_MAP_CXX_THROW_ENTRY);
+        if (!cxx_throw_rva) {
+            return Failure(
+                ManualMapError::ImageInvalid, ERROR_PROC_NOT_FOUND,
+                "core image does not export the manual-map C++ exception bridge");
+        }
+
+        void* remote_base = VirtualAllocEx(
+            process.Get(), reinterpret_cast<void*>(headers->OptionalHeader.ImageBase),
+            parsed->mapped.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (remote_base == nullptr) {
+            remote_base = VirtualAllocEx(
+                process.Get(), nullptr, parsed->mapped.size(),
+                MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        }
+        RemoteAllocation remote_image(process.Get(), remote_base, parsed->mapped.size());
+        if (remote_image.address == nullptr) {
+            return Failure(
+                ManualMapError::AllocationFailure, GetLastError(),
+                "remote core image could not be allocated");
+        }
+        const auto remote_image_address =
+            reinterpret_cast<std::uintptr_t>(remote_image.address);
+        if (!RelocateImage(parsed->mapped, remote_image_address, image_failure)) {
+            return Failure(
+                ManualMapError::ImageInvalid, ERROR_BAD_EXE_FORMAT,
+                std::move(image_failure));
+        }
+
+        DWORD module_error{};
+        auto modules = SnapshotModules(process.Get(), module_error);
+        if (module_error != ERROR_SUCCESS) {
+            return Failure(
+                ManualMapError::DependencyFailure, module_error,
+                "target modules could not be enumerated");
+        }
+        ImportOverride cxx_throw_override{
+            .name = "_CxxThrowException",
+            .address = remote_image_address + *cxx_throw_rva,
+        };
+        if (!ResolveImports(
+                process.Get(), *parsed, modules, options.delivery,
+                inspected.executable_path.parent_path(), image_failure,
+                &cxx_throw_override)) {
+            return Failure(
+                ManualMapError::DependencyFailure, ERROR_MOD_NOT_FOUND,
+                std::move(image_failure));
+        }
+        if (!cxx_throw_override.applied) {
+            return Failure(
+                ManualMapError::ImageInvalid, ERROR_PROC_NOT_FOUND,
+                "core image does not import _CxxThrowException");
+        }
+        headers = Headers(parsed->mapped);
+        if (headers == nullptr || WriteProcessMemory(
+                process.Get(), remote_image.address, parsed->mapped.data(),
+                parsed->mapped.size(), nullptr) == FALSE) {
+            return Failure(
+                ManualMapError::WriteFailure, GetLastError(),
+                "remote core image could not be written");
+        }
+        // After the write and before the protections: the image is complete at this point, so nothing that
+        // is erased here is still needed, and a scanner that looks at this page from now on sees no image.
+        RemoteAllocation attachment_marker;
+        if (!ScrubMappedImage(process.Get(), remote_image.address, parsed->mapped) ||
+            !WriteAttachmentMarker(
+                process.Get(), remote_image.address, parsed->mapped.size(), attachment_marker)) {
+            return Failure(
+                ManualMapError::WriteFailure, GetLastError(),
+                "the mapped image could not be hidden from module scanners");
+        }
+        if (!ProtectImage(process.Get(), remote_image.address, parsed->mapped)) {
+            return Failure(
+                ManualMapError::ProtectionFailure, GetLastError(),
+                "remote core section protections could not be applied");
+        }
+
+        ImportProcedureResolver resolver;
+        const auto rtl_add = resolver.Resolve(
+            GetModuleHandleW(L"ntdll.dll"), "RtlAddFunctionTable");
+        const auto rtl_delete = resolver.Resolve(
+            GetModuleHandleW(L"ntdll.dll"), "RtlDeleteFunctionTable");
+        const auto remote_rtl_add = RemoteAddressForLocalProcedure(rtl_add, modules);
+        const auto remote_rtl_delete = RemoteAddressForLocalProcedure(rtl_delete, modules);
+        if (!remote_rtl_add || !remote_rtl_delete) {
+            return Failure(
+                ManualMapError::BootstrapFailure, ERROR_PROC_NOT_FOUND,
+                "remote unwind registration functions could not be resolved");
+        }
+
+        const auto runtime_root = options.runtime_root.empty()
+            ? std::filesystem::absolute(options.core_path).parent_path()
+            : std::filesystem::absolute(options.runtime_root);
+        const auto log_directory = options.log_directory.empty()
+            ? runtime_root / L"logs" : std::filesystem::absolute(options.log_directory);
+        RemoteAllocation remote_root = WriteRemoteWideString(process.Get(), runtime_root);
+        RemoteAllocation remote_log = WriteRemoteWideString(process.Get(), log_directory);
+        if (remote_root.address == nullptr || remote_log.address == nullptr) {
+            return Failure(
+                ManualMapError::AllocationFailure, GetLastError(),
+                "remote runtime paths could not be allocated");
+        }
+        DWORD snapshot_error{};
+        modules = SnapshotModules(process.Get(), snapshot_error);
+        const auto main_module = modules.find(Fold(inspected.executable_name));
+        if (snapshot_error != ERROR_SUCCESS || main_module == modules.end()) {
+            return Failure(
+                ManualMapError::BootstrapFailure,
+                snapshot_error == ERROR_SUCCESS ? ERROR_MOD_NOT_FOUND : snapshot_error,
+                "target main module could not be resolved");
+        }
+
+        const AnomalyStartInfo start_info{
+            .struct_size = ANOMALY_START_INFO_V1_SIZE,
+            .bootstrap_abi_version = ANOMALY_BOOTSTRAP_ABI_VERSION,
+            .bootstrap_type = ANOMALY_BOOTSTRAP_TYPE_EXTERNAL,
+            .flags = 0,
+            .bootstrap_module = nullptr,
+            .game_module = reinterpret_cast<HMODULE>(main_module->second.base),
+            .runtime_root = reinterpret_cast<const WCHAR*>(remote_root.address),
+            .log_directory = reinterpret_cast<const WCHAR*>(remote_log.address),
+            .external_stop_event = nullptr,
+        };
+        RemoteAllocation remote_start_info(
+            process.Get(), VirtualAllocEx(
+                process.Get(), nullptr, sizeof(start_info),
+                MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE), sizeof(start_info));
+        if (remote_start_info.address == nullptr || WriteProcessMemory(
+                process.Get(), remote_start_info.address, &start_info,
+                sizeof(start_info), nullptr) == FALSE) {
+            return Failure(
+                ManualMapError::WriteFailure, GetLastError(),
+                "remote AnomalyStartInfo could not be written");
+        }
+
+        const auto& exception =
+            headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+        const auto& tls = headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];
+        if (headers->OptionalHeader.AddressOfEntryPoint >= parsed->mapped.size() ||
+            (exception.VirtualAddress != 0 &&
+                (exception.Size == 0 ||
+                 exception.Size % sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY) != 0 ||
+                 Rva<std::byte>(
+                     parsed->mapped, exception.VirtualAddress, exception.Size) == nullptr))) {
+            return Failure(
+                ManualMapError::ImageInvalid, ERROR_BAD_EXE_FORMAT,
+                "core entry point or exception directory is invalid");
+        }
+        std::uint64_t tls_callbacks{};
+        if (tls.VirtualAddress != 0) {
+            const auto* tls_directory = Rva<IMAGE_TLS_DIRECTORY64>(
+                parsed->mapped, tls.VirtualAddress);
+            if (tls.Size < sizeof(IMAGE_TLS_DIRECTORY64) || tls_directory == nullptr) {
+                return Failure(
+                    ManualMapError::ImageInvalid, ERROR_BAD_EXE_FORMAT,
+                    "core TLS directory is outside the image");
+            }
+            tls_callbacks = tls_directory->AddressOfCallBacks;
+            if (tls_callbacks != 0) {
+                if (tls_callbacks < remote_image_address ||
+                    tls_callbacks >= remote_image_address + parsed->mapped.size()) {
+                    return Failure(
+                        ManualMapError::ImageInvalid, ERROR_BAD_EXE_FORMAT,
+                        "core TLS callback table is outside the image");
+                }
+                const auto callback_rva = static_cast<DWORD>(
+                    tls_callbacks - remote_image_address);
+                const std::size_t maximum_callbacks = (std::min)(
+                    (parsed->mapped.size() - callback_rva) / sizeof(std::uint64_t),
+                    static_cast<std::size_t>(4096));
+                bool terminated{};
+                for (std::size_t index = 0; index < maximum_callbacks; ++index) {
+                    const auto* callback = Rva<std::uint64_t>(
+                        parsed->mapped,
+                        callback_rva + static_cast<DWORD>(index * sizeof(std::uint64_t)));
+                    if (callback == nullptr) break;
+                    if (*callback == 0) {
+                        terminated = true;
+                        break;
+                    }
+                    if (*callback < remote_image_address ||
+                        *callback >= remote_image_address + parsed->mapped.size()) {
+                        return Failure(
+                            ManualMapError::ImageInvalid, ERROR_BAD_EXE_FORMAT,
+                            "core TLS callback target is outside the image");
+                    }
+                }
+                if (!terminated) {
+                    return Failure(
+                        ManualMapError::ImageInvalid, ERROR_BAD_EXE_FORMAT,
+                        "core TLS callback table is not terminated");
+                }
+            }
+        }
+        RemoteBootstrapContext context{
+            .image_base = remote_image_address,
+            .exception_table = exception.VirtualAddress == 0
+                ? 0 : remote_image_address + exception.VirtualAddress,
+            .exception_count = exception.Size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY),
+            .rtl_add_function_table = *remote_rtl_add,
+            .rtl_delete_function_table = *remote_rtl_delete,
+            .tls_callbacks = tls_callbacks,
+            .entry_point = headers->OptionalHeader.AddressOfEntryPoint == 0
+                ? 0 : remote_image_address + headers->OptionalHeader.AddressOfEntryPoint,
+            .anomaly_start = remote_image_address + *start_rva,
+            .start_info = reinterpret_cast<std::uintptr_t>(remote_start_info.address),
+        };
+        RemoteAllocation remote_context(
+            process.Get(), VirtualAllocEx(
+                process.Get(), nullptr, sizeof(context),
+                MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE), sizeof(context));
+        if (remote_context.address == nullptr || WriteProcessMemory(
+                process.Get(), remote_context.address, &context, sizeof(context), nullptr) == FALSE) {
+            return Failure(
+                ManualMapError::WriteFailure, GetLastError(),
+                "remote bootstrap context could not be written");
+        }
+
+        const auto* bootstrap_begin = reinterpret_cast<const std::byte*>(
+            reinterpret_cast<const void*>(&AnomalyRemoteBootstrapBegin));
+        const auto* bootstrap_end = reinterpret_cast<const std::byte*>(
+            reinterpret_cast<const void*>(&AnomalyRemoteBootstrapEnd));
+        if (bootstrap_end <= bootstrap_begin ||
+            static_cast<std::size_t>(bootstrap_end - bootstrap_begin) > 4096) {
+            return Failure(
+                ManualMapError::BootstrapFailure, ERROR_INVALID_ADDRESS,
+                "remote bootstrap code range is invalid");
+        }
+        const std::size_t bootstrap_size =
+            static_cast<std::size_t>(bootstrap_end - bootstrap_begin);
+        RemoteAllocation remote_stub(
+            process.Get(), VirtualAllocEx(
+                process.Get(), nullptr, bootstrap_size,
+                MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE), bootstrap_size);
+        if (remote_stub.address == nullptr || WriteProcessMemory(
+                process.Get(), remote_stub.address, bootstrap_begin,
+                bootstrap_size, nullptr) == FALSE) {
+            return Failure(
+                ManualMapError::WriteFailure, GetLastError(),
+                "remote bootstrap code could not be written");
+        }
+        DWORD previous{};
+        if (VirtualProtectEx(
+                process.Get(), remote_stub.address, bootstrap_size,
+                PAGE_EXECUTE_READ, &previous) == FALSE ||
+            FlushInstructionCache(
+                process.Get(), remote_stub.address, bootstrap_size) == FALSE) {
+            return Failure(
+                ManualMapError::ProtectionFailure, GetLastError(),
+                "remote bootstrap code could not be made executable");
+        }
+
+        const auto bounded_timeout = std::clamp<std::int64_t>(
+            options.timeout.count(), 1, static_cast<std::int64_t>(INFINITE - 1));
+        const auto delivery = DeliverExecution(
+            RemoteExecution{
+                .process = process.Get(),
+                .code = reinterpret_cast<std::uintptr_t>(remote_stub.address),
+                .context = reinterpret_cast<std::uintptr_t>(remote_context.address),
+                .completion_offset = offsetof(RemoteBootstrapContext, completion_stamp),
+                .claim_offset = offsetof(RemoteBootstrapContext, claim),
+                .timeout = std::chrono::milliseconds(bounded_timeout),
+            },
+            options.delivery);
+        // A redirected thread still points at the payload code and at the context, so both have to
+        // outlive this call whatever the outcome was.
+        const bool cancellable = options.delivery == ManualMapDelivery::RemoteThread;
+        if (delivery.outcome == DeliveryOutcome::TimedOut) {
+            remote_image.retained = true;
+            remote_context.retained = true;
+            remote_stub.retained = true;
+            remote_start_info.retained = true;
+            remote_root.retained = true;
+            remote_log.retained = true;
+            return Failure(
+                ManualMapError::Timeout, delivery.win32_error,
+                delivery.failure + " (" + DeliveryName(options.delivery) + ")", ERROR_TIMEOUT,
+                remote_image_address);
+        }
+        if (delivery.outcome == DeliveryOutcome::Failed) {
+            return Failure(
+                ManualMapError::BootstrapFailure, delivery.win32_error,
+                delivery.failure + " (" + DeliveryName(options.delivery) + ")",
+                ERROR_SUCCESS, remote_image_address);
+        }
+        if (!cancellable) {
+            remote_context.retained = true;
+            remote_stub.retained = true;
+        }
+        const DWORD thread_exit_code = delivery.thread_exit_code;
+        const bool thread_exit_available = delivery.thread_exit_available;
+        if (ReadProcessMemory(
+            process.Get(), remote_context.address, &context, sizeof(context), nullptr) == FALSE) {
+            if (thread_exit_available && thread_exit_code != ERROR_SUCCESS) {
+                return Failure(
+                    ManualMapError::BootstrapFailure, thread_exit_code,
+                    "remote bootstrap thread terminated unexpectedly (exit=" +
+                        std::to_string(thread_exit_code) + ")",
+                    thread_exit_code, remote_image_address);
+            }
+            return Failure(
+                ManualMapError::BootstrapFailure, GetLastError(),
+                "remote bootstrap result could not be read");
+        }
+        if (context.bootstrap_error != ERROR_SUCCESS ||
+            context.runtime_start_error != ERROR_SUCCESS) {
+            const DWORD error = context.bootstrap_error != ERROR_SUCCESS
+                ? context.bootstrap_error : context.runtime_start_error;
+            return Failure(
+                ManualMapError::BootstrapFailure, error,
+                "Anomaly core initialization failed in the target process",
+                context.runtime_start_error, remote_image_address);
+        }
+        // Only the delivery that owns a thread has an exit code to judge. The others run the payload on
+        // a thread of the game's own, and the context they read back is the whole report.
+        if (thread_exit_available && thread_exit_code != ERROR_SUCCESS) {
+            return Failure(
+                ManualMapError::BootstrapFailure, thread_exit_code,
+                "remote bootstrap thread terminated unexpectedly (exit=" +
+                    std::to_string(thread_exit_code) + ")",
+                thread_exit_code, remote_image_address);
+        }
+        remote_image.retained = true;
+        attachment_marker.retained = true;
+        return {ManualMapError::None, ERROR_SUCCESS, ERROR_SUCCESS,
+                remote_image_address, "Anomaly core attached"};
+    } catch (...) {
+        return Failure(
+            ManualMapError::ImageInvalid, ERROR_UNHANDLED_EXCEPTION,
+            "manual-map attach raised an unexpected exception");
+    }
+}
+
+namespace {
+
+// Live attach asks the target for exactly what the chosen delivery needs: creating a thread is only
+// requested when a thread is actually going to be created in it.
+DWORD AttachAccessFor(ManualMapDelivery delivery) noexcept {
+    constexpr DWORD kMappingAccess = PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION |
+        PROCESS_VM_READ | PROCESS_VM_WRITE;
+    return delivery == ManualMapDelivery::RemoteThread ? kMappingAccess | PROCESS_CREATE_THREAD
+                                                       : kMappingAccess;
+}
+
+}  // namespace
+
+ManualMapResult AttachToRunningProcess(const ManualMapOptions& options) noexcept {
+    try {
+        if (options.process_id == 0 || options.core_path.empty()) {
+            return Failure(
+                ManualMapError::ProcessUnavailable, ERROR_INVALID_PARAMETER,
+                "live attach options are incomplete");
+        }
+        const auto inspected = InspectAttachableProcess(options.process_id);
+        if (inspected.inspection_error != ERROR_SUCCESS) {
+            return Failure(
+                inspected.inspection_error == ERROR_INVALID_PARAMETER ||
+                        inspected.inspection_error == ERROR_NOT_FOUND
+                    ? ManualMapError::ProcessUnavailable
+                    : ManualMapError::AccessDenied,
+                inspected.inspection_error,
+                "the running target could not be inspected for live attach");
+        }
+        if (!inspected.owned_by_current_user) {
+            return Failure(
+                ManualMapError::DifferentUser, ERROR_ACCESS_DENIED,
+                "the running target belongs to another user");
+        }
+        if (!inspected.x64) {
+            return Failure(
+                ManualMapError::IncompatibleArchitecture, ERROR_BAD_EXE_FORMAT,
+                "the running target is not an x64 process");
+        }
+
+        DWORD open_error{};
+        Handle process =
+            OpenProcessWithAccess(options.process_id, AttachAccessFor(options.delivery), open_error);
+        if (!process) {
+            return Failure(
+                ManualMapError::AccessDenied, open_error,
+                "the running target could not be opened for live attach");
+        }
+
+        // A process that has been running for a while always has its loader list, so this wait normally
+        // ends on the first read. It is here because the caller decides when the target is running, and a
+        // game that was attached to within milliseconds of starting has not published one yet.
+        // A live attach never creates a thread in the target. A remote thread is the part of an injection a
+        // protected game refuses outright, and the refusal is worse than a failure: it is what the game's
+        // own protection reacts to later. The game's parked threads are the only way in, so an automatic
+        // choice stops being automatic here.
+        ManualMapOptions attach_options = options;
+        if (attach_options.delivery == ManualMapDelivery::Automatic) {
+            attach_options.delivery = ManualMapDelivery::ThreadHijack;
+        }
+
+        DWORD module_error = ERROR_NOT_READY;
+        RemoteModuleMap modules;
+        if (!WaitForLoaderReady(
+                process.Get(), inspected.executable_name,
+                std::chrono::steady_clock::now() + options.timeout, modules, module_error)) {
+            return Failure(
+                ManualMapError::DependencyFailure,
+                module_error == ERROR_SUCCESS ? ERROR_TIMEOUT : module_error,
+                "the running target's loader list did not become readable");
+        }
+        return ManualMapRuntimeCoreWithHandle(attach_options, inspected, process);
+    } catch (...) {
+        return Failure(
+            ManualMapError::ProcessUnavailable, ERROR_UNHANDLED_EXCEPTION,
+            "live attach raised an unexpected exception");
+    }
+}
+
+ManualMapLaunchResult LaunchAndManualMapRuntimeCore(
+    const ManualMapLaunchOptions& options) noexcept {
+    ManualMapLaunchResult result;
+    try {
+        if (options.launcher_path.empty() || options.target_executable_name.empty() ||
+            options.manual_map.core_path.empty()) {
+            result.mapping = Failure(
+                ManualMapError::ProcessLaunchFailure, ERROR_INVALID_PARAMETER,
+                "launcher capture options are incomplete");
+            return result;
+        }
+
+        const std::filesystem::path launcher =
+            std::filesystem::absolute(options.launcher_path);
+        const std::filesystem::path working_directory = options.working_directory.empty()
+            ? launcher.parent_path() : std::filesystem::absolute(options.working_directory);
+        std::wstring command_line = L"\"" + launcher.wstring() + L"\"";
+        if (!options.launcher_arguments.empty()) {
+            command_line.push_back(L' ');
+            command_line.append(options.launcher_arguments);
+        }
+
+        DWORD launcher_cleanup_error{};
+        if (!TerminateExistingLauncherProcesses(
+                launcher.parent_path(), launcher_cleanup_error)) {
+            result.mapping = Failure(
+                ManualMapError::ProcessControlFailure, launcher_cleanup_error,
+                "existing official launcher processes could not be stopped");
+            return result;
+        }
+
+        // Debugger and Job membership both alter launcher-visible process state.
+        DWORD snapshot_error{};
+        const auto existing_targets = SnapshotProcessIds(
+            options.target_executable_name, snapshot_error);
+        if (snapshot_error != ERROR_SUCCESS) {
+            result.mapping = Failure(
+                ManualMapError::ProcessControlFailure, snapshot_error,
+                "existing target processes could not be inspected before launch");
+            return result;
+        }
+
+        const std::wstring requested_target = Fold(options.target_executable_name);
+        const auto discovery_timeout = std::clamp<std::int64_t>(
+            options.target_timeout.count(), 1, std::chrono::minutes(10).count() * 60'000LL);
+
+        // The hook signals this immediately before asking the launcher to start the game, so capture
+        // can be held until the seconds that matter. Polling is unavoidable -- the game process is
+        // created by ACE-BASE.sys, which offers nothing to subscribe to -- but a loop that starts with
+        // the launcher would spend most of its life watching a process that is still logging in.
+        // Nothing injects a hook while the launcher's auto-start is off, so nothing has to be waited
+        // for: capture polls from the start for the HTGame.exe the player starts from the launcher.
+        Handle armed;
+        if (!options.hook_path.empty()) {
+            armed.Reset(CreateEventW(nullptr, TRUE, FALSE, kLauncherArmedEventName));
+            if (!armed) {
+                result.mapping = Failure(ManualMapError::ProcessControlFailure, GetLastError(),
+                    "the launcher hook handshake could not be created");
+                return result;
+            }
+        }
+
+        STARTUPINFOW startup{.cb = sizeof(startup)};
+        PROCESS_INFORMATION created{};
+        constexpr DWORD incompatible_flags =
+            DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS | CREATE_SUSPENDED;
+        if (CreateProcessW(
+                launcher.c_str(), command_line.data(), nullptr, nullptr, FALSE,
+                options.creation_flags & ~incompatible_flags,
+                nullptr, working_directory.c_str(), &startup, &created) == FALSE) {
+            const DWORD launch_error = GetLastError();
+            result.mapping = Failure(
+                ManualMapError::ProcessLaunchFailure, launch_error,
+                "official launcher could not be started for target capture");
+            return result;
+        }
+
+        Handle launcher_process(created.hProcess);
+        Handle launcher_thread(created.hThread);
+
+        // The hook is injected before capture begins, because it is what puts the launcher into a
+        // state where the game can start at all and what reports that the moment has arrived.
+        if (!options.hook_path.empty()) {
+            // Injection resolves LoadLibraryW through the launcher's own module list, which does not
+            // exist the instant CreateProcessW returns. Asking too early reports ERROR_NOT_READY and
+            // leaves the launcher running with nothing in it.
+            const auto loader_deadline = std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(kLoaderReadyTimeoutMilliseconds);
+            DWORD hook_error{};
+            RemoteModuleMap launcher_modules;
+            std::string hook_failure;
+            if (!WaitForLoaderReady(launcher_process.Get(), launcher.filename().wstring(),
+                    loader_deadline, launcher_modules, hook_error)) {
+                result.mapping = Failure(ManualMapError::ProcessControlFailure,
+                    hook_error == ERROR_SUCCESS ? ERROR_TIMEOUT : hook_error,
+                    "the launcher's loader did not initialize before the hook timeout");
+                return result;
+            }
+            if (!RemoteLoadLibrary(
+                    launcher_process.Get(), options.hook_path, launcher_modules,
+                    ManualMapDelivery::RemoteThread, hook_failure)) {
+                result.mapping = Failure(ManualMapError::ProcessControlFailure,
+                    ERROR_DLL_INIT_FAILED, "the game hook could not be injected");
+                return result;
+            }
+        }
+
+        FastTargetCaptureResult captured;
+        std::atomic_bool capture_ready{};
+        std::jthread capture_thread([&](std::stop_token stop) noexcept {
+            try {
+                // Bounded, so a launcher whose hook never reports still falls back to capturing on
+                // the session's own timing instead of stalling the launch.
+                if (armed) {
+                    static_cast<void>(
+                        WaitForSingleObject(armed.Get(), kHookArmedTimeoutMilliseconds));
+                }
+                const auto deadline = std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(discovery_timeout);
+                captured = CaptureTargetByFastPolling(
+                    requested_target, existing_targets, deadline, capture_ready, stop);
+            } catch (...) {
+                captured.error = ERROR_UNHANDLED_EXCEPTION;
+                capture_ready.store(true, std::memory_order_release);
+            }
+        });
+        capture_thread.join();
+        Handle target_process = std::move(captured.process);
+        Handle target_cleanup;
+        AttachableProcess target;
+        result.process_id = captured.process_id;
+
+        if (!target_process) {
+            result.mapping = Failure(
+                captured.error == ERROR_ACCESS_DENIED
+                    ? ManualMapError::AccessDenied
+                    : captured.error == ERROR_TIMEOUT
+                        ? ManualMapError::ProcessLaunchFailure
+                        : ManualMapError::ProcessUnavailable,
+                captured.error,
+                captured.error == ERROR_ACCESS_DENIED
+                    ? "new target process was detected after mapping access was filtered"
+                    : captured.error == ERROR_TIMEOUT
+                        ? "official launcher did not create a new target process before the timeout"
+                        : "low-latency target capture failed");
+            return result;
+        }
+
+        DWORD cleanup_error{};
+        target_cleanup = OpenProcessWithAccess(
+            captured.process_id, PROCESS_TERMINATE | SYNCHRONIZE, cleanup_error);
+        target.process_id = captured.process_id;
+        target.executable_path = captured.path;
+        target.executable_name = captured.path.filename().wstring();
+        DWORD inspection_error{};
+        target.owned_by_current_user = SameUser(target_process.Get(), inspection_error);
+        target.x64 = inspection_error == ERROR_SUCCESS &&
+            IsX64Process(target_process.Get(), inspection_error);
+        target.inspection_error = inspection_error;
+        if (inspection_error != ERROR_SUCCESS ||
+            !target.owned_by_current_user || !target.x64) {
+            result.mapping = Failure(
+                !target.owned_by_current_user
+                    ? ManualMapError::DifferentUser
+                    : ManualMapError::IncompatibleArchitecture,
+                inspection_error != ERROR_SUCCESS ? inspection_error
+                    : !target.owned_by_current_user ? ERROR_ACCESS_DENIED
+                                                    : ERROR_BAD_EXE_FORMAT,
+                "captured target process is not a compatible x64 process");
+        }
+
+        bool mapping_started{};
+        if (result.mapping.error == ManualMapError::None) {
+            const auto loader_timeout = std::clamp<std::int64_t>(
+                options.loader_timeout.count(), 1,
+                std::chrono::minutes(10).count() * 60'000LL);
+            const auto loader_deadline = std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(loader_timeout);
+            DWORD module_error = ERROR_NOT_READY;
+            RemoteModuleMap loader_modules;
+            if (!WaitForLoaderReady(target_process.Get(), target.executable_name,
+                    loader_deadline, loader_modules, module_error)) {
+                result.mapping = Failure(
+                    ManualMapError::DependencyFailure,
+                    module_error == ERROR_SUCCESS ? ERROR_TIMEOUT : module_error,
+                    "target process loader did not initialize before the timeout; the target "
+                    "was left running because mapping had not started");
+            } else {
+                ManualMapOptions mapping_options = options.manual_map;
+                mapping_options.process_id = target.process_id;
+                mapping_started = true;
+                result.mapping = ManualMapRuntimeCoreWithHandle(
+                    mapping_options, target, target_process);
+            }
+        }
+
+        if (!result.mapping.Ok() && mapping_started) {
+            if (target_cleanup) {
+                static_cast<void>(TerminateProcess(
+                    target_cleanup.Get(), ERROR_PROCESS_ABORTED));
+                static_cast<void>(WaitForSingleObject(target_cleanup.Get(), 5000));
+            }
+        }
+        return result;
+    } catch (...) {
+        result.mapping = Failure(
+            ManualMapError::ProcessLaunchFailure, ERROR_UNHANDLED_EXCEPTION,
+            "official launcher target capture raised an unexpected exception");
+        return result;
+    }
+}
+
+}  // namespace anomaly::launcher
