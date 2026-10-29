@@ -70,7 +70,9 @@ constexpr const char* kChronosSchema =
 constexpr const char* kDamageSchema =
     R"({"type":"object","additionalProperties":false,"required":["replayCount"],)"
     R"("properties":{"replayCount":{"type":"integer","minimum":1,"maximum":1024},)"
-    R"("chainReaction":{"type":"boolean"},"enabled":{"type":"boolean"}}})";
+    R"("chainReaction":{"type":"boolean"},"enabled":{"type":"boolean"},)"
+    R"("hotkeyTimed":{"type":"integer"},"hotkeyInfinite":{"type":"integer"},)"
+    R"("hotkeyRestore":{"type":"integer"}}})";
 constexpr const char* kVolleyballSchema =
     R"({"type":"object","additionalProperties":false,"properties":)"
     R"({"hotkey":{"type":"string"},"anomaly-ultimate-tabs":{"type":"string"}}})";
@@ -104,6 +106,7 @@ const void* LazyService(const void** slot, const char* id, uint32_t min_version)
 void TryQueryIsGM();
 static void PushLog(const char* text);
 static int g_chronos_req = 0;            // 2=无限暂停(3600s) 3=恢复；由游戏线程消费
+static uint32_t g_hot_vk[3] = {0x70u, 0x71u, 0x72u};   // 时停热键（F1/F2/F3，可改键并持久化）
 static std::uint64_t NowMs();
 void RegisterDamageConfigSchema();
 void LoadDamageConfig();
@@ -423,9 +426,17 @@ void LoadDamageConfig() {
     if (replay >= 1 && replay <= 1024) g_ui_state.replay = static_cast<float>(replay);
     g_ui_state.chain = JsonBoolField(buffer, "\"chainReaction\"", g_ui_state.chain != 0) ? 1 : 0;
     g_ui_state.damage = JsonBoolField(buffer, "\"enabled\"", g_ui_state.damage != 0) ? 1 : 0;
+    // 热键：改一次永久保存，启动时从配置恢复。
+    const char* hk_keys[3] = {"\"hotkeyTimed\"", "\"hotkeyInfinite\"", "\"hotkeyRestore\""};
+    for (int i = 0; i < 3; ++i) {
+        const int vk = JsonIntField(buffer, hk_keys[i], static_cast<int>(g_hot_vk[i]));
+        if (vk >= 0x01 && vk <= 0xFE) g_hot_vk[i] = static_cast<uint32_t>(vk);
+    }
     char b[96];
-    std::snprintf(b, sizeof(b), "cfg: loaded enabled=%d chain=%d replay=%d",
-                  g_ui_state.damage, g_ui_state.chain, static_cast<int>(g_ui_state.replay));
+    std::snprintf(b, sizeof(b), "cfg: loaded enabled=%d chain=%d replay=%d hk=%u/%u/%u",
+                  g_ui_state.damage, g_ui_state.chain, static_cast<int>(g_ui_state.replay),
+                  static_cast<unsigned>(g_hot_vk[0]), static_cast<unsigned>(g_hot_vk[1]),
+                  static_cast<unsigned>(g_hot_vk[2]));
     PushLog(b);
 }
 
@@ -437,12 +448,16 @@ void SaveDamageConfig() {
         cfg->write_atomic == nullptr) {
         return;
     }
-    char doc[192];
+    char doc[256];
     const int n = std::snprintf(
-        doc, sizeof(doc), "{\"replayCount\":%d,\"chainReaction\":%s,\"enabled\":%s}",
+        doc, sizeof(doc),
+        "{\"replayCount\":%d,\"chainReaction\":%s,\"enabled\":%s,"
+        "\"hotkeyTimed\":%u,\"hotkeyInfinite\":%u,\"hotkeyRestore\":%u}",
         static_cast<int>(g_ui_state.replay),
         g_ui_state.chain ? "true" : "false",
-        g_ui_state.damage ? "true" : "false");
+        g_ui_state.damage ? "true" : "false",
+        static_cast<unsigned>(g_hot_vk[0]), static_cast<unsigned>(g_hot_vk[1]),
+        static_cast<unsigned>(g_hot_vk[2]));
     if (n <= 0) return;
     AnomalyStringViewV1 id{kDamageSchemaId, std::strlen(kDamageSchemaId)};
     AnomalyByteSpanV1 span{reinterpret_cast<const std::uint8_t*>(doc),
@@ -779,7 +794,6 @@ bool WriteSpan(const AnomalyCoreServiceV1* core, std::uintptr_t address, const v
     return core->write_memory(core->user, address, span).code == ANOMALY_STATUS_V1_OK;
 }
 
-static uint32_t g_hot_vk[3] = {0x70u, 0x71u, 0x72u};
 static int g_hot_once = 0;
 static int g_hot_hold = 0;
 static int g_hot_restore = 0;
@@ -1308,6 +1322,7 @@ static void TickHotkeyCapture() {
         input->register_hotkey(input->user, &spec, OnHotkey,
                                reinterpret_cast<void*>(static_cast<std::uintptr_t>(i + 1)), &handle);
         g_hot_handle[i] = handle;
+        g_cfg_save_due_ms = NowMs() + 400;   // 改键后落盘，重启后恢复
         char nm[24] = {0};
         VkName(vk, nm, sizeof(nm));
         char b[64];
