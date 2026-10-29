@@ -5606,18 +5606,8 @@ void ReplayTick() {
         return;
     }
     const std::uint64_t now = NowMs();
-    // 间隔过短服务器不认：小于 30Hz 服务器 tick（约 33ms）的间隔没有意义，
-    // 本帧余数直接丢弃，不跨帧累积补发；每帧最多施加一次。
-    int rate = static_cast<int>(g_ui_state.replay);
-    if (rate < 1) rate = 1;
-    if (rate > 512) rate = 512;
-    std::uint64_t interval = static_cast<std::uint64_t>(1000 / rate > 0 ? 1000 / rate : 1);
-    constexpr std::uint64_t kServerTickMs = 33;   // 30Hz 服务器 tick
-    if (interval < kServerTickMs) interval = kServerTickMs;
-    if (g_apply_clock_ms == 0) { g_apply_clock_ms = now; return; }
-    if (now - g_apply_clock_ms < interval) return;
-    g_apply_clock_ms = now;          // 丢弃余数
-    const int applies = 1;           // 单帧单发
+    // 先采样：HP 与发放解耦。掉血（哪怕来自玩家自己的攻击）就解除 pause，
+    // 否则暂停后不再施加 → 永不掉血 → 永久 pause。
     for (int i = 0; i < g_rt_n; ) {
         ReplayTarget& t = g_rt[i];
         float hp = 0.0f;
@@ -5630,31 +5620,41 @@ void ReplayTick() {
             continue;
         }
         if (now - t.last_hit_ms > 15000) { ReplayDropTarget(i); continue; }
-        if (t.applied > 0) {
-            const float delta = t.hp - hp;
-            if (delta > 0.5f) {
-                ++t.landed;
-                g_rep_dmg += static_cast<int>(delta);
-                t.dmg_sum += delta;          // 估算“每次 apply 打出多少”
-                t.applied_sum += t.applied;
-                t.blocked = 0;
-                if (t.paused != 0) { t.paused = 0; PushLog("replay: resumed (damage landed)"); }
-            } else {
-                ++t.blocked;
-                if (t.blocked >= 4 && t.paused == 0) {
-                    t.paused = 1;
-                    char b[160];
-                    std::snprintf(b, sizeof(b),
-                                  "replay: pause %s (invincible/untargetable, retry every 500ms)",
-                                  t.name);
-                    PushLog(b);
-                }
+        const float delta = t.hp - hp;
+        if (delta > 0.5f) {
+            ++t.landed;
+            g_rep_dmg += static_cast<int>(delta);
+            t.dmg_sum += delta;          // 估算“每次 apply 打出多少”
+            t.applied_sum += t.applied;
+            t.blocked = 0;
+            if (t.paused != 0) { t.paused = 0; PushLog("replay: resumed (damage landed)"); }
+        } else if (t.applied > 0) {
+            ++t.blocked;
+            if (t.blocked >= 4 && t.paused == 0) {
+                t.paused = 1;
+                char b[160];
+                std::snprintf(b, sizeof(b),
+                              "replay: pause %s (invincible/untargetable, retry every 500ms)",
+                              t.name);
+                PushLog(b);
             }
-            t.applied = 0;
         }
+        t.applied = 0;
         t.hp = hp;
         ++i;
     }
+    // 间隔过短服务器不认：小于 30Hz 服务器 tick（约 33ms）的间隔没有意义，
+    // 本帧余数直接丢弃，不跨帧累积补发；每帧最多施加一次。
+    int rate = static_cast<int>(g_ui_state.replay);
+    if (rate < 1) rate = 1;
+    if (rate > 512) rate = 512;
+    std::uint64_t interval = static_cast<std::uint64_t>(1000 / rate > 0 ? 1000 / rate : 1);
+    constexpr std::uint64_t kServerTickMs = 33;   // 30Hz 服务器 tick
+    if (interval < kServerTickMs) interval = kServerTickMs;
+    if (g_apply_clock_ms == 0) { g_apply_clock_ms = now; return; }
+    if (now - g_apply_clock_ms < interval) return;
+    g_apply_clock_ms = now;          // 丢弃余数
+    const int applies = 1;           // 单帧单发
     if (g_gec_ufn == 0 || g_gea_ufn == 0) ResolveGeHelpersUiThread();
     if (g_rt_n == 0) return;
     if (g_gec_ufn == 0 || g_gea_ufn == 0) return;
@@ -5729,10 +5729,10 @@ void ReplayApplyStep() {
         }
         for (int i = 0; i < g_rt_n; ++i) {
             ReplayTarget& t = g_rt[i];
+            if (t.paused != 0) continue;   // 暂停目标不计数也不施加，等采样判定恢复
             ++g_rep_shots;   // 计划施加一次（发送计数，与 HP 采样无关）
-            if (t.asc < 0x10000 || t.ge_class < 0x10000 || t.paused != 0 ||
-                !AscStillValid(t.asc)) {
-                ++g_rep_fail;   // 目标无效/暂停：这次算失败
+            if (t.asc < 0x10000 || t.ge_class < 0x10000 || !AscStillValid(t.asc)) {
+                ++g_rep_fail;   // 目标无效：这次算失败
                 continue;
             }
             unsigned char params[0x38] = {0};
