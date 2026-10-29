@@ -784,9 +784,12 @@ static int g_hot_once = 0;
 static int g_hot_hold = 0;
 static int g_hot_restore = 0;
 static int g_hot_registered = 0;
+static AnomalyGenerationHandleV1 g_hot_handle[3] = {};
+static int g_hot_capture = -1;   // >=0 = 正在等待按键，值为要改的热键下标
 static void* g_pause_fn = nullptr;   // HTPlayerController::PausedGameExcludePlayerByTimer
 static void* g_pause_type_fn = nullptr;  // HTPlayerController::PauseGame(EPausedGameType)
 static void* g_resume_fn = nullptr;      // HTPlayerController::ResumeGame(EPausedGameType)
+static void* g_ps_pause_fn = nullptr;    // HTPlayerState::PauseGame(EPausedGameType, float)
 
 // ---- 游戏线程调用通道（anomaly.ue5.functions） ----
 // 原生时停与排球胜利都只能在该通道里执行：UI/输入回调在渲染线程，直接调 ProcessEvent 会崩。
@@ -1006,14 +1009,34 @@ static void ApplyTargetCapture(std::uintptr_t function, std::uintptr_t object, v
 
 void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t function, void* parameters) {
     ++g_pe_total;
-    // 时停请求：只在游戏线程投递 PausedGameExcludePlayerByTimer。
+    // 时停请求：只在游戏线程投递暂停函数。
     if (g_chronos_req != 0) {
         const int req = g_chronos_req;
         g_chronos_req = 0;
-        // 与角色大招的时停同一实现：PauseGame(PG_UltraSkill_PlayPassiveEffect) / ResumeGame。
-        // 该暂停类型由游戏自己保证“冻结敌人、玩家照常行动”，不需要再改角色字段。
+        // 游戏自己的时停有两层：
+        //   AHTPlayerState::PauseGame(type, fProtectTime) —— 生效并“保护玩家” fProtectTime 秒；
+        //   HTPlayerController::ResumeGame(type)          —— 解除。
         constexpr unsigned char kPauseType = 3;   // EPausedGameType::PG_UltraSkill_PlayPassiveEffect
-        if (g_pc_inst && g_pause_type_fn && g_resume_fn) {
+        std::uintptr_t ps = 0;
+        if (g_pc_inst) {
+            ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(g_pc_inst) + 0x2D0, &ps);
+        }
+        if (g_ps_pause_fn == nullptr && ps >= 0x10000) {
+            std::uintptr_t ps_cls = 0;
+            if (ue::Reader::SafePtr(ps + 0x10, &ps_cls) && ps_cls >= 0x10000) {
+                g_ps_pause_fn = FindFuncByName(reinterpret_cast<void*>(ps_cls), "PauseGame");
+            }
+        }
+        bool ok = false;
+        if (req != 3 && ps >= 0x10000 && g_ps_pause_fn != nullptr) {
+            struct {
+                unsigned char type;
+                unsigned char pad[3];
+                float protect;
+            } p{kPauseType, {0, 0, 0}, 3600.0f};
+            ok = InvokeGameFunction(ps, reinterpret_cast<std::uintptr_t>(g_ps_pause_fn), &p,
+                                    sizeof(p));
+        } else if (g_pc_inst && g_resume_fn != nullptr) {
             struct {
                 unsigned char type;
                 unsigned char ret;
@@ -1021,28 +1044,16 @@ void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t fun
             const std::uintptr_t fn = (req == 3)
                 ? reinterpret_cast<std::uintptr_t>(g_resume_fn)
                 : reinterpret_cast<std::uintptr_t>(g_pause_type_fn);
-            const bool ok = InvokeGameFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn,
-                                               &p, sizeof(p));
-            g_chronos_rc = ok ? req : -req;
-            char b[128];
-            std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d type=%u ret=%u", req, ok ? 1 : 0,
-                          static_cast<unsigned>(p.type), static_cast<unsigned>(p.ret));
-            PushLog(b);
-        } else if (g_pc_inst && g_pause_fn) {
-            // 兜底：没有 PauseGame/ResumeGame 时才用带计时的暂停。
-            struct { float seconds; } p{0.0f};
-            p.seconds = (req == 3) ? 0.0f : 5.0f;
-            const bool ok = InvokeGameFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst),
-                                               reinterpret_cast<std::uintptr_t>(g_pause_fn),
-                                               &p, sizeof(p));
-            g_chronos_rc = ok ? req : -req;
-            char b[128];
-            std::snprintf(b, sizeof(b), "chronos: fallback req=%d ok=%d seconds=%.1f", req,
-                          ok ? 1 : 0, p.seconds);
-            PushLog(b);
-        } else {
-            g_chronos_rc = -100;
+            if (fn >= 0x10000) {
+                ok = InvokeGameFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p,
+                                        sizeof(p));
+            }
         }
+        g_chronos_rc = ok ? req : -req;
+        char b[128];
+        std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d type=%u ps=0x%llX", req, ok ? 1 : 0,
+                      static_cast<unsigned>(kPauseType), (unsigned long long)ps);
+        PushLog(b);
     }
     // 排球胜利：勾选后每 500ms 在游戏线程尝试一次。
     if (g_ui_state.volley != 0 && g_pc_inst) {
@@ -1217,8 +1228,88 @@ void EnsureHotkeys() {
         AnomalyGenerationHandleV1 handle{};
         input->register_hotkey(input->user, &spec, OnHotkey,
                                reinterpret_cast<void*>(static_cast<std::uintptr_t>(i + 1)), &handle);
+        g_hot_handle[i] = handle;
     }
     g_hot_registered = 1;
+}
+
+// 把虚拟键显示成名字（改键后界面上要显示真实键名）。
+static void VkName(uint32_t vk, char* out, std::size_t cap) {
+    if (out == nullptr || cap == 0) return;
+    if (vk >= 0x70 && vk <= 0x7B) {
+        std::snprintf(out, cap, "F%u", static_cast<unsigned>(vk - 0x6F));
+        return;
+    }
+    if (vk >= 0x41 && vk <= 0x5A) {
+        std::snprintf(out, cap, "%c", static_cast<char>(vk));
+        return;
+    }
+    if (vk >= 0x30 && vk <= 0x39) {
+        std::snprintf(out, cap, "%c", static_cast<char>(vk));
+        return;
+    }
+    switch (vk) {
+        case 0x20: std::snprintf(out, cap, "Space"); break;
+        case 0x09: std::snprintf(out, cap, "Tab"); break;
+        case 0x0D: std::snprintf(out, cap, "Enter"); break;
+        case 0x1B: std::snprintf(out, cap, "Esc"); break;
+        case 0x25: std::snprintf(out, cap, "Left"); break;
+        case 0x26: std::snprintf(out, cap, "Up"); break;
+        case 0x27: std::snprintf(out, cap, "Right"); break;
+        case 0x28: std::snprintf(out, cap, "Down"); break;
+        case 0x21: std::snprintf(out, cap, "PgUp"); break;
+        case 0x22: std::snprintf(out, cap, "PgDn"); break;
+        case 0x23: std::snprintf(out, cap, "End"); break;
+        case 0x24: std::snprintf(out, cap, "Home"); break;
+        case 0x2D: std::snprintf(out, cap, "Insert"); break;
+        case 0x2E: std::snprintf(out, cap, "Delete"); break;
+        default: std::snprintf(out, cap, "0x%02X", static_cast<unsigned>(vk)); break;
+    }
+}
+
+// 改键：点“改键”后进入等待，下一次按下的候选键就作为该热键，并重新注册。
+static void TickHotkeyCapture() {
+    if (g_hot_capture < 0 || !g_ctx) return;
+    const void* input_service = LazyService(&g_ctx->input, "anomaly.input", 1);
+    if (!input_service) return;
+    const auto* input = static_cast<const AnomalyInputServiceV1*>(input_service);
+    if (!input->was_pressed || !input->register_hotkey) return;
+    static const uint32_t kCandidates[] = {
+        0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B,  // F1-F12
+        0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C,  // A-L
+        0x4D, 0x4E, 0x4F, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,  // M-X
+        0x59, 0x5A,                                                                // Y-Z
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,              // 0-9
+        0x20, 0x09, 0x25, 0x26, 0x27, 0x28, 0x21, 0x22, 0x23, 0x24, 0x2D, 0x2E,  // 常用键
+    };
+    for (uint32_t vk : kCandidates) {
+        int32_t pressed = 0;
+        if (input->was_pressed(input->user, vk, &pressed).code != ANOMALY_STATUS_V1_OK) continue;
+        if (pressed == 0) continue;
+        const int i = g_hot_capture;
+        g_hot_capture = -1;
+        if (g_hot_handle[i].id != 0 && input->release_hotkey) {
+            input->release_hotkey(input->user, g_hot_handle[i]);
+            g_hot_handle[i] = {};
+        }
+        g_hot_vk[i] = vk;
+        AnomalyHotkeySpecV1 spec{};
+        spec.struct_size = sizeof(spec);
+        spec.modifiers = 0;
+        spec.virtual_key = vk;
+        spec.flags = ANOMALY_HOTKEY_V1_ALLOW_WHILE_UI_CAPTURED;
+        spec.id = AnomalyStringViewV1{kHotkeyLabels[i], std::strlen(kHotkeyLabels[i])};
+        AnomalyGenerationHandleV1 handle{};
+        input->register_hotkey(input->user, &spec, OnHotkey,
+                               reinterpret_cast<void*>(static_cast<std::uintptr_t>(i + 1)), &handle);
+        g_hot_handle[i] = handle;
+        char nm[24] = {0};
+        VkName(vk, nm, sizeof(nm));
+        char b[64];
+        std::snprintf(b, sizeof(b), "hotkey[%d] rebound to %s (0x%02X)", i, nm, vk);
+        PushLog(b);
+        return;
+    }
 }
 
 
@@ -2669,12 +2760,14 @@ void DrawTabs(const AnomalyUiServiceV1* ui) {
                     AnomalyStringViewV1 c1{"\xE5\x90\xAF\xE7\x94\xA8", 6};
                     ui->checkbox(ui->user, c1, &g_ui_state.chronos);
                 }
-                static const char* kVkNames[3] = {"F1", "F2", "F3"};
                 for (int i = 0; i < 3; ++i) {
                     if (ui->text) {
+                        char key[24] = {0};
+                        VkName(g_hot_vk[i], key, sizeof(key));
                         char row[128];
-                        int len = snprintf(row, sizeof(row), "%s  \xE5\xBF\xAB\xE6\x8D\xB7\xEF\xBC\x9A%s", kHotkeyLabels[i],
-                                          g_hot_vk[i] == 0x70u ? kVkNames[0] : (g_hot_vk[i] == 0x71u ? kVkNames[1] : kVkNames[2]));
+                        int len = snprintf(row, sizeof(row), "%s  \xE5\xBF\xAB\xE6\x8D\xB7\xEF\xBC\x9A%s%s",
+                                          kHotkeyLabels[i], key,
+                                          g_hot_capture == i ? "  (\xE6\x8C\x89\xE9\x94\xAE\xE4\xB8\xAD)" : "");
                         if (len > 0) { AnomalyStringViewV1 v{row, static_cast<std::size_t>(len)}; ui->text(ui->user, v); }
                     }
                     if (ui->same_line) ui->same_line(ui->user, 0.0f, -1.0f);
@@ -2683,7 +2776,7 @@ void DrawTabs(const AnomalyUiServiceV1* ui) {
                         int rn = snprintf(rb, sizeof(rb), "\xE6\x94\xB9\xE9\x94\xAE##hk%d", i);
                         AnomalyStringViewV1 rebind{rb, static_cast<std::size_t>(rn > 0 ? rn : 0)};
                         if (ui->button(ui->user, rebind, 48.0f, 0.0f)) {
-                            g_hot_vk[i] = (g_hot_vk[i] == 0x70u) ? 0x71u : (g_hot_vk[i] == 0x71u ? 0x72u : 0x70u);
+                            g_hot_capture = i;   // 等待下一次按键
                         }
                     }
                 }
@@ -5764,10 +5857,10 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     else RemoveGmPatch();
     BuildGmCommandList();
     EnsureHotkeys();
+    TickHotkeyCapture();
     ProbeHook();
     ProbeExtraServices();
     if (g_probe_on) ProbeScanStep();
-    TickChronosDump();
     TickFeatures();
     if (g_cap_on != 0 && !g_pe_subscribed && (g_draw_count % 30) == 0) EnsureSubscription();
     if (g_cap_on == 0 && g_pe_subscribed != 0) ReleaseCaptureSubscription();
