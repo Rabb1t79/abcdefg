@@ -809,9 +809,15 @@ static bool InvokeGameFunction(std::uintptr_t object, std::uintptr_t function,
 }
 
 // 直接 ProcessEvent（游戏线程）：functions 服务在部分宿主版本不可用时用它兜底。
+// g_pe_addr 未解析到时与伤害回放一样退回 HTGame.exe + 0x3E41360。
 static bool CallUFunction(std::uintptr_t object, std::uintptr_t function, void* parameters) {
     if (object < 0x10000 || function < 0x10000) return false;
-    const std::uintptr_t pe = static_cast<std::uintptr_t>(g_pe_addr);
+    std::uintptr_t pe = static_cast<std::uintptr_t>(g_pe_addr);
+    if (pe < 0x10000) {
+        const std::uintptr_t base =
+            reinterpret_cast<std::uintptr_t>(GetModuleHandleA("HTGame.exe"));
+        if (base != 0) pe = base + 0x3E41360;
+    }
     if (pe < 0x10000) return false;
     reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(object),
                                 reinterpret_cast<void*>(function), parameters);
