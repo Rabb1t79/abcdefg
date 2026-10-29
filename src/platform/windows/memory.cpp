@@ -23,6 +23,7 @@ namespace {
 // 命中即放行，未命中仍走原来的 VirtualQuery 校验并记录结果。条目带 TTL，过期后重建，
 // 因此最坏情况只是某次读取越过校验、由 ReadProcessMemory 自己失败返回，
 // 与该地址校验失败的结果一致，安全性不变。
+
 struct CachedRange {
     std::uintptr_t base{};
     std::uintptr_t end{};
