@@ -808,6 +808,16 @@ static bool InvokeGameFunction(std::uintptr_t object, std::uintptr_t function,
            ANOMALY_STATUS_V1_OK;
 }
 
+// 直接 ProcessEvent（游戏线程）：functions 服务在部分宿主版本不可用时用它兜底。
+static bool CallUFunction(std::uintptr_t object, std::uintptr_t function, void* parameters) {
+    if (object < 0x10000 || function < 0x10000) return false;
+    const std::uintptr_t pe = static_cast<std::uintptr_t>(g_pe_addr);
+    if (pe < 0x10000) return false;
+    reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(object),
+                                reinterpret_cast<void*>(function), parameters);
+    return true;
+}
+
 // 排球：PlayerState -> GetOrCacheVolleyballGameManager -> Test_ForceWin(角色)
 static void VolleyWinStep() {
     if (!g_pc_inst) { g_volley_rc = -1; return; }
@@ -1014,10 +1024,10 @@ void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t fun
         const int req = g_chronos_req;
         g_chronos_req = 0;
         // 与角色大招同一套暂停类型：PG_UltraSkill_PlayPassiveEffect(3)。
-        // 走 PlayerController 的 PauseGame/ResumeGame；玩家是否被冻结由游戏按类型处理，
-        // 不再由插件改时间膨胀或角色字段。
+        // 优先直接 ProcessEvent（游戏线程），失败再走宿主的 functions 服务。
         constexpr unsigned char kPauseType = 3;
         bool ok = false;
+        unsigned char ret = 0;
         if (g_pc_inst) {
             const std::uintptr_t fn = (req == 3)
                 ? reinterpret_cast<std::uintptr_t>(g_resume_fn)
@@ -1027,14 +1037,20 @@ void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t fun
                     unsigned char type;
                     unsigned char ret;
                 } p{kPauseType, 0};
-                ok = InvokeGameFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p,
-                                        sizeof(p));
+                ok = CallUFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p);
+                ret = p.ret;
+                if (!ok) {
+                    ok = InvokeGameFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p,
+                                            sizeof(p));
+                    ret = p.ret;
+                }
             }
         }
         g_chronos_rc = ok ? req : -req;
-        char b[128];
-        std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d type=%u pause=0x%llX resume=0x%llX", req,
-                      ok ? 1 : 0, static_cast<unsigned>(kPauseType),
+        char b[160];
+        std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d ret=%u type=%u pause=0x%llX resume=0x%llX",
+                      req, ok ? 1 : 0, static_cast<unsigned>(ret),
+                      static_cast<unsigned>(kPauseType),
                       (unsigned long long)g_pause_type_fn, (unsigned long long)g_resume_fn);
         PushLog(b);
     }
