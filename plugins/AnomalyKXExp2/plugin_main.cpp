@@ -5606,19 +5606,16 @@ void ReplayTick() {
         return;
     }
     const std::uint64_t now = NowMs();
-    // 严格按 UI 里填的“每秒重复次数”发放：毫秒累积，整数部分本帧施加，余数留到下帧。
-    // 不再用 8ms 最小间隔，也不按帧截断（只防一次长卡顿后的爆炸性补发）。
+    // 间隔过短服务器不认：按 1000/rate 的间隔发，本帧余数直接丢弃，不跨帧累积补发。
+    // 每帧最多施加一次，保证相邻两次施加至少隔一个间隔，不会同帧连发。
     int rate = static_cast<int>(g_ui_state.replay);
     if (rate < 1) rate = 1;
     if (rate > 512) rate = 512;
+    const std::uint64_t interval = static_cast<std::uint64_t>(1000 / rate > 0 ? 1000 / rate : 1);
     if (g_apply_clock_ms == 0) { g_apply_clock_ms = now; return; }
-    const std::uint64_t elapsed = now - g_apply_clock_ms;
-    g_apply_clock_ms = now;
-    g_apply_budget += static_cast<double>(elapsed) * static_cast<double>(rate) / 1000.0;
-    int applies = static_cast<int>(g_apply_budget);
-    if (applies <= 0) return;
-    g_apply_budget -= static_cast<double>(applies);
-    if (applies > 32) applies = 32;   // 只防一次长卡顿后的爆炸补发；每发对每个目标各施加一次
+    if (now - g_apply_clock_ms < interval) return;
+    g_apply_clock_ms = now;          // 丢弃余数
+    const int applies = 1;           // 单帧单发
     for (int i = 0; i < g_rt_n; ) {
         ReplayTarget& t = g_rt[i];
         float hp = 0.0f;
