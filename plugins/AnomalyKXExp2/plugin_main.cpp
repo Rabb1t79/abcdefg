@@ -1013,46 +1013,29 @@ void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t fun
     if (g_chronos_req != 0) {
         const int req = g_chronos_req;
         g_chronos_req = 0;
-        // 游戏自己的时停有两层：
-        //   AHTPlayerState::PauseGame(type, fProtectTime) —— 生效并“保护玩家” fProtectTime 秒；
-        //   HTPlayerController::ResumeGame(type)          —— 解除。
-        constexpr unsigned char kPauseType = 3;   // EPausedGameType::PG_UltraSkill_PlayPassiveEffect
-        std::uintptr_t ps = 0;
-        if (g_pc_inst) {
-            ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(g_pc_inst) + 0x2D0, &ps);
-        }
-        if (g_ps_pause_fn == nullptr && ps >= 0x10000) {
-            std::uintptr_t ps_cls = 0;
-            if (ue::Reader::SafePtr(ps + 0x10, &ps_cls) && ps_cls >= 0x10000) {
-                g_ps_pause_fn = FindFuncByName(reinterpret_cast<void*>(ps_cls), "PauseGame");
-            }
-        }
+        // 与角色大招同一套暂停类型：PG_UltraSkill_PlayPassiveEffect(3)。
+        // 走 PlayerController 的 PauseGame/ResumeGame；玩家是否被冻结由游戏按类型处理，
+        // 不再由插件改时间膨胀或角色字段。
+        constexpr unsigned char kPauseType = 3;
         bool ok = false;
-        if (req != 3 && ps >= 0x10000 && g_ps_pause_fn != nullptr) {
-            struct {
-                unsigned char type;
-                unsigned char pad[3];
-                float protect;
-            } p{kPauseType, {0, 0, 0}, 3600.0f};
-            ok = InvokeGameFunction(ps, reinterpret_cast<std::uintptr_t>(g_ps_pause_fn), &p,
-                                    sizeof(p));
-        } else if (g_pc_inst && g_resume_fn != nullptr) {
-            struct {
-                unsigned char type;
-                unsigned char ret;
-            } p{kPauseType, 0};
+        if (g_pc_inst) {
             const std::uintptr_t fn = (req == 3)
                 ? reinterpret_cast<std::uintptr_t>(g_resume_fn)
                 : reinterpret_cast<std::uintptr_t>(g_pause_type_fn);
             if (fn >= 0x10000) {
+                struct {
+                    unsigned char type;
+                    unsigned char ret;
+                } p{kPauseType, 0};
                 ok = InvokeGameFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p,
                                         sizeof(p));
             }
         }
         g_chronos_rc = ok ? req : -req;
         char b[128];
-        std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d type=%u ps=0x%llX", req, ok ? 1 : 0,
-                      static_cast<unsigned>(kPauseType), (unsigned long long)ps);
+        std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d type=%u pause=0x%llX resume=0x%llX", req,
+                      ok ? 1 : 0, static_cast<unsigned>(kPauseType),
+                      (unsigned long long)g_pause_type_fn, (unsigned long long)g_resume_fn);
         PushLog(b);
     }
     // 排球胜利：勾选后每 500ms 在游戏线程尝试一次。
