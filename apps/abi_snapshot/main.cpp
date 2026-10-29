@@ -1939,7 +1939,8 @@ std::string BuildSnapshot() {
          {"customization_option_at",
           offsetof(AnomalyNteVehicleServiceV1, customization_option_at)},
          {"repair_current_vehicle",
-          offsetof(AnomalyNteVehicleServiceV1, repair_current_vehicle)}},
+          offsetof(AnomalyNteVehicleServiceV1, repair_current_vehicle)},
+         {"set_speed_target", offsetof(AnomalyNteVehicleServiceV1, set_speed_target)}},
         false);
     AppendStruct(
         output,

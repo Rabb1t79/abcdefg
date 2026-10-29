@@ -426,6 +426,10 @@ typedef struct AnomalyNteVehicleServiceV1 {
         void* user, AnomalyStringViewV1 vehicle_row_id, uint32_t index,
         AnomalyNteVehicleCustomizationOptionV1* option);
     AnomalyStatusV1 (ANOMALY_CALL *repair_current_vehicle)(void* user);
+    // Tail slot kept after the v8 block so the v8 offsets stay stable for plugins built
+    // against the 0xB0 table. Applies an absolute speed target selected by the plugin.
+    AnomalyStatusV1 (ANOMALY_CALL *set_speed_target)(
+        void* user, const AnomalyNteVehicleSpeedTargetV1* request);
 } AnomalyNteVehicleServiceV1;
 
 

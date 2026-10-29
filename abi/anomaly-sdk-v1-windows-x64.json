@@ -2166,7 +2166,8 @@
         "revoke_fine_speed_authorization": 144,
         "customization_catalog_snapshot": 152,
         "customization_option_at": 160,
-        "repair_current_vehicle": 168
+        "repair_current_vehicle": 168,
+        "set_speed_target": 176
       }
     }
   },

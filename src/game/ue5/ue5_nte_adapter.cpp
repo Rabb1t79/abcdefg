@@ -15662,7 +15662,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleAuthorizeFineSpeedThunk, VehicleSetFineSpeedTuningEnabledThunk,
             VehicleRevokeFineSpeedAuthorizationThunk,
             VehicleCustomizationSnapshotThunk, VehicleCustomizationOptionThunk,
-            VehicleUnsupportedRepairThunk};
+            VehicleUnsupportedRepairThunk, VehicleSetSpeedTargetThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -16024,6 +16024,14 @@ private:
     static AnomalyStatusV1 ANOMALY_CALL VehicleRevokeFineSpeedAuthorizationThunk(void* user) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleRevokeFineSpeedAuthorization() : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetSpeedTargetThunk(
+        void* user,
+        const AnomalyNteVehicleSpeedTargetV1* request) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleSetSpeedTarget(request)
+                     : StoppedStatus();
     }
 
     // V7-V8 compatibility slots. The customization catalog is not implemented on this
