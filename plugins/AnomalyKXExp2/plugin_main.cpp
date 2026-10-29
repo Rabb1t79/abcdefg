@@ -1153,28 +1153,25 @@ static const char* kHotkeyLabels[3] = {
 void ANOMALY_CALL OnHotkey(void* user, AnomalyGenerationHandleV1, const AnomalyInputSnapshotV1*) {
     const int index = static_cast<int>(reinterpret_cast<std::uintptr_t>(user));
     if (index == 3) {
+        // F3 = 恢复速度（解除暂停）
         g_hot_restore = 1;
-        if (g_pc_inst && g_pause_fn) {
-            PE_FN process = nullptr;   // direct ProcessEvent crashes the game; disabled
-            if (process) {
-                struct { float seconds; } params{0.0f};
-                process(g_pc_inst, g_pause_fn, &params);
-            }
-        }
+        g_ui_state.chronos = 0;
+        g_chronos_req = 3;
         return;
     }
     if (index == 1) {
+        // F1 = 时停一次
         g_hot_once = 1;
-        if (g_pc_inst && g_pause_fn) {
-            PE_FN process = nullptr;   // direct ProcessEvent crashes the game; disabled
-            if (process) {
-                struct { float seconds; } params{3600.0f};
-                process(g_pc_inst, g_pause_fn, &params);
-            }
-        }
+        g_ui_state.chronos = 1;
+        g_chronos_req = 2;
         return;
     }
-    else if (index == 2) g_hot_hold = !g_hot_hold;
+    else if (index == 2) {
+        // F2 = 一直时停（开关）
+        g_hot_hold = !g_hot_hold;
+        g_ui_state.chronos = g_hot_hold ? 1 : 0;
+        g_chronos_req = g_hot_hold ? 2 : 3;
+    }
     else g_hot_restore = 1;
 }
 
