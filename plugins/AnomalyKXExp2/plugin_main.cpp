@@ -1008,6 +1008,23 @@ void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t fun
     if (g_chronos_req != 0) {
         const int req = g_chronos_req;
         g_chronos_req = 0;
+        // 玩家要不受暂停影响：暂停期间把 AHTCharacter::IgnoreGlobalTimeDilation(+0x870) 置 1，
+        // 恢复时还原原值（与老实现一致）。
+        const void* core_service = LazyService(&g_ctx->core, "anomaly.core", 1);
+        const auto* core = core_service ? static_cast<const AnomalyCoreServiceV1*>(core_service)
+                                        : nullptr;
+        std::uintptr_t pawn = 0;
+        if (g_pc_inst) ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(g_pc_inst) + 0x308, &pawn);
+        if (core && core->read_memory && core->write_memory && pawn >= 0x10000) {
+            if (req != 3) {
+                ReadSpan(core, pawn + 0x870, &g_chronos_saved_ignore, 1);
+                const unsigned char on = 1;
+                WriteSpan(core, pawn + 0x870, &on, 1);
+                const float one = 1.0f;
+                WriteSpan(core, pawn + 0x808, &one, sizeof(float));
+                g_pawn_rc = 1;
+            }
+        }
         if (g_pc_inst && g_pause_fn) {
             struct { float seconds; } p{0.0f};
             p.seconds = (req == 3) ? 0.0f : 3600.0f;
@@ -1015,12 +1032,16 @@ void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t fun
                                                reinterpret_cast<std::uintptr_t>(g_pause_fn),
                                                &p, sizeof(p));
             g_chronos_rc = ok ? req : -req;
-            char b[96];
-            std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d seconds=%.1f", req, ok ? 1 : 0,
-                          p.seconds);
+            char b[128];
+            std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d seconds=%.1f pawn=%d", req, ok ? 1 : 0,
+                          p.seconds, g_pawn_rc);
             PushLog(b);
         } else {
             g_chronos_rc = -100;
+        }
+        // 恢复后再还原玩家的忽略标志，避免暂停解除后仍保留副作用。
+        if (req == 3 && core && core->write_memory && pawn >= 0x10000) {
+            WriteSpan(core, pawn + 0x870, &g_chronos_saved_ignore, 1);
         }
     }
     // 排球胜利：勾选后每 500ms 在游戏线程尝试一次。
