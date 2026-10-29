@@ -1057,11 +1057,13 @@ void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t fun
                     unsigned char type;
                     unsigned char ret;
                 } p{kPauseType, 0};
-                ok = CallUFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p);
+                // Prefer the host invocation service: the direct ProcessEvent fallback
+                // is only safe when the service is absent, and crashed on 2.4.1.
+                ok = InvokeGameFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p,
+                                        sizeof(p));
                 ret = p.ret;
                 if (!ok) {
-                    ok = InvokeGameFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p,
-                                            sizeof(p));
+                    ok = CallUFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p);
                     ret = p.ret;
                 }
             }

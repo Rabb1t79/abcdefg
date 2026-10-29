@@ -348,7 +348,7 @@ $reportPath = Join-Path $resolvedOutputDirectory "signature-scan-$stamp.json"
 $candidatePath = $null
 $validation = $null
 
-$rewritten = @($results | Where-Object { $_.HookedEntry -and $_.Status -eq 'unique' })
+$rewritten = @($results | Where-Object { $_.PSObject.Properties['HookedEntry'] -and $_.HookedEntry -and $_.Status -eq 'unique' })
 $wroteHooked = $false
 if ($WriteHookedPatterns -and $rewritten.Count -gt 0) {
     $byId = @{}
@@ -390,7 +390,7 @@ $report = [pscustomobject][ordered]@{
         SymbolCount = $results.Count
         Unique = $uniqueCount
         HookAwareUnique = @($results | Where-Object {
-            $_.HookedEntry -eq $true
+            $_.PSObject.Properties['HookedEntry'] -and $_.HookedEntry -eq $true
         }).Count
         PatternsRewritten = if ($wroteHooked) { $rewritten.Count } else { 0 }
         NotFound = @($results | Where-Object Status -eq 'not-found').Count
@@ -408,7 +408,7 @@ $report | ConvertTo-Json -Depth 100 |
     Set-Content -LiteralPath $reportPath -Encoding utf8
 
 foreach ($row in $results) {
-    $suffix = if ($row.HookedEntry -and $row.Status -eq 'unique') {
+    $suffix = if ($row.PSObject.Properties['HookedEntry'] -and $row.HookedEntry -and $row.Status -eq 'unique') {
         'hook-aware-pattern-platform'
     } else { '' }
     Write-Host ("{0,-34} {1,-12} {2}" -f $row.Id, $row.Status, $suffix)

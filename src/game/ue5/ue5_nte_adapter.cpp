@@ -2289,6 +2289,11 @@ struct Ue5NteAdapter::State {
                 resolution.FeatureAvailable(kUe5ProcessEventFeature) &&
                 process_event_endpoint.load(std::memory_order_acquire) != nullptr;
         }
+        if (id == ANOMALY_UE5_FUNCTIONS_SERVICE_V1_ID) {
+            return framework_hook_ready && process_event_hook_ready &&
+                resolution.FeatureAvailable(kUe5ProcessEventFeature) &&
+                process_event_endpoint.load(std::memory_order_acquire) != nullptr;
+        }
         if (id == ANOMALY_UE5_AHUD_SERVICE_V1_ID) {
             return AhudFeatureAvailable();
         }
@@ -16910,11 +16915,37 @@ struct Ue5NteAdapter::State::ProcessEventServiceEndpoint final {
         std::shared_ptr<State> state_;
     };
 
+    // Invokes a reflected UFunction through the same guarded ProcessEvent ingress
+    // that the host uses internally. Only valid from the Game callback domain.
+    static AnomalyStatusV1 ANOMALY_CALL InvokeThunk(void* const user, const std::uintptr_t object,
+                                                    const std::uintptr_t function,
+                                                    void* const parameters,
+                                                    const std::size_t parameters_size) noexcept {
+        AnomalyStatusV1 status{};
+        auto* const endpoint = static_cast<ProcessEventServiceEndpoint*>(user);
+        if (endpoint == nullptr || object == 0 || function == 0) {
+            status.code = ANOMALY_STATUS_V1_INVALID_ARGUMENT;
+            return status;
+        }
+        const auto state = endpoint->state_.lock();
+        if (!state || !state->process_event_invoker) {
+            status.code = ANOMALY_STATUS_V1_UNAVAILABLE;
+            return status;
+        }
+        status.code = InvokeProcessEventGuarded(state->process_event_invoker, object, function,
+                                                parameters, parameters_size)
+                          ? ANOMALY_STATUS_V1_OK
+                          : ANOMALY_STATUS_V1_FAILED;
+        return status;
+    }
+
     ProcessEventServiceEndpoint(std::weak_ptr<State> state, const std::uint64_t generation) noexcept
         : state_(std::move(state)), generation_(generation == 0 ? 1 : generation) {
         service = {sizeof(AnomalyUe5ProcessEventServiceV1),
                    ANOMALY_UE5_PROCESS_EVENT_SERVICE_V1_VERSION, this,
                    SubscribeThunk, UnsubscribeThunk};
+        functions_service = {sizeof(AnomalyUe5FunctionsServiceV1),
+                             ANOMALY_UE5_FUNCTIONS_SERVICE_V1_VERSION, this, InvokeThunk};
         subscriptions_snapshot_.store(
             std::make_shared<const SubscriptionList>(), std::memory_order_release);
     }
@@ -16971,6 +17002,7 @@ struct Ue5NteAdapter::State::ProcessEventServiceEndpoint final {
     }
 
     AnomalyUe5ProcessEventServiceV1 service{};
+    AnomalyUe5FunctionsServiceV1 functions_service{};
 
 private:
     static AnomalyStatusV1 StoppedStatus() noexcept {
@@ -17154,6 +17186,16 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             ANOMALY_UE5_PROCESS_EVENT_SERVICE_V1_ID,
             ANOMALY_UE5_PROCESS_EVENT_SERVICE_V1_VERSION,
             &current_process_event_endpoint->service,
+            {}, std::static_pointer_cast<const void>(current_process_event_endpoint))) {
+        return false;
+    }
+    if (framework_hook_ready && process_event_hook_ready &&
+        resolution.FeatureAvailable("ue5.process-event") &&
+        current_process_event_endpoint &&
+        !PublishIfMissing(
+            ANOMALY_UE5_FUNCTIONS_SERVICE_V1_ID,
+            ANOMALY_UE5_FUNCTIONS_SERVICE_V1_VERSION,
+            &current_process_event_endpoint->functions_service,
             {}, std::static_pointer_cast<const void>(current_process_event_endpoint))) {
         return false;
     }
