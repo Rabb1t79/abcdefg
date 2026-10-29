@@ -103,6 +103,7 @@ Ctx* g_ctx = nullptr;
 const void* LazyService(const void** slot, const char* id, uint32_t min_version);
 void TryQueryIsGM();
 static void PushLog(const char* text);
+static int g_chronos_req = 0;            // 2=无限暂停(3600s) 3=恢复；由游戏线程消费
 static std::uint64_t NowMs();
 void RegisterDamageConfigSchema();
 void LoadDamageConfig();
@@ -689,19 +690,15 @@ void ReleaseCaptureSubscription() {
 }
 
 void TickChronos() {
-    static int applied = 0;
-    float* slot = WorldDilationSlot();
-    if (slot == nullptr) return;
-    if (g_ui_state.chronos && !applied) {
-        float current = 1.0f;
-        __try { current = *slot; } __except (EXCEPTION_EXECUTE_HANDLER) { return; }
-        if (current > 0.001f && current < 10.0f) {
-            __try { *slot = 0.0001f; } __except (EXCEPTION_EXECUTE_HANDLER) { return; }
-            applied = 1;
-        }
-    } else if (!g_ui_state.chronos && applied) {
-        __try { *slot = 1.0f; } __except (EXCEPTION_EXECUTE_HANDLER) { return; }
-        applied = 0;
+    // 原生时停：UI 勾选 = 无限暂停开/关。真正的 PausedGameExcludePlayerByTimer
+    // 调用放在游戏线程（OnProcessEvent）执行，渲染线程只投递请求。
+    static int last = -1;
+    if (last != g_ui_state.chronos) {
+        last = g_ui_state.chronos;
+        g_chronos_req = g_ui_state.chronos ? 2 : 3;
+        char b[64];
+        std::snprintf(b, sizeof(b), "chronos: request %d", g_chronos_req);
+        PushLog(b);
     }
 }
 
@@ -788,6 +785,61 @@ static int g_hot_hold = 0;
 static int g_hot_restore = 0;
 static int g_hot_registered = 0;
 static void* g_pause_fn = nullptr;   // HTPlayerController::PausedGameExcludePlayerByTimer
+
+// ---- 游戏线程调用通道（anomaly.ue5.functions） ----
+// 原生时停与排球胜利都只能在该通道里执行：UI/输入回调在渲染线程，直接调 ProcessEvent 会崩。
+static int g_volley_rc = 0;
+static char g_volley_msg[96] = {0};
+static std::uint64_t g_volley_next_ms = 0;
+
+static bool InvokeGameFunction(std::uintptr_t object, std::uintptr_t function,
+                               void* parameters, std::size_t size) {
+    if (object < 0x10000 || function < 0x10000 || !g_ctx) return false;
+    if (!g_ctx->functions) LazyService(&g_ctx->functions, "anomaly.ue5.functions", 1);
+    if (!g_ctx->functions) return false;
+    const auto* fn = static_cast<const AnomalyUe5FunctionsServiceV1*>(g_ctx->functions);
+    if (!fn->invoke) return false;
+    return fn->invoke(fn->user, object, function, parameters, size).code ==
+           ANOMALY_STATUS_V1_OK;
+}
+
+// 排球：PlayerState -> GetOrCacheVolleyballGameManager -> Test_ForceWin(角色)
+static void VolleyWinStep() {
+    if (!g_pc_inst) { g_volley_rc = -1; return; }
+    std::uintptr_t ps = 0;
+    if (!ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(g_pc_inst) + 0x2D0, &ps) ||
+        ps < 0x10000) {
+        g_volley_rc = -2;
+        return;
+    }
+    std::uintptr_t ps_cls = 0;
+    if (!ue::Reader::SafePtr(ps + 0x10, &ps_cls) || ps_cls < 0x10000) { g_volley_rc = -3; return; }
+    void* f_mgr = FindFuncByName(reinterpret_cast<void*>(ps_cls),
+                                 "GetOrCacheVolleyballGameManager");
+    if (!f_mgr) { g_volley_rc = -4; return; }
+    struct { std::uintptr_t ret; } mp{0};
+    if (!InvokeGameFunction(ps, reinterpret_cast<std::uintptr_t>(f_mgr), &mp, sizeof(mp))) {
+        g_volley_rc = -5;
+        return;
+    }
+    std::uintptr_t mgr = mp.ret;
+    if (mgr < 0x10000) { g_volley_rc = -6; return; }
+    std::uintptr_t mgr_cls = 0;
+    if (!ue::Reader::SafePtr(mgr + 0x10, &mgr_cls) || mgr_cls < 0x10000) { g_volley_rc = -7; return; }
+    void* f_win = FindFuncByName(reinterpret_cast<void*>(mgr_cls), "Test_ForceWin");
+    if (!f_win) { g_volley_rc = -8; return; }
+    std::uintptr_t chr = 0;
+    ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(g_pc_inst) + 0x308, &chr);
+    struct {
+        std::uintptr_t chr;
+        unsigned char ret;
+        unsigned char pad[7];
+    } wp{chr, 0, {}};
+    const bool ok = InvokeGameFunction(mgr, reinterpret_cast<std::uintptr_t>(f_win), &wp, sizeof(wp));
+    g_volley_rc = ok ? (wp.ret ? 2 : 1) : -9;
+    std::snprintf(g_volley_msg, sizeof(g_volley_msg), "mgr=0x%llX chr=0x%llX win=%d",
+                  (unsigned long long)mgr, (unsigned long long)chr, (int)wp.ret);
+}
 
 void TickChronosDump() {
     if (!g_ctx) return;
@@ -952,6 +1004,33 @@ static void ApplyTargetCapture(std::uintptr_t function, std::uintptr_t object, v
 
 void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t function, void* parameters) {
     ++g_pe_total;
+    // 时停请求：只在游戏线程投递 PausedGameExcludePlayerByTimer。
+    if (g_chronos_req != 0) {
+        const int req = g_chronos_req;
+        g_chronos_req = 0;
+        if (g_pc_inst && g_pause_fn) {
+            struct { float seconds; } p{0.0f};
+            p.seconds = (req == 3) ? 0.0f : 3600.0f;
+            const bool ok = InvokeGameFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst),
+                                               reinterpret_cast<std::uintptr_t>(g_pause_fn),
+                                               &p, sizeof(p));
+            g_chronos_rc = ok ? req : -req;
+            char b[96];
+            std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d seconds=%.1f", req, ok ? 1 : 0,
+                          p.seconds);
+            PushLog(b);
+        } else {
+            g_chronos_rc = -100;
+        }
+    }
+    // 排球胜利：勾选后每 500ms 在游戏线程尝试一次。
+    if (g_ui_state.volley != 0 && g_pc_inst) {
+        const std::uint64_t now = NowMs();
+        if (now >= g_volley_next_ms) {
+            g_volley_next_ms = now + 500;
+            VolleyWinStep();
+        }
+    }
     // 杩欓噷鏄涓讳繚璇佺殑 Game 绾跨▼鍥炶皟鍩燂細ProcessEvent 鏂藉姞鍙兘鍦ㄨ繖閲屽仛锛堣 GeApplyStep锛夈€?
     if (g_ge_req != 0) ReplayApplyStep();
     if (g_cap_on != 0) PeRingPush(function, object);
@@ -2598,8 +2677,9 @@ void DrawTabs(const AnomalyUiServiceV1* ui) {
                     ui->checkbox(ui->user, c1, &g_ui_state.volley);
                 }
                 if (ui->text) {
-                    AnomalyStringViewV1 v{"resolved=1", 10};
-                    ui->text(ui->user, v);
+                    char buf[160];
+                    int n = snprintf(buf, sizeof(buf), "rc=%d %s", g_volley_rc, g_volley_msg);
+                    if (n > 0) { AnomalyStringViewV1 v{buf, static_cast<std::size_t>(n)}; ui->text(ui->user, v); }
                 }
             } else if (t == 4) {
                 if (ui->checkbox) {
