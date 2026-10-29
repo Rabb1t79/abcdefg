@@ -2762,7 +2762,7 @@ void DrawTabs(const AnomalyUiServiceV1* ui) {
         {"GM", 2},
         {"\xE5\x80\x99\xE9\x80\x89", 6},   // 闂佺锕ラ悷鈺呭焵?
     };
-    for (int t = 0; t < 6; ++t) {
+    for (int t = 0; t < 5; ++t) {
         AnomalyStringViewV1 label{tabs[t].label, static_cast<std::size_t>(tabs[t].len)};
         if (ui->begin_tab_item(ui->user, label, nullptr, 0, 1) != 0) {
             if (t == 0) {
@@ -2800,11 +2800,6 @@ void DrawTabs(const AnomalyUiServiceV1* ui) {
                         }
                     }
                 }
-                if (ui->text) {
-                    char buf[160];
-                    int n = snprintf(buf, sizeof(buf), "wn=%s pz=%llX pe=%llX rc=%d prc=%d", g_world_name, reinterpret_cast<unsigned long long>(g_pause_fn), g_pe_addr, g_chronos_rc, g_pawn_rc);
-                    if (n > 0) { AnomalyStringViewV1 v{buf, static_cast<std::size_t>(n)}; ui->text(ui->user, v); }
-                }
             } else if (t == 2) {
                 DrawCaptureUi(ui);
             } else if (t == 3) {
@@ -2832,28 +2827,6 @@ void DrawTabs(const AnomalyUiServiceV1* ui) {
                     char sel[96];
                     int sn = snprintf(sel, sizeof(sel), "selected: %s", g_gm_cmd_names[g_gm_selected2]);
                     if (sn > 0) { AnomalyStringViewV1 sv{sel, static_cast<std::size_t>(sn)}; ui->text(ui->user, sv); }
-                }
-            }
-            if (t == 5) {
-                if (ui->begin_child && ui->end_child && ui->button) {
-                    AnomalyStringViewV1 lid{"##fnlist", 7};
-                    if (true) {
-for (int fi = 0; fi < g_fn_count; ++fi) {
-                            AnomalyStringViewV1 nm{g_fn_names[fi], std::strlen(g_fn_names[fi])};
-                            if (ui->button(ui->user, nm, 0.0f, 0.0f)) {
-                                g_fn_sel = fi;
-                                g_applyge_fn = g_fn_ptrs[fi];
-                                char fb[96];
-                                std::snprintf(fb, sizeof(fb), "fn=%d/sel=%d %s",
-                                              g_fn_count, fi, g_fn_names[fi]);
-                                PushLog(fb);
-                            }
-                        }                    }
-                }
-                if (ui->text) {
-                    char fs[96];
-                    int fn2 = snprintf(fs, sizeof(fs), "fn=count %d sel %d", g_fn_count, g_fn_sel);
-                    if (fn2 > 0) { AnomalyStringViewV1 v{fs, static_cast<std::size_t>(fn2)}; ui->text(ui->user, v); }
                 }
             }
             ui->end_tab_item(ui->user);
