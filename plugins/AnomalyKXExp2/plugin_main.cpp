@@ -5676,18 +5676,6 @@ void ReplayTick() {
 
 // Game-thread turn: one context, then one application per live target, so every
 // target of this turn is hit on the same tick.
-static bool SafeReadI32(std::uintptr_t addr, std::int32_t* out) {
-    if (addr < 0x10000 || out == nullptr) return false;
-    __try { *out = *reinterpret_cast<std::int32_t*>(addr); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-    return true;
-}
-static bool SafeWriteI32(std::uintptr_t addr, std::int32_t value) {
-    if (addr < 0x10000) return false;
-    __try { *reinterpret_cast<std::int32_t*>(addr) = value; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-    return true;
-}
 void ReplayApplyStep() {
     g_ge_req = 0;
     const int applies = g_ge_shots > 0 ? g_ge_shots : 0;
@@ -5708,25 +5696,6 @@ void ReplayApplyStep() {
         unsigned char ctx[0x18] = {0};
         reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
                                    reinterpret_cast<void*>(g_gec_ufn), ctx);
-        // FGameplayEffectContextHandle 首 8 字节是 TSharedPtr 的对象指针（FGameplayEffectContext，
-        // 0x80 字节）。其中 Instigator@+0x08 / EffectCauser@+0x10 / InstigatorASC@+0x34 都是
-        // TWeakObjectPtr（索引+序列号），MakeEffectContext 已按玩家 ASC 填好，强写裸指针会破坏它；
-        // 这里只补能安全写的 AbilityLevel@+0x28（int32），与施加用的 level 保持一致。
-        {
-            std::uintptr_t cobj = 0;
-            std::memcpy(&cobj, ctx, 8);
-            static int ctx_logs = 0;
-            if (ctx_logs < 3) {
-                ++ctx_logs;
-                std::int32_t old_level = -1;
-                SafeReadI32(cobj + 0x28, &old_level);
-                char b[128];
-                std::snprintf(b, sizeof(b), "ue: ctx=0x%llX abilityLevel=%d",
-                              (unsigned long long)cobj, old_level);
-                PushLog(b);
-            }
-            SafeWriteI32(cobj + 0x28, 1);
-        }
         for (int i = 0; i < g_rt_n; ++i) {
             ReplayTarget& t = g_rt[i];
             if (t.paused != 0) continue;   // 暂停目标不计数也不施加，等采样判定恢复
