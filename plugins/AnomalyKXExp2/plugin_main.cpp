@@ -5606,12 +5606,14 @@ void ReplayTick() {
         return;
     }
     const std::uint64_t now = NowMs();
-    // 间隔过短服务器不认：按 1000/rate 的间隔发，本帧余数直接丢弃，不跨帧累积补发。
-    // 每帧最多施加一次，保证相邻两次施加至少隔一个间隔，不会同帧连发。
+    // 间隔过短服务器不认：小于 30Hz 服务器 tick（约 33ms）的间隔没有意义，
+    // 本帧余数直接丢弃，不跨帧累积补发；每帧最多施加一次。
     int rate = static_cast<int>(g_ui_state.replay);
     if (rate < 1) rate = 1;
     if (rate > 512) rate = 512;
-    const std::uint64_t interval = static_cast<std::uint64_t>(1000 / rate > 0 ? 1000 / rate : 1);
+    std::uint64_t interval = static_cast<std::uint64_t>(1000 / rate > 0 ? 1000 / rate : 1);
+    constexpr std::uint64_t kServerTickMs = 33;   // 30Hz 服务器 tick
+    if (interval < kServerTickMs) interval = kServerTickMs;
     if (g_apply_clock_ms == 0) { g_apply_clock_ms = now; return; }
     if (now - g_apply_clock_ms < interval) return;
     g_apply_clock_ms = now;          // 丢弃余数
