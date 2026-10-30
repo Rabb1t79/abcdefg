@@ -10375,7 +10375,6 @@ struct Ue5NteAdapter::State {
         }
     }
 
-
     [[nodiscard]] bool BuildVehicleConfigurationLocked(
         const VehicleCatalogEntry& selected,
         const AnomalyNteVehicleSummonRequestV1& request,
