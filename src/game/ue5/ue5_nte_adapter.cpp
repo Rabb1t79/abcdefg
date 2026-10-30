@@ -806,16 +806,28 @@ struct Ue5NteAdapter::State {
     // Vehicle data asset resolved by EnsureVehicleCatalogLocked, kept for the
     // customization tables (DT_vehicleModuleData / VehicleSkinDataTable).
     std::uintptr_t vehicle_data_asset_object{};
+    struct VehicleBuildConfiguration {
+        std::uint64_t vehicle_id{};
+        std::uint64_t skin_id{};
+        std::array<std::uint8_t, 0x1C> default_module_data{};
+        std::vector<std::uint64_t> module_ids;
+    };
     struct VehicleCustomizationOption {
         std::string id;
         std::string label;
         std::uint32_t kind{};
         std::uint32_t module_type{};
+        std::uint32_t name_comparison_index{};
+        std::uint32_t name_number{};
+        std::uint64_t native_name{};
+        bool is_default{};
     };
     std::vector<VehicleCustomizationOption> vehicle_customization_options;
-    std::uint64_t vehicle_customization_sequence{};
+    std::string vehicle_customization_vehicle_row_id;
     std::uint64_t vehicle_customization_generation{};
-    std::string vehicle_customization_selected_id;
+    std::uint64_t vehicle_customization_vehicle_sequence{};
+    std::uint64_t vehicle_customization_sequence{};
+    const char* vehicle_customization_failure_reason{"customization catalog has not been scanned"};
     const char* vehicle_catalog_failure_reason{"catalog has not been scanned"};
     // Names converted from FText are cached by canonical row key so explicit refreshes
     // do not allocate a fresh engine FString for every unchanged catalog row.
