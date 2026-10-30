@@ -803,6 +803,19 @@ struct Ue5NteAdapter::State {
     std::uint64_t vehicle_catalog_sequence{};
     std::uintptr_t vehicle_catalog_table{};
     bool vehicle_catalog_valid{};
+    // Vehicle data asset resolved by EnsureVehicleCatalogLocked, kept for the
+    // customization tables (DT_vehicleModuleData / VehicleSkinDataTable).
+    std::uintptr_t vehicle_data_asset_object{};
+    struct VehicleCustomizationOption {
+        std::string id;
+        std::string label;
+        std::uint32_t kind{};
+        std::uint32_t module_type{};
+    };
+    std::vector<VehicleCustomizationOption> vehicle_customization_options;
+    std::uint64_t vehicle_customization_sequence{};
+    std::uint64_t vehicle_customization_generation{};
+    std::string vehicle_customization_selected_id;
     const char* vehicle_catalog_failure_reason{"catalog has not been scanned"};
     // Names converted from FText are cached by canonical row key so explicit refreshes
     // do not allocate a fresh engine FString for every unchanged catalog row.
@@ -7901,6 +7914,7 @@ struct Ue5NteAdapter::State {
             vehicle_catalog = std::move(next);
             vehicle_catalog_generation = object_generation;
             vehicle_catalog_table = table;
+            vehicle_data_asset_object = vehicle_asset;
             vehicle_catalog_valid = true;
             ++vehicle_catalog_sequence;
             if (vehicle_catalog_sequence == 0) ++vehicle_catalog_sequence;
@@ -9585,6 +9599,149 @@ struct Ue5NteAdapter::State {
         return VehicleSetOtherVehiclesTargetValue(
             top_speed_kmh, false, minimum_speed_kmh);
     }
+
+    [[nodiscard]] bool EnsureVehicleCustomizationCatalogLocked(
+        const std::string& vehicle_id) noexcept {
+        if (vehicle_id.empty() || !EnsureVehicleCatalogLocked() ||
+            vehicle_data_asset_object == 0) return false;
+        if (vehicle_customization_generation == object_generation &&
+            vehicle_customization_selected_id == vehicle_id &&
+            !vehicle_customization_options.empty()) return true;
+
+        std::uintptr_t asset_class{};
+        if (!ReadPointerAt(*memory, vehicle_data_asset_object,
+                Layout(profile, "object.class"), asset_class)) return false;
+
+        std::vector<VehicleCustomizationOption> next;
+        const auto scan = [&](const char* table_name, std::int32_t table_offset,
+            const char* row_struct_name, const char* id_name,
+            const char* label_name, const std::uint32_t kind) -> bool {
+            ReflectedPropertyInfo table_property;
+            if (!FindReflectedPropertyLocked(asset_class, table_name, table_property, true) ||
+                table_property.type != "ObjectProperty" ||
+                table_property.element_size != 8 ||
+                table_property.offset != table_offset) return false;
+            std::uintptr_t table{};
+            if (!ReadValue(*memory, vehicle_data_asset_object +
+                    static_cast<std::uintptr_t>(table_property.offset), table) ||
+                table == 0) return false;
+            std::uintptr_t row_struct{};
+            std::string row_struct_class;
+            if (!ReadPointerAt(*memory, table,
+                    Layout(profile, "dataTable.rowStruct"), row_struct) ||
+                row_struct == 0 ||
+                !ReadReflectedObjectNameLocked(row_struct, row_struct_class) ||
+                row_struct_class != row_struct_name) return false;
+            const auto row_map_offset = Layout(profile, "dataTable.rowMap", -1);
+            SparseMapView view;
+            if (row_map_offset < 0 ||
+                !ReadSparseMapViewLocked(table + static_cast<std::uintptr_t>(row_map_offset), view) ||
+                view.num <= 0 || view.num > 4096 || view.num_free > view.num ||
+                view.stride <= 0 || view.stride > 4096) return false;
+            std::vector<std::uint8_t> elements(
+                static_cast<std::size_t>(view.num) * static_cast<std::size_t>(view.stride));
+            if (!memory->Read(view.data, elements.data(), elements.size())) return false;
+            for (std::int32_t slot = 0; slot < view.num; ++slot) {
+                const auto u_slot = static_cast<std::uint32_t>(slot);
+                if ((view.flags[static_cast<std::size_t>(u_slot) / 32U] &
+                        (1U << (u_slot & 31U))) == 0) continue;
+                const auto* element = elements.data() +
+                    static_cast<std::size_t>(slot) * static_cast<std::size_t>(view.stride);
+                std::uintptr_t row{};
+                std::memcpy(&row, element + view.row_offset, sizeof(row));
+                if (row == 0 || !ReadableRange(*memory, row, 0x28)) continue;
+                std::uint32_t vehicle_index{}, vehicle_number{};
+                if (!ReadValue(*memory, row + 0x10, vehicle_index) ||
+                    !ReadValue(*memory, row + 0x14, vehicle_number)) continue;
+                std::string row_vehicle_id;
+                if (!ResolveFNameLocked(vehicle_index, vehicle_number, row_vehicle_id) ||
+                    row_vehicle_id != vehicle_id) continue;
+                std::uint32_t id_index{}, id_number{};
+                if (!ReadValue(*memory, row + 0x08, id_index) ||
+                    !ReadValue(*memory, row + 0x0C, id_number)) continue;
+                std::string option_id;
+                if (!ResolveFNameLocked(id_index, id_number, option_id) || option_id.empty()) continue;
+                std::string label;
+                if (!ResolveFTextLocked(row + 0x18, label) || label.empty()) label = option_id;
+                std::uint32_t module_type{};
+                if (kind == 1U) {
+                    std::uint8_t module_byte{};
+                    if (ReadValue(*memory, row + 0x60, module_byte)) module_type = module_byte;
+                }
+                next.push_back({std::move(option_id), std::move(label), kind, module_type});
+                if (next.size() >= 256U) break;
+            }
+            return true;
+        };
+
+        const bool modules = scan("DT_vehicleModuleData", 0x60,
+            "VehicleModuleData", "ModuleID", "ModuleName", 1U);
+        const bool skins = scan("VehicleSkinDataTable", 0x70,
+            "VehicleSkinData", "SkinID", "Name", 2U);
+        if (!modules && !skins) return false;
+        vehicle_customization_options = std::move(next);
+        vehicle_customization_selected_id = vehicle_id;
+        vehicle_customization_generation = object_generation;
+        ++vehicle_customization_sequence;
+        return true;
+    }
+
+    AnomalyStatusV1 VehicleCustomizationCatalogSnapshot(
+        const AnomalyStringViewV1 vehicle_row_id,
+        AnomalyNteVehicleCustomizationCatalogSnapshotV1* snapshot) noexcept {
+        if (snapshot == nullptr || snapshot->struct_size < sizeof(*snapshot))
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid customization snapshot");
+        std::scoped_lock lock(mutex);
+        std::string selected;
+        if (vehicle_row_id.data != nullptr && vehicle_row_id.size != 0) {
+            if (vehicle_row_id.size >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES)
+                return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid vehicle row id");
+            selected.assign(vehicle_row_id.data, vehicle_row_id.size);
+        } else {
+            selected = selected_summon_vehicle_id.empty()
+                ? (vehicle_catalog.empty() ? std::string{} : vehicle_catalog.front().id)
+                : selected_summon_vehicle_id;
+        }
+        if (!EnsureVehicleCustomizationCatalogLocked(selected))
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "customization catalog is unavailable");
+        snapshot->struct_size = sizeof(*snapshot);
+        snapshot->flags = ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID;
+        snapshot->sequence = vehicle_customization_sequence;
+        snapshot->entry_count = static_cast<std::uint32_t>(vehicle_customization_options.size());
+        snapshot->reserved = 0;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 VehicleCustomizationOptionAt(
+        const AnomalyStringViewV1 vehicle_row_id,
+        const std::uint32_t index, AnomalyNteVehicleCustomizationOptionV1* option) noexcept {
+        if (option == nullptr || option->struct_size < sizeof(*option))
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid customization option");
+        std::scoped_lock lock(mutex);
+        std::string selected;
+        if (vehicle_row_id.data != nullptr && vehicle_row_id.size != 0) {
+            if (vehicle_row_id.size >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES)
+                return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid vehicle row id");
+            selected.assign(vehicle_row_id.data, vehicle_row_id.size);
+        } else {
+            selected = selected_summon_vehicle_id.empty()
+                ? (vehicle_catalog.empty() ? std::string{} : vehicle_catalog.front().id)
+                : selected_summon_vehicle_id;
+        }
+        if (!EnsureVehicleCustomizationCatalogLocked(selected))
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "customization catalog is unavailable");
+        if (index >= vehicle_customization_options.size())
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "customization index is out of range");
+        const auto& source = vehicle_customization_options[index];
+        option->struct_size = sizeof(*option);
+        option->flags = 1U;
+        option->kind = source.kind;
+        option->module_type = source.module_type;
+        std::snprintf(option->option_id, sizeof(option->option_id), "%s", source.id.c_str());
+        std::snprintf(option->label, sizeof(option->label), "%s", source.label.c_str());
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
 
     AnomalyStatusV1 VehicleSetSpeedTarget(
         const AnomalyNteVehicleSpeedTargetV1* request) noexcept {
@@ -16034,18 +16191,25 @@ private:
                      : StoppedStatus();
     }
 
-    // V7-V8 compatibility slots. The customization catalog is not implemented on this
-    // baseline yet; callers must check the status and keep the summon/speed features usable.
+    // V7-V8: customization catalog reads the vehicle asset's module and skin tables.
     static AnomalyStatusV1 ANOMALY_CALL VehicleCustomizationSnapshotThunk(
-        void* /*user*/, AnomalyStringViewV1 /*vehicle_row_id*/,
-        AnomalyNteVehicleCustomizationCatalogSnapshotV1* /*snapshot*/) noexcept {
-        return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
+        void* user, AnomalyStringViewV1 vehicle_row_id,
+        AnomalyNteVehicleCustomizationCatalogSnapshotV1* snapshot) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->VehicleCustomizationCatalogSnapshot(
+                  vehicle_row_id, snapshot)
+            : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleCustomizationOptionThunk(
-        void* /*user*/, AnomalyStringViewV1 /*vehicle_row_id*/, std::uint32_t /*index*/,
-        AnomalyNteVehicleCustomizationOptionV1* /*option*/) noexcept {
-        return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
+        void* user, AnomalyStringViewV1 vehicle_row_id, std::uint32_t index,
+        AnomalyNteVehicleCustomizationOptionV1* option) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->VehicleCustomizationOptionAt(
+                  vehicle_row_id, index, option)
+            : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleUnsupportedRepairThunk(void*) noexcept {
