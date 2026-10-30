@@ -6,6 +6,7 @@
 #include "anomaly/ue5_ftext.hpp"
 #include "anomaly/ue5_streaming_source_override.hpp"
 #include "anomaly/thread_local_value.hpp"
+#include "nte_vehicle_speed_maintenance.hpp"
 
 #include <algorithm>
 #include <array>
@@ -856,6 +857,10 @@ struct Ue5NteAdapter::State {
     VehicleSpeedFieldBaseline vehicle_speed_field_baseline{};
     std::uintptr_t vehicle_speed_field_baseline_component{};
     bool vehicle_speed_fields_applied{};
+    // UHTVehicleMovementComponent recomputes its speed state, so keep the applied targets and
+    // re-assert them from the Game tick. The implementation is a portable, standalone header.
+    nte_vehicle_speed::NteVehicleSpeedMaintenance<VehicleSpeedFieldBaseline>
+        vehicle_speed_maintenance;
     bool vehicle_wheel_friction_enabled{true};
     // 按非玩家载具的 MovementComponent 分别保存速率倍率和原始扭矩基准，绝不与玩家载具共用状态。
     std::unordered_map<std::uintptr_t, float> other_vehicle_velocity_ratios;
@@ -8313,6 +8318,7 @@ struct Ue5NteAdapter::State {
                     vehicle_speed_field_baseline = {};
                     vehicle_speed_field_baseline_component = 0;
                     vehicle_speed_fields_applied = false;
+                    vehicle_speed_maintenance.Reset();
                 }
                 static constexpr std::array<std::string_view, 1> water_vehicle_outer{
                     "HTWaterVehicleBasePawn"};
@@ -8364,6 +8370,7 @@ struct Ue5NteAdapter::State {
                 vehicle_speed_field_baseline = {};
                 vehicle_speed_field_baseline_component = 0;
                 vehicle_speed_fields_applied = false;
+                vehicle_speed_maintenance.Reset();
                 // Revalidate this dump-defined UFunction for each movement component.
                 vehicle_bindings.set_delayed_velocity_restore = 0;
                 vehicle_delayed_velocity_restore_failure_reason.clear();
@@ -8648,6 +8655,29 @@ struct Ue5NteAdapter::State {
         }
     }
 
+    // The movement component keeps its own speed state: TopSpeedRatio is BlueprintReadOnly,
+    // bEnableTopSpeedLimit is EditConst and ReSetupEngineAndTransmission rebuilds the engine,
+    // so a raised cap is reverted on a later tick and the car falls back to its stock top
+    // speed. Re-assert the armed targets whenever the observed fields no longer cover them.
+    void MaintainVehicleSpeedFieldsLocked() noexcept {
+        if (!vehicle_speed_fields_applied || vehicle_movement_component == 0) return;
+        const std::uintptr_t movement = vehicle_movement_component;
+        std::string failure;
+        const auto result = vehicle_speed_maintenance.Maintain(
+            [this, movement](VehicleSpeedFieldBaseline& observed) {
+                return ReadVehicleSpeedFieldSnapshotLocked(movement, observed);
+            },
+            [this, movement](const VehicleSpeedFieldBaseline& targets,
+                             std::string& write_failure) {
+                return WriteVehicleSpeedFieldSnapshotLocked(movement, targets, write_failure);
+            },
+            failure);
+        if (result == nte_vehicle_speed::MaintenanceResult::WriteFailed) {
+            vehicle_speed_fields_applied = false;
+            vehicle_speed_restore_status = "速度上限已被游戏重置，且重新写入失败：" + failure;
+        }
+    }
+
     [[nodiscard]] bool MakeVehicleSpeedFieldTargets(
         const VehicleSpeedFieldBaseline& baseline,
         const float requested_top_speed_kmh,
@@ -8852,6 +8882,9 @@ struct Ue5NteAdapter::State {
                 vehicle_movement_component, current_fields_before, rollback_failure);
             vehicle_top_speed_ratio = previous_top_speed_ratio;
             vehicle_speed_fields_applied = rollback_ok ? previous_fields_applied : false;
+            // The armed targets no longer describe the component after a failed apply; re-arm
+            // only on the next verified apply.
+            vehicle_speed_maintenance.Reset();
             vehicle_speed_restore_status =
                 std::string("SetTopSpeedRatio 已调用，但 Anomaly 风格速度字段写入失败：") +
                 (field_failure.empty() ? "目标字段计算无效" : field_failure) +
@@ -8880,6 +8913,9 @@ struct Ue5NteAdapter::State {
         // native ratio path if that call fails, combining it with the user's independent torque
         // factor rather than multiplying a previous effective speed ratio a second time.
         vehicle_speed_fields_applied = true;
+        // Keep the written targets so the Game tick can re-assert them after the movement
+        // component rebuilds its speed state from the data table.
+        vehicle_speed_maintenance.Arm(field_targets, field_targets.top_speed_ratio);
         if (!engine_torque_refreshed) {
             const auto& external_binding = vehicle_bindings.set_external_torque_ratio;
             const float speed_torque_scale = (std::max)(2.0F * field_targets.top_speed_ratio, 2.0F);
@@ -11274,6 +11310,7 @@ struct Ue5NteAdapter::State {
                                 vehicle_current_velocity_ratio =
                                     vehicle_speed_field_baseline.top_speed_ratio;
                                 vehicle_speed_fields_applied = false;
+                                vehicle_speed_maintenance.Reset();
                             } else {
                                 std::array<std::uint8_t, 8> rollback_parameters{};
                                 std::memcpy(rollback_parameters.data() +
@@ -18673,6 +18710,7 @@ void Ue5NteAdapter::OnGameTick(double delta_seconds) noexcept {
         }
         state->RefreshAhudBindingLocked();
         state->RefreshCombatSkillBindingsLocked();
+        state->MaintainVehicleSpeedFieldsLocked();
         const bool combat_service_ready =
             state->NteCombatProfileAvailable() &&
             !state->IsPublished(ANOMALY_NTE_COMBAT_SERVICE_V1_ID);
