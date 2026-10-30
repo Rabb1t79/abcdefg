@@ -11059,7 +11059,8 @@ struct Ue5NteAdapter::State {
                 if (AddAddress(direct_spawned, Layout(profile, "object.internalIndex"), index_address) &&
                     ReadValue(*memory, index_address, internal_index) && internal_index >= 0)
                     entity_id = static_cast<std::uint64_t>(static_cast<std::uint32_t>(internal_index)) + 1U;
-                vehicle_summon_status_message = "召唤已实际生成并通过后置验证：" + class_name;
+                vehicle_summon_status_message = "召唤已实际生成并通过后置验证：" +
+                    (selected->display_label.empty() ? selected->id : selected->display_label);
                 if (entity_id != 0) vehicle_summon_status_message += " (#" + std::to_string(entity_id) + ")";
                 vehicle_summon_status_message += "；目标位置=(" + std::to_string(direct_destination[0]) +
                     ", " + std::to_string(direct_destination[1]) + ", " + std::to_string(direct_destination[2]) +
@@ -11191,7 +11192,8 @@ struct Ue5NteAdapter::State {
         if (AddAddress(spawned, Layout(profile, "object.internalIndex"), index_address) &&
             ReadValue(*memory, index_address, internal_index) && internal_index >= 0)
             entity_id = static_cast<std::uint64_t>(static_cast<std::uint32_t>(internal_index)) + 1U;
-        vehicle_summon_status_message = "召唤已实际生成并通过后置验证：" + class_name;
+        vehicle_summon_status_message = "召唤已实际生成并通过后置验证：" +
+            (selected->display_label.empty() ? selected->id : selected->display_label);
         if (entity_id != 0) vehicle_summon_status_message += " (#" + std::to_string(entity_id) + ")";
         vehicle_summon_status_message += "；目标位置=(" + std::to_string(destination[0]) +
             ", " + std::to_string(destination[1]) + ", " + std::to_string(destination[2]) +

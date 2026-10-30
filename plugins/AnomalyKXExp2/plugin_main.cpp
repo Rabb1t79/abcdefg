@@ -802,6 +802,7 @@ static AnomalyGenerationHandleV1 g_hot_handle[3] = {};
 static int g_hot_capture = -1;   // >=0 = 正在等待按键，值为要改的热键下标
 static void* g_pause_fn = nullptr;   // HTPlayerController::PausedGameExcludePlayerByTimer
 static void* g_pause_end_fn = nullptr;  // HTPlayerController::PausedGameExcludePlayerByTimerFunc
+static void* g_is_paused_fn = nullptr;  // HTPlayerController::IsGamePaused
 static void* g_pause_type_fn = nullptr;  // HTPlayerController::PauseGame(EPausedGameType)
 static void* g_resume_fn = nullptr;      // HTPlayerController::ResumeGame(EPausedGameType)
 static void* g_ps_pause_fn = nullptr;    // HTPlayerState::PauseGame(EPausedGameType, float)
@@ -1060,9 +1061,18 @@ void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t fun
             }
         }
         g_chronos_rc = ok ? req : -req;
-        char b[160];
-        std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d seconds=%.1f pause=0x%llX end=0x%llX",
-                      req, ok ? 1 : 0, seconds,
+        // 诊断：调用后立刻读 IsGamePaused()，区分“调进去了”和“真的暂停了”。
+        unsigned char paused_after = 0;
+        if (pc && g_is_paused_fn) {
+            struct { unsigned char ret; } q{};
+            CallUFunction(pc, reinterpret_cast<std::uintptr_t>(g_is_paused_fn), &q);
+            paused_after = q.ret;
+        }
+        char b[240];
+        std::snprintf(b, sizeof(b),
+                      "chronos: req=%d ok=%d seconds=%.1f paused_after=%u pe=0x%llX pause=0x%llX end=0x%llX",
+                      req, ok ? 1 : 0, seconds, static_cast<unsigned>(paused_after),
+                      static_cast<unsigned long long>(g_pe_addr),
                       reinterpret_cast<unsigned long long>(g_pause_fn),
                       reinterpret_cast<unsigned long long>(g_pause_end_fn));
         PushLog(b);
@@ -1148,6 +1158,7 @@ void TickFeatures() {
         }
         // 计时结束回调：直接调用即可解除 ExcludePlayer 暂停（无参数）。
         g_pause_end_fn = FindFuncByName(pc_cls, "PausedGameExcludePlayerByTimerFunc");
+        g_is_paused_fn = FindFuncByName(pc_cls, "IsGamePaused");
         // 角色大招的时停走 PauseGame(PG_UltraSkill_PlayPassiveEffect)/ResumeGame，
         // 这才是游戏自己“冻结敌人、玩家照常行动”的实现。
         if (void* pf = FindFuncByName(pc_cls, "PauseGame")) g_pause_type_fn = pf;
