@@ -320,6 +320,10 @@ typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES 128u
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER (1u << 1u)
+#define ANOMALY_NTE_VEHICLE_SUMMON_V1_RESERVED_OWNED_MODIFICATIONS (1u << 2u)
+#define ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_CUSTOM_CONFIGURATION (1u << 3u)
+#define ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE 1u
+#define ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN 2u
 typedef struct AnomalyNteVehicleSnapshotV1 {
     uint32_t struct_size;
     uint32_t flags;
@@ -342,10 +346,21 @@ typedef struct AnomalyNteVehicleCatalogSnapshotV1 {
     uint32_t reserved;
 } AnomalyNteVehicleCatalogSnapshotV1;
 
+typedef struct AnomalyNteVehicleModuleSelectionV1 {
+    uint32_t struct_size;
+    uint32_t module_type;
+    AnomalyStringViewV1 module_id;
+} AnomalyNteVehicleModuleSelectionV1;
+
 typedef struct AnomalyNteVehicleSummonRequestV1 {
     uint32_t struct_size;
     uint32_t flags;
     double world_position[3];
+    // V7 tail: ignored for ordinary summon. Used only with APPLY_CUSTOM_CONFIGURATION.
+    AnomalyStringViewV1 skin_id;
+    const AnomalyNteVehicleModuleSelectionV1* module_selections;
+    uint32_t module_selection_count;
+    uint32_t reserved;
 } AnomalyNteVehicleSummonRequestV1;
 
 #define ANOMALY_NTE_VEHICLE_SPEED_TARGET_CURRENT (1u << 0u)
