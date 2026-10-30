@@ -801,6 +801,8 @@ static int g_hot_registered = 0;
 static AnomalyGenerationHandleV1 g_hot_handle[3] = {};
 static int g_hot_capture = -1;   // >=0 = 正在等待按键，值为要改的热键下标
 static void* g_pause_fn = nullptr;   // HTPlayerController::PausedGameExcludePlayerByTimer
+static void* g_pause_end_fn = nullptr;  // HTPlayerController::PausedGameExcludePlayerByTimerFunc
+static void* g_is_paused_fn = nullptr;  // HTPlayerController::IsGamePaused
 static void* g_pause_type_fn = nullptr;  // HTPlayerController::PauseGame(EPausedGameType)
 static void* g_resume_fn = nullptr;      // HTPlayerController::ResumeGame(EPausedGameType)
 static void* g_ps_pause_fn = nullptr;    // HTPlayerState::PauseGame(EPausedGameType, float)
@@ -1039,41 +1041,40 @@ static void ApplyTargetCapture(std::uintptr_t function, std::uintptr_t object, v
 
 void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t function, void* parameters) {
     ++g_pe_total;
-    // 时停请求：只在游戏线程投递暂停函数。
+    // 时停：开启 = PausedGameExcludePlayerByTimer(3600)；
+    // 关闭 = PausedGameExcludePlayerByTimerFunc()（计时结束回调，真正解除暂停）。
     if (g_chronos_req != 0) {
         const int req = g_chronos_req;
         g_chronos_req = 0;
-        // 与角色大招同一套暂停类型：PG_UltraSkill_PlayPassiveEffect(3)。
-        // 优先直接 ProcessEvent（游戏线程），失败再走宿主的 functions 服务。
-        constexpr unsigned char kPauseType = 3;
         bool ok = false;
-        unsigned char ret = 0;
-        if (g_pc_inst) {
-            const std::uintptr_t fn = (req == 3)
-                ? reinterpret_cast<std::uintptr_t>(g_resume_fn)
-                : reinterpret_cast<std::uintptr_t>(g_pause_type_fn);
-            if (fn >= 0x10000) {
-                struct {
-                    unsigned char type;
-                    unsigned char ret;
-                } p{kPauseType, 0};
-                // Prefer the host invocation service: the direct ProcessEvent fallback
-                // is only safe when the service is absent, and crashed on 2.4.1.
-                ok = InvokeGameFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p,
-                                        sizeof(p));
-                ret = p.ret;
-                if (!ok) {
-                    ok = CallUFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p);
-                    ret = p.ret;
-                }
+        float seconds = 3600.0f;
+        const auto pc = reinterpret_cast<std::uintptr_t>(g_pc_inst);
+        if (pc && req == 3 && g_pause_end_fn) {
+            ok = CallUFunction(pc, reinterpret_cast<std::uintptr_t>(g_pause_end_fn), nullptr);
+        }
+        if (!ok && pc && g_pause_fn) {
+            seconds = (req == 3) ? 0.0f : 3600.0f;
+            ok = CallUFunction(pc, reinterpret_cast<std::uintptr_t>(g_pause_fn), &seconds);
+            if (!ok) {
+                ok = InvokeGameFunction(pc, reinterpret_cast<std::uintptr_t>(g_pause_fn),
+                                        &seconds, sizeof(seconds));
             }
         }
         g_chronos_rc = ok ? req : -req;
-        char b[160];
-        std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d ret=%u type=%u pause=0x%llX resume=0x%llX",
-                      req, ok ? 1 : 0, static_cast<unsigned>(ret),
-                      static_cast<unsigned>(kPauseType),
-                      (unsigned long long)g_pause_type_fn, (unsigned long long)g_resume_fn);
+        // 诊断：调用后立刻读 IsGamePaused()，区分“调进去了”和“真的暂停了”。
+        unsigned char paused_after = 0;
+        if (pc && g_is_paused_fn) {
+            struct { unsigned char ret; } q{};
+            CallUFunction(pc, reinterpret_cast<std::uintptr_t>(g_is_paused_fn), &q);
+            paused_after = q.ret;
+        }
+        char b[240];
+        std::snprintf(b, sizeof(b),
+                      "chronos: req=%d ok=%d seconds=%.1f paused_after=%u pe=0x%llX pause=0x%llX end=0x%llX",
+                      req, ok ? 1 : 0, seconds, static_cast<unsigned>(paused_after),
+                      static_cast<unsigned long long>(g_pe_addr),
+                      reinterpret_cast<unsigned long long>(g_pause_fn),
+                      reinterpret_cast<unsigned long long>(g_pause_end_fn));
         PushLog(b);
     }
     // 排球胜利：勾选后每 500ms 在游戏线程尝试一次。
@@ -1155,6 +1156,9 @@ void TickFeatures() {
             g_resolve.chronos = 1;
             g_pause_fn = pf;
         }
+        // 计时结束回调：直接调用即可解除 ExcludePlayer 暂停（无参数）。
+        g_pause_end_fn = FindFuncByName(pc_cls, "PausedGameExcludePlayerByTimerFunc");
+        g_is_paused_fn = FindFuncByName(pc_cls, "IsGamePaused");
         // 角色大招的时停走 PauseGame(PG_UltraSkill_PlayPassiveEffect)/ResumeGame，
         // 这才是游戏自己“冻结敌人、玩家照常行动”的实现。
         if (void* pf = FindFuncByName(pc_cls, "PauseGame")) g_pause_type_fn = pf;
