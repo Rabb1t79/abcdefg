@@ -806,28 +806,16 @@ struct Ue5NteAdapter::State {
     // Vehicle data asset resolved by EnsureVehicleCatalogLocked, kept for the
     // customization tables (DT_vehicleModuleData / VehicleSkinDataTable).
     std::uintptr_t vehicle_data_asset_object{};
-    struct VehicleBuildConfiguration {
-        std::uint64_t vehicle_id{};
-        std::uint64_t skin_id{};
-        std::array<std::uint8_t, 0x1C> default_module_data{};
-        std::vector<std::uint64_t> module_ids;
-    };
     struct VehicleCustomizationOption {
         std::string id;
         std::string label;
         std::uint32_t kind{};
         std::uint32_t module_type{};
-        std::uint32_t name_comparison_index{};
-        std::uint32_t name_number{};
-        std::uint64_t native_name{};
-        bool is_default{};
     };
     std::vector<VehicleCustomizationOption> vehicle_customization_options;
-    std::string vehicle_customization_vehicle_row_id;
-    std::uint64_t vehicle_customization_generation{};
-    std::uint64_t vehicle_customization_vehicle_sequence{};
     std::uint64_t vehicle_customization_sequence{};
-    const char* vehicle_customization_failure_reason{"customization catalog has not been scanned"};
+    std::uint64_t vehicle_customization_generation{};
+    std::string vehicle_customization_selected_id;
     const char* vehicle_catalog_failure_reason{"catalog has not been scanned"};
     // Names converted from FText are cached by canonical row key so explicit refreshes
     // do not allocate a fresh engine FString for every unchanged catalog row.
@@ -9970,6 +9958,212 @@ struct Ue5NteAdapter::State {
         std::memcpy(option->option_id, source.id.data(), source.id.size());
         std::memcpy(option->label, source.label.data(), source.label.size());
         return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 VehicleSetSpeedTarget(
+        const AnomalyNteVehicleSpeedTargetV1* request) noexcept {
+        if (request == nullptr || request->struct_size < sizeof(*request))
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "vehicle speed target request is missing its required fields");
+        switch (request->scope) {
+        case ANOMALY_NTE_VEHICLE_SPEED_TARGET_CURRENT:
+            return VehicleSetTopSpeedTarget(
+                request->top_speed_kmh, request->minimum_speed_kmh);
+        case ANOMALY_NTE_VEHICLE_SPEED_TARGET_OTHER_LOADED:
+            return VehicleSetOtherVehiclesTopSpeedTarget(
+                request->top_speed_kmh, request->minimum_speed_kmh);
+        default:
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "vehicle speed target scope must select exactly one supported group");
+        }
+    }
+
+    AnomalyStatusV1 VehicleSetOtherVehiclesEngineTorqueRatio(float ratio) noexcept {
+        if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "non-player vehicle torque ratio must be 0.05..20.0");
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "non-player vehicle torque mutation requires Game thread");
+
+        std::scoped_lock lock(mutex);
+        vehicle_other_torque_status.clear();
+        if (!EnsureOtherVehicleMutationBindingsLocked(false, true)) {
+            vehicle_other_torque_status =
+                "非玩家车辆扭矩修改不可用：SetExternalTorqueRatio / 已验证扭矩回退函数不可用";
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_other_torque_status.c_str());
+        }
+
+        std::vector<std::uintptr_t> actors;
+        std::size_t unreadable_slots{};
+        std::string scan_failure;
+        if (!CollectOtherVehicleActorsLocked(actors, unreadable_slots, scan_failure)) {
+            vehicle_other_torque_status = scan_failure;
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_other_torque_status.c_str());
+        }
+        if (actors.empty()) {
+            vehicle_other_torque_status = "当前已加载关卡中没有可修改的非玩家 HTWheeledVehicleBase 实例";
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, vehicle_other_torque_status.c_str());
+        }
+
+        std::size_t applied{}, failed{}, external_applied{}, fallback_applied{};
+        std::string first_failure;
+        const auto record_failure = [&first_failure](std::string reason) {
+            if (first_failure.empty()) first_failure = std::move(reason);
+        };
+        const auto torque_binding = vehicle_bindings.set_external_torque_ratio;
+        const auto max_torque_binding = vehicle_bindings.set_max_engine_torque;
+        for (const std::uintptr_t actor : actors) {
+            std::uintptr_t movement{};
+            const auto movement_offset = Layout(profile, "vehicle.movementComponent", -1);
+            if (movement_offset < 0 ||
+                !ReadPointerAt(*memory, actor, movement_offset, movement) || movement == 0 ||
+                !ReadableRange(*memory, movement, 0x20U) ||
+                !ObjectClassChainContainsLocked(movement, "HTVehicleMovementComponent")) {
+                ++failed;
+                record_failure("载具实例缺少经过校验的 HTVehicleMovementComponent");
+                continue;
+            }
+
+            bool invoked{};
+            bool used_fallback{};
+            std::string primary_failure;
+            if (torque_binding.function != 0 && torque_binding.parms_size != 0 &&
+                torque_binding.parms_size <= 0x1000U &&
+                torque_binding.parameter_offset + sizeof(float) <= torque_binding.parms_size) {
+                std::vector<std::uint8_t> parameters(torque_binding.parms_size);
+                std::memcpy(parameters.data() + torque_binding.parameter_offset, &ratio, sizeof(ratio));
+                invoked = InvokeProcessEventGuarded(process_event_invoker, movement,
+                    torque_binding.function, parameters.data(), parameters.size());
+                if (!invoked) primary_failure = "SetExternalTorqueRatio ProcessEvent 失败";
+            } else {
+                primary_failure = "SetExternalTorqueRatio 绑定或参数布局不可用";
+            }
+
+            // A failed primary invocation must fall through to the alternate setter on this actor.
+            if (!invoked && max_torque_binding.function != 0 &&
+                max_torque_binding.parms_size != 0 &&
+                max_torque_binding.parms_size <= 0x1000U &&
+                max_torque_binding.parameter_offset + sizeof(float) <= max_torque_binding.parms_size) {
+                auto baseline_it = other_vehicle_base_torques.find(movement);
+                if (baseline_it == other_vehicle_base_torques.end()) {
+                    const auto baseline_offset = Layout(profile, "vehicle.maxEngineTorque", -1);
+                    float baseline{};
+                    if (baseline_offset >= 0 &&
+                        ReadValue(*memory, movement + static_cast<std::uintptr_t>(baseline_offset), baseline) &&
+                        std::isfinite(baseline) && baseline > 0.0F) {
+                        baseline_it = other_vehicle_base_torques.emplace(movement, baseline).first;
+                    }
+                }
+                if (baseline_it != other_vehicle_base_torques.end()) {
+                    const auto speed_it = other_vehicle_speed_field_ratios.find(movement);
+                    const float speed_torque_scale = speed_it == other_vehicle_speed_field_ratios.end()
+                        ? 1.0F : (std::max)(2.0F * speed_it->second, 2.0F);
+                    const float torque = baseline_it->second * ratio * speed_torque_scale;
+                    if (std::isfinite(torque)) {
+                        std::vector<std::uint8_t> parameters(max_torque_binding.parms_size);
+                        std::memcpy(parameters.data() + max_torque_binding.parameter_offset,
+                            &torque, sizeof(torque));
+                        invoked = InvokeProcessEventGuarded(process_event_invoker, movement,
+                            max_torque_binding.function, parameters.data(), parameters.size());
+                        if (invoked) used_fallback = true;
+                        else record_failure(primary_failure + "; SetMaxEngineTorque ProcessEvent 失败");
+                    } else {
+                        record_failure(primary_failure + "; 缩放后的 MaxTorque 数值无效");
+                    }
+                } else {
+                    record_failure(primary_failure + "; SetMaxEngineTorque 回退缺少该实例的有效原始 MaxTorque");
+                }
+            } else if (!invoked) {
+                record_failure(primary_failure + "; SetMaxEngineTorque 回退绑定不可用");
+            }
+            if (invoked) {
+                ++applied;
+                other_vehicle_requested_torque_ratios[movement] = ratio;
+                if (used_fallback) {
+                    ++fallback_applied;
+                    other_vehicle_torque_fallback_ratios[movement] = ratio;
+                } else {
+                    ++external_applied;
+                    other_vehicle_torque_fallback_ratios.erase(movement);
+                }
+            } else {
+                ++failed;
+            }
+        }
+
+        vehicle_other_torque_status = "非玩家车辆发动机扭矩倍率 " + std::to_string(ratio) +
+            "x：扫描到 " + std::to_string(actors.size()) + " 辆，应用成功 " +
+            std::to_string(applied) + " 辆（SetExternalTorqueRatio " +
+            std::to_string(external_applied) + " 辆，SetMaxEngineTorque 备用 " +
+            std::to_string(fallback_applied) + " 辆），失败 " + std::to_string(failed) + " 辆";
+        if (unreadable_slots != 0)
+            vehicle_other_torque_status += "；跳过不可读 Actor 槽 " + std::to_string(unreadable_slots);
+        if (!first_failure.empty()) vehicle_other_torque_status += "；首个问题：" + first_failure;
+        if (applied == 0 || failed != 0 || unreadable_slots != 0)
+            return Status(ANOMALY_STATUS_V1_FAILED, vehicle_other_torque_status.c_str());
+        return Status(ANOMALY_STATUS_V1_OK, vehicle_other_torque_status.c_str());
+    }
+
+    AnomalyStatusV1 VehicleCatalogSnapshot(
+        AnomalyNteVehicleCatalogSnapshotV1* snapshot) noexcept {
+        if (snapshot == nullptr || snapshot->struct_size < sizeof(*snapshot))
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid vehicle catalog snapshot");
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "vehicle catalog read requires Game thread");
+        std::scoped_lock lock(mutex);
+        if (!EnsureVehicleCatalogLocked()) {
+            *snapshot = {sizeof(*snapshot), 0, vehicle_catalog_sequence, 0, 0};
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_catalog_failure_reason);
+        }
+        snapshot->struct_size = sizeof(*snapshot);
+        snapshot->flags = ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID;
+        snapshot->sequence = vehicle_catalog_sequence;
+        snapshot->entry_count = static_cast<std::uint32_t>(vehicle_catalog.size());
+        snapshot->reserved = 0;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 VehicleCatalogRefresh() noexcept {
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "载具目录刷新必须在 Game 线程执行");
+        std::scoped_lock lock(mutex);
+        vehicle_catalog.clear();
+        vehicle_catalog_valid = false;
+        vehicle_catalog_table = 0;
+        vehicle_catalog_generation = 0;
+        vehicle_catalog_failure_reason = "用户请求重新读取 DT_VehicleData";
+        if (!EnsureVehicleCatalogLocked())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_catalog_failure_reason);
+        return Status(ANOMALY_STATUS_V1_OK, "DT_VehicleData 目录已重新读取");
+    }
+
+    AnomalyStatusV1 VehicleIdAt(
+        const std::uint32_t index, char* destination, std::size_t* inout_size) noexcept {
+        if (inout_size == nullptr)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "catalog string size is null");
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "vehicle catalog read requires Game thread");
+        std::scoped_lock lock(mutex);
+        if (!EnsureVehicleCatalogLocked())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_catalog_failure_reason);
+        if (index >= vehicle_catalog.size())
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle catalog index is out of range");
+        return CopyString(vehicle_catalog[index].id, destination, inout_size);
+    }
+
+    AnomalyStatusV1 VehicleCatalogLabelAt(
+        const std::uint32_t index, char* destination, std::size_t* inout_size) noexcept {
+        if (inout_size == nullptr)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "目录标签缓冲区大小指针为空");
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "载具目录标签读取必须在 Game 线程执行");
+        std::scoped_lock lock(mutex);
+        if (!EnsureVehicleCatalogLocked())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_catalog_failure_reason);
+        if (index >= vehicle_catalog.size())
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "载具目录标签索引越界");
+        return CopyString(vehicle_catalog[index].display_label, destination, inout_size);
     }
 
     AnomalyStatusV1 VehicleSetSummonVehicleId(const AnomalyStringViewV1 id) noexcept {
