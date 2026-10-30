@@ -1039,41 +1039,23 @@ static void ApplyTargetCapture(std::uintptr_t function, std::uintptr_t object, v
 
 void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t function, void* parameters) {
     ++g_pe_total;
-    // 时停请求：只在游戏线程投递暂停函数。
+    // 时停：走浔大招同一条原生函数 PausedGameExcludePlayerByTimer(seconds)，
+    // 由宿主 functions 服务在游戏线程调用；不再直连 ProcessEvent（2.4.1 上会崩）。
     if (g_chronos_req != 0) {
         const int req = g_chronos_req;
         g_chronos_req = 0;
-        // 与角色大招同一套暂停类型：PG_UltraSkill_PlayPassiveEffect(3)。
-        // 优先直接 ProcessEvent（游戏线程），失败再走宿主的 functions 服务。
-        constexpr unsigned char kPauseType = 3;
         bool ok = false;
-        unsigned char ret = 0;
-        if (g_pc_inst) {
-            const std::uintptr_t fn = (req == 3)
-                ? reinterpret_cast<std::uintptr_t>(g_resume_fn)
-                : reinterpret_cast<std::uintptr_t>(g_pause_type_fn);
-            if (fn >= 0x10000) {
-                struct {
-                    unsigned char type;
-                    unsigned char ret;
-                } p{kPauseType, 0};
-                // Prefer the host invocation service: the direct ProcessEvent fallback
-                // is only safe when the service is absent, and crashed on 2.4.1.
-                ok = InvokeGameFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p,
-                                        sizeof(p));
-                ret = p.ret;
-                if (!ok) {
-                    ok = CallUFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst), fn, &p);
-                    ret = p.ret;
-                }
-            }
+        float seconds = (req == 3) ? 0.0f : 3600.0f;
+        if (g_pc_inst && g_pause_fn) {
+            ok = InvokeGameFunction(reinterpret_cast<std::uintptr_t>(g_pc_inst),
+                                    reinterpret_cast<std::uintptr_t>(g_pause_fn),
+                                    &seconds, sizeof(seconds));
         }
         g_chronos_rc = ok ? req : -req;
         char b[160];
-        std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d ret=%u type=%u pause=0x%llX resume=0x%llX",
-                      req, ok ? 1 : 0, static_cast<unsigned>(ret),
-                      static_cast<unsigned>(kPauseType),
-                      (unsigned long long)g_pause_type_fn, (unsigned long long)g_resume_fn);
+        std::snprintf(b, sizeof(b), "chronos: req=%d ok=%d seconds=%.1f fn=0x%llX",
+                      req, ok ? 1 : 0, seconds,
+                      reinterpret_cast<unsigned long long>(g_pause_fn));
         PushLog(b);
     }
     // 排球胜利：勾选后每 500ms 在游戏线程尝试一次。
