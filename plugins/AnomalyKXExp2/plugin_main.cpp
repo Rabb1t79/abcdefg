@@ -828,6 +828,13 @@ static bool CallUFunction(std::uintptr_t object, std::uintptr_t function, void* 
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+    static int logged = 0;
+    if (logged == 0) {
+        logged = 1;
+        char b[96];
+        std::snprintf(b, sizeof(b), "pe: call ok fn=0x%llX", (unsigned long long)function);
+        PushLog(b);
+    }
     return true;
 }
 
@@ -5969,10 +5976,12 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     }
     ui->end_window(ui->user);
     static int reported = 0;
-    if (reported < 3) {
+    // 前 3 帧 + 之后每 300 帧记一次：用来确认游戏内（宿主面板打开时）到底有没有进入绘制。
+    if (reported < 3 || (g_draw_count % 300) == 0) {
         ++reported;
-        char rb[96];
-        std::snprintf(rb, sizeof(rb), "window: begin=%d open=%d", began, open);
+        char rb[112];
+        std::snprintf(rb, sizeof(rb), "window: begin=%d open=%d draws=%d", began, open,
+                      g_draw_count);
         PushLog(rb);
     }
 }
