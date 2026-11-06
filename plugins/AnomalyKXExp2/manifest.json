@@ -1,6 +1,6 @@
 {
     "schemaVersion":  2,
-    "description":  "Rebuilt from reverse-engineering evidence: Chronos / Damage Replay / Volleyball Win / Developer GM.",
+    "description":  "KX Exp2：时停、伤害回放、排球胜利与开发者 GM 的实验性插件。",
     "author":  "Anomaly",
     "license":  "AGPL-3.0-only",
     "audience":  "developer",
@@ -99,6 +99,6 @@
                          "nte-damage-chain"
                      ],
     "id":  "anomaly.local.kx.exp",
-    "name":  "AnomalyKX Exp",
+    "name":  "AnomalyKXExp2",
     "version":  "0.1.0"
 }
