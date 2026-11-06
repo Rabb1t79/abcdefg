@@ -6215,8 +6215,8 @@ void ReplayApplyStep() {
                                    reinterpret_cast<void*>(g_gec_ufn), ctx);
         for (int i = 0; i < g_rt_n; ++i) {
             ReplayTarget& t = g_rt[i];
+            ++g_rep_shots;   // 尝试计数放在暂停判断之前：先看清是"没进循环"还是"被暂停跳过"
             if (t.paused != 0) continue;   // 暂停目标不计数也不施加，等采样判定恢复
-            ++g_rep_shots;   // 计划施加一次（发送计数，与 HP 采样无关）
             if (t.asc < 0x10000 || t.ge_class < 0x10000 || !AscStillValid(t.asc)) {
                 ++g_rep_fail;   // 目标无效：这次算失败
                 continue;
@@ -6231,6 +6231,21 @@ void ReplayApplyStep() {
                                        reinterpret_cast<void*>(g_gea_ufn), params);
             ++t.applied;
             ++g_rep_ok;     // 已发送：这次算成功重放
+        }
+    }
+    {
+        // 每次施加结束打一行（2 秒一次），用来区分"循环没跑"和"跑了但没伤害"。
+        static std::uint64_t next_done = 0;
+        const std::uint64_t now = NowMs();
+        if (now >= next_done) {
+            next_done = now + 2000;
+            char b[224];
+            std::snprintf(b, sizeof(b),
+                          "replay: done applies=%d rt=%d shots=%d fail=%d ok=%d paused0=%d applied0=%d",
+                          applies, g_rt_n, g_rep_shots, g_rep_fail, g_rep_ok,
+                          g_rt_n > 0 ? g_rt[0].paused : -1,
+                          g_rt_n > 0 ? g_rt[0].applied : -1);
+            PushLog(b);
         }
     }
     g_cap_suppress = 0;
