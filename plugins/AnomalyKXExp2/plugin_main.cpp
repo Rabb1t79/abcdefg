@@ -5956,8 +5956,13 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     }
 
     static int open = 1;
+    // 与仓库内工作正常的插件保持同一窗口约定：FirstUseEver 尺寸 + 尺寸约束。
     if (ui->set_next_window_size != nullptr) {
-        ui->set_next_window_size(ui->user, 760.0F, 620.0F, 0U);
+        ui->set_next_window_size(ui->user, 820.0F, 0.0F, 4U);
+    }
+    if (ui->set_next_window_size_constraints != nullptr) {
+        ui->set_next_window_size_constraints(
+            ui->user, 640.0F, 240.0F, 100000.0F, 100000.0F);
     }
     AnomalyStringViewV1 title{kWindowTitle, std::strlen(kWindowTitle)};
     const int began = ui->begin_window(ui->user, title, &open, 0);
