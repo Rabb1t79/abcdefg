@@ -147,6 +147,7 @@ static int g_mon_list_n = 0;
 static std::uintptr_t LastDamageGeClass(std::uintptr_t asc);
 void RecordApplyGeClass(std::uintptr_t function, void* parameters);
 static std::uintptr_t ReadWorldFresh();
+static void ProbeWorldPaused();
 static bool ReadAscHP(std::uintptr_t asc, float* out);
 static bool ReadAscMaxHP(std::uintptr_t asc, float* out);
 static bool ReadAscAtk(std::uintptr_t asc, float* out);
@@ -1214,6 +1215,7 @@ void TickChronosPause() {
 
 void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t function, void* parameters) {
     ++g_pe_total;
+    ProbeWorldPaused();
     // 时停请求在这个 PE 回调域里执行（暂停函数在这里才真正生效）；TickChronosPause
     // 只调用 ue5.ProcessEvent，并在调用前后做 SEH 保护与 paused_after 诊断。
     TickChronosPause();
@@ -6086,6 +6088,45 @@ void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, fl
 // UI-thread cadence: samples each target HP (damage lands asynchronously, so the
 // delta seen here belongs to the previous turn), drops dead/stale targets, and
 // hands one activation turn to the game thread.
+// 游戏暂停（ESC 菜单/过场）或窗口失焦时世界是停的，这时继续发放回放会把伤害"存"
+// 到恢复后一起爆出来，也会把 landed/dmg 计数算错。用三个信号一起压住：
+//   1) 游戏自己的 IsGamePaused（只能在游戏线程调，200ms 采样一次）；
+//   2) 我们自己的时停层数；
+//   3) 游戏窗口是否在前台。
+static int g_world_paused = 0;
+static std::uint64_t g_paused_probe_ms = 0;
+
+static bool GameWindowFocused() {
+    const HWND foreground = ::GetForegroundWindow();
+    if (foreground == nullptr) return false;
+    DWORD pid = 0;
+    ::GetWindowThreadProcessId(foreground, &pid);
+    return pid == ::GetCurrentProcessId();
+}
+
+// 只有"游戏自己停的"才算暂停：我们自己的时停（g_pause_depth>0）期间允许回放继续出伤害，
+// 这正是时停+倍攻的用法。ESC 菜单/过场时 g_pause_depth==0 而游戏暂停，此时压住回放。
+static bool ReplayHoldActive() {
+    if (!GameWindowFocused()) return true;
+    if (g_world_paused != 0 && g_pause_depth == 0) return true;
+    return false;
+}
+
+static void ProbeWorldPaused() {
+    const std::uint64_t now = NowMs();
+    if (now < g_paused_probe_ms) return;
+    g_paused_probe_ms = now + 200;
+    if (g_is_paused_fn == nullptr || g_pc_inst == nullptr || g_pe_addr < 0x10000) return;
+    unsigned char value = 0;
+    __try {
+        reinterpret_cast<PE_FN>(static_cast<std::uintptr_t>(g_pe_addr))(
+            g_pc_inst, g_is_paused_fn, &value);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        value = 0;
+    }
+    g_world_paused = value != 0 ? 1 : 0;
+}
+
 void ReplayTick() {
     if (g_ui_state.damage == 0) {
         if (g_rt_n != 0) { g_rt_n = 0; PushLog("replay: cleared"); }
@@ -6160,6 +6201,20 @@ void ReplayTick() {
             PushLog(b);
         }
     }
+    if (ReplayHoldActive()) {
+        // 游戏自己停住（菜单/过场）或失焦：不发，也不让挂起的请求在恢复后补发。
+        g_ge_shots = 0;
+        g_ge_req = 0;
+        static std::uint64_t next_hold_log = 0;
+        if (now >= next_hold_log) {
+            next_hold_log = now + 3000;
+            char b[144];
+            std::snprintf(b, sizeof(b), "replay: hold paused=%d depth=%d focus=%d",
+                          g_world_paused, g_pause_depth, GameWindowFocused() ? 1 : 0);
+            PushLog(b);
+        }
+        return;
+    }
     g_ge_shots = applies;
     g_ge_req = 1;
 }
@@ -6171,7 +6226,8 @@ void ReplayApplyStep() {
     const int applies = g_ge_shots > 0 ? g_ge_shots : 0;
     g_ge_shots = 0;
     const bool helpers = g_gec_ufn != 0 && g_gea_ufn != 0;
-    const bool ready = g_ui_state.damage != 0 && g_rt_n != 0 && applies > 0 && helpers;
+    const bool ready = g_ui_state.damage != 0 && g_rt_n != 0 && applies > 0 && helpers &&
+        !ReplayHoldActive();
     const std::uintptr_t src = ready ? PlayerAscForApply() : 0;
     std::uintptr_t pe = static_cast<std::uintptr_t>(g_pe_addr);
     if (pe < 0x10000) {
