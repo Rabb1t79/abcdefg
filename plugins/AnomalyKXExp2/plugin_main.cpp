@@ -145,6 +145,10 @@ static char g_mon_list_name[kMonList][48] = {};
 static float g_mon_list_hp[kMonList] = {};
 static int g_mon_list_n = 0;
 static std::uintptr_t LastDamageGeClass(std::uintptr_t asc);
+static std::uintptr_t AscFieldOffset(std::uintptr_t legacy_offset);
+static bool ReadAscHP(std::uintptr_t asc, float* out);
+static bool ReadAscMaxHP(std::uintptr_t asc, float* out);
+static bool ReadAscAtk(std::uintptr_t asc, float* out);
 static void ObjectNameUtf8(std::uintptr_t object, char* out, std::size_t cap);
 std::uintptr_t PlayerAscForApply();
 void MonTrackTick();
@@ -1047,14 +1051,28 @@ static void ApplyTargetCapture(std::uintptr_t function, std::uintptr_t object, v
 // 时停：在游戏的 ProcessEvent 回调域里执行（暂停函数在这个上下文才真正生效）。
 // 关键修正：直连的是 ue5.ProcessEvent 本身，不是之前误用的 AActorProcessEvent
 // （+0x3E41360）；后者被宿主 hook 后会用错误的参数布局解引用而崩溃。
+// 恢复可能被游戏的暂停计数拦住：PauseGame 每调一次就多一层，ResumeGame 只解一层。
+// 旧实现一次恢复只调一发，叠加过两层就永远停在暂停里，所以这里没恢复成功就隔
+// 200ms 再解一层，最多 6 次；成功或放弃时只写一条日志。
+static int g_resume_left = 0;
+static std::uint64_t g_resume_due_ms = 0;
+static constexpr int kResumeAttempts = 6;
+
 void TickChronosPause() {
-    if (g_chronos_req == 0) return;
+    if (g_chronos_req == 0 && g_resume_left == 0) return;
+    if (g_chronos_req == 0 && NowMs() < g_resume_due_ms) return;
     // 每次都取当前世界的 PlayerController：切关卡或重开游戏后旧实例会失效，
     // 对失效实例发送 UFunction 会返回成功但完全没有效果。
     if (void* world_pc = PlayerControllerFromWorld()) g_pc_inst = world_pc;
     if (g_pc_inst == nullptr) return;
-    const int req = g_chronos_req;
+    const int req = g_chronos_req != 0 ? g_chronos_req : 3;
     g_chronos_req = 0;
+    if (req == 3) {
+        if (g_resume_left == 0) g_resume_left = kResumeAttempts;
+        g_resume_due_ms = 0;
+    } else {
+        g_resume_left = 0;
+    }
     const auto pc = reinterpret_cast<std::uintptr_t>(g_pc_inst);
 
     // 只用 InitUe 解析出的 ue5.ProcessEvent（未 hook 时直连入口，已 hook 时走跳板）。
@@ -1083,8 +1101,27 @@ void TickChronosPause() {
     float seconds = 3600.0f;
     unsigned char pause_ret = 0;
     const char* via = "none";
+    const auto read_paused = [&]() -> unsigned char {
+        unsigned char value = 0;
+        if (g_is_paused_by_type_fn) {
+            PauseTypeParams q{kUltraSkillPauseType, 0};
+            if (call_pe(pc, reinterpret_cast<std::uintptr_t>(g_is_paused_by_type_fn), &q))
+                value = q.ret;
+        } else if (g_is_paused_fn) {
+            struct { unsigned char ret; } q{};
+            if (call_pe(pc, reinterpret_cast<std::uintptr_t>(g_is_paused_fn), &q))
+                value = q.ret;
+        }
+        return value;
+    };
+    const unsigned char paused_before = read_paused();
+    // 已经停住就不再叠一层：每多调一次 PauseGame，就要多一次 ResumeGame 才解得开。
+    if (req != 3 && paused_before != 0) {
+        ok = true;
+        via = "already";
+    }
     // 优先走游戏自身的时停实现：PauseGame / ResumeGame(PG_UltraSkill_PlayPassiveEffect)。
-    if (req == 3 && g_resume_fn) {
+    if (!ok && req == 3 && g_resume_fn) {
         PauseTypeParams p{kUltraSkillPauseType, 0};
         ok = call_pe(pc, reinterpret_cast<std::uintptr_t>(g_resume_fn), &p);
         if (ok) { via = "resume"; pause_ret = p.ret; }
@@ -1109,21 +1146,33 @@ void TickChronosPause() {
                                 &seconds, sizeof(seconds));
         if (ok) via = "service";
     }
-    unsigned char paused_after = 0;
-    if (g_is_paused_by_type_fn) {
-        PauseTypeParams q{kUltraSkillPauseType, 0};
-        if (call_pe(pc, reinterpret_cast<std::uintptr_t>(g_is_paused_by_type_fn), &q))
-            paused_after = q.ret;
-    } else if (g_is_paused_fn) {
-        struct { unsigned char ret; } q{};
-        if (call_pe(pc, reinterpret_cast<std::uintptr_t>(g_is_paused_fn), &q))
-            paused_after = q.ret;
+    unsigned char paused_after = read_paused();
+    if (req == 3 && paused_after != 0 && g_resume_left <= 1) {
+        // 最后一搏：旧版按类型暂停可能来自计时暂停，把两条解除入口都走一遍。
+        if (g_pause_end_fn) call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_end_fn), nullptr);
+        if (g_pause_fn) {
+            float zero = 0.0f;
+            call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_fn), &zero);
+        }
+        paused_after = read_paused();
+        if (paused_after == 0) via = "fallback-resume";
+    }
+    if (req == 3) {
+        if (paused_after != 0 && g_resume_left > 1) {
+            --g_resume_left;
+            g_resume_due_ms = NowMs() + 200;
+        } else {
+            g_resume_left = 0;
+        }
     }
     g_chronos_rc = ok ? req : -req;
+    // 还在逐层解暂停时不刷日志，只在最后一次（成功或放弃）写一行。
+    if (req == 3 && g_resume_left != 0) return;
     char b[256];
     std::snprintf(b, sizeof(b),
-                  "chronos: req=%d ok=%d via=%s ret=%u paused_after=%u pc=0x%llX world=0x%llX pe=0x%llX pause_game=0x%llX resume=0x%llX",
+                  "chronos: req=%d ok=%d via=%s ret=%u before=%u paused_after=%u pc=0x%llX world=0x%llX pe=0x%llX pause_game=0x%llX resume=0x%llX",
                   req, ok ? 1 : 0, via, static_cast<unsigned>(pause_ret),
+                  static_cast<unsigned>(paused_before),
                   static_cast<unsigned>(paused_after),
                   static_cast<unsigned long long>(pc),
                   static_cast<unsigned long long>(g_gworld_ptr),
@@ -1871,7 +1920,7 @@ static float SumHP() {
     g_hp_max = 0.0f;
     for (int i = 0; i < g_asc_n; ++i) {
         float hp = 0.0f;
-        if (!SafeF32(g_asc[i] + 0x1A38, &hp)) continue;
+        if (!ReadAscHP(g_asc[i], &hp)) continue;
         ++g_hp_ok;
         if (hp > 0.001f) { ++g_hp_nz; if (hp > g_hp_max) g_hp_max = hp; }
         total += hp;
@@ -3163,7 +3212,7 @@ void TickAscScan() {
         ue::Reader::SafePtr(o + 0x2370, &inst);
         ue::Reader::SafePtr(o + 0x2390, &coi);
         ue::Reader::SafePtr(o + 0x2368, &causer);
-        ue::Reader::SafePtr(o + 0x2388, &atk);
+        ue::Reader::SafePtr(o + AscFieldOffset(0x2388), &atk);
         const bool live = (inst >= 0x10000) || (coi >= 0x10000) || (causer >= 0x10000) || (atk >= 0x10000);
         if (!live) {
             ++g_asc_dead;
@@ -3301,7 +3350,7 @@ void TickReverseScan() {
         std::uintptr_t pc = 0, inst = 0, atk = 0;
         ue::Reader::SafePtr(asc + 0x2620, &pc);
         ue::Reader::SafePtr(asc + 0x2370, &inst);
-        ue::Reader::SafePtr(asc + 0x2388, &atk);
+        ue::Reader::SafePtr(asc + AscFieldOffset(0x2388), &atk);
         if (g_rev_logged < 8) {
             char db[160];
             std::snprintf(db, sizeof(db), "ascscan: rev char=0x%llX asc=0x%llX pc=0x%llX inst=0x%llX atk=0x%llX",
@@ -3932,7 +3981,7 @@ void ActivateGA() {
                       (unsigned long long)pawnAsc, (unsigned long long)g_player_asc, (unsigned long long)recv);
         PushLog(vb);
         if (recv >= 0x10000 && g_monster_actor >= 0x10000) {
-            const std::uintptr_t slot = recv + 0x2388;
+            const std::uintptr_t slot = recv + AscFieldOffset(0x2388);
             DWORD opT = 0;
             if (VirtualProtect(reinterpret_cast<LPVOID>(slot & ~0xFFFULL), 0x2000, PAGE_READWRITE, &opT) != 0) {
                 *reinterpret_cast<std::uintptr_t*>(slot) = g_monster_actor;
@@ -4074,7 +4123,7 @@ void ApplyGEDirect() {
         std::uintptr_t sInst = 0, sCoi = 0, sAtk = 0;
         ue::Reader::SafePtr(recv + 0x2370, &sInst);
         ue::Reader::SafePtr(recv + 0x2390, &sCoi);
-        ue::Reader::SafePtr(recv + 0x2388, &sAtk);
+        ue::Reader::SafePtr(recv + AscFieldOffset(0x2388), &sAtk);
         std::uintptr_t pick = 0;
         if (sInst >= 0x10000) pick = sInst;
         else if (sCoi >= 0x10000) pick = sCoi;
@@ -4286,12 +4335,84 @@ static void CollectApplyUfns() {
 }
 
 // HTAttributeComponent 鐨?HP 璧?ASC + 0x1A38锛坒loat锛夛紱鍦ㄨ鑹?actor 涓婅浼氬緱鍒?0銆?
+// 属性块偏移随游戏版本变化：旧版本 HTAttributeComponent::HPCurrent/MaxHP 在
+// 0x1A38/0x1A3C，当前版本整体后移 0x18（0x1A50/0x1A54，Atk 在 0x1A68）。
+// 第一次读到「hp>0、max>=hp、max 在合理范围内」的组合就锁定该候选并写日志，锁定后
+// 固定使用，不再逐帧猜；两个候选都不成立时返回 0，调用方按读取失败处理。
+static std::uintptr_t g_attr_hp_offset = 0;
+static std::uintptr_t g_attr_shift = 0;
+
+static std::uintptr_t AttrHpOffset(std::uintptr_t asc) {
+    if (g_attr_hp_offset != 0) return g_attr_hp_offset;
+    if (asc < 0x10000) return 0;
+    // 只在已确认是 ASC 类的对象上标定，避免拿别的对象碰巧像 HP 的两个 float 锁定错偏移。
+    if (g_cls_asc >= 0x10000) {
+        std::uintptr_t cls = 0;
+        if (!ue::Reader::SafePtr(asc + 0x10, &cls) || cls != g_cls_asc) return 0;
+    }
+    static constexpr std::uintptr_t kCandidates[] = {0x1A38, 0x1A50};
+    for (const std::uintptr_t candidate : kCandidates) {
+        float hp = 0.0f;
+        float max = 0.0f;
+        bool readable = false;
+        __try {
+            hp = *reinterpret_cast<const float*>(asc + candidate);
+            max = *reinterpret_cast<const float*>(asc + candidate + 4);
+            readable = true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            readable = false;
+        }
+        if (!readable) continue;
+        if (!(hp > 0.0f) || !(max >= hp) || max > 1.0e9f) continue;
+        g_attr_hp_offset = candidate;
+        g_attr_shift = candidate - 0x1A38;
+        char b[128];
+        std::snprintf(b, sizeof(b), "attr: hp=0x%llX shift=0x%llX hp=%.1f max=%.1f",
+                      (unsigned long long)candidate, (unsigned long long)g_attr_shift, hp, max);
+        PushLog(b);
+        return candidate;
+    }
+    return 0;
+}
+
+// ASC 上 0x2378 之后的字段（LastDamageGEDef / m_AttackTarget）跟随同一段位移。
+static std::uintptr_t AscFieldOffset(std::uintptr_t legacy_offset) {
+    return legacy_offset + g_attr_shift;
+}
+
 static bool ReadAscHP(std::uintptr_t asc, float* out) {
     if (asc < 0x10000 || out == nullptr) return false;
+    const std::uintptr_t offset = AttrHpOffset(asc);
+    if (offset == 0) return false;
     float v = 0.0f;
-    __try { v = *reinterpret_cast<const float*>(asc + 0x1A38); }
+    __try { v = *reinterpret_cast<const float*>(asc + offset); }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     if (!(v >= 0.0f) || v > 1.0e9f) return false;   // NaN / 璐熷€?/ 鏄庢樉涓嶆槸琛€閲?
+    *out = v;
+    return true;
+}
+
+static bool ReadAscMaxHP(std::uintptr_t asc, float* out) {
+    if (asc < 0x10000 || out == nullptr) return false;
+    const std::uintptr_t offset = AttrHpOffset(asc);
+    if (offset == 0) return false;
+    float v = 0.0f;
+    __try { v = *reinterpret_cast<const float*>(asc + offset + 4); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    if (!(v >= 0.0f) || v > 1.0e9f) return false;
+    *out = v;
+    return true;
+}
+
+static bool ReadAscAtk(std::uintptr_t asc, float* out) {
+    if (asc < 0x10000 || out == nullptr) return false;
+    const std::uintptr_t offset = AttrHpOffset(asc);
+    if (offset == 0) return false;
+    // Atk 与 HPCurrent 的相对距离固定为 0x18，跟随同一段位移。
+    float v = 0.0f;
+    __try { v = *reinterpret_cast<const float*>(asc + offset + 0x18); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    if (!(v >= 0.0f) || v > 1.0e9f) return false;
     *out = v;
     return true;
 }
@@ -4601,6 +4722,15 @@ static void ArmFromDamageEvent(const AnomalyNteDamageEventV1& ev) {
         asc = FindAscInActor(victim);
     if (asc < 0x10000) return;
     const std::uintptr_t ge = LastDamageGeClass(asc);
+    static int ge_logged = 0;
+    if (ge_logged < 3) {
+        ++ge_logged;
+        char gb[112];
+        std::snprintf(gb, sizeof(gb), "arm: asc=0x%llX ge=0x%llX shift=0x%llX",
+                      (unsigned long long)asc, (unsigned long long)ge,
+                      (unsigned long long)g_attr_shift);
+        PushLog(gb);
+    }
     if (ge < 0x10000) return;
     float hp = 0.0f;
     if (!ReadAscHP(asc, &hp) || hp <= 0.0f) return;
@@ -4832,8 +4962,8 @@ static bool AscLooksLikeAsc(std::uintptr_t asc) {
     if (!ue::Reader::SafePtr(asc + 0x10, &cls) || cls < 0x10000) return false;
     if (g_cls_asc >= 0x10000) return cls == static_cast<std::uintptr_t>(g_cls_asc);
     float hp = 0.0f, mx = 0.0f;
-    if (!SafeF32(asc + 0x1A38, &hp) || !SafeF32(asc + 0x1A3C, &mx)) return false;
-    return hp > 0.0f && mx >= hp && mx < 1.0e9f;
+    if (!ReadAscHP(asc, &hp) || !ReadAscMaxHP(asc, &mx)) return false;
+    return hp > 0.0f && mx >= hp;
 }
 
 // 缓存指针是否还有效：换场景/重生后旧 ASC 可能已经释放，必须先验类指针再验 MaxHP，
@@ -4844,7 +4974,7 @@ static bool AscStillValid(std::uintptr_t asc) {
     if (!ue::Reader::SafePtr(asc + 0x10, &cls) || cls < 0x10000) return false;
     if (g_cls_asc >= 0x10000 && cls != static_cast<std::uintptr_t>(g_cls_asc)) return false;
     float mx = 0.0f;
-    if (!SafeF32(asc + 0x1A3C, &mx) || !(mx > 0.0f) || mx > 1.0e9f) return false;
+    if (!ReadAscMaxHP(asc, &mx) || !(mx > 0.0f)) return false;
     return true;
 }
 
@@ -5018,9 +5148,9 @@ void TickMonsterScan() {
         if (!ue::Reader::SafePtr(act + 0x940, &asc) || !AscLooksLikeAsc(asc))
             asc = FindAscInActor(act);
         float hp = 0.0f, maxhp = 0.0f, atk = 0.0f;
-        const bool hp_ok = SafeF32(asc + 0x1A38, &hp);
-        SafeF32(asc + 0x1A3C, &maxhp);
-        SafeF32(asc + 0x1A50, &atk);
+        const bool hp_ok = ReadAscHP(asc, &hp);
+        ReadAscMaxHP(asc, &maxhp);
+        ReadAscAtk(asc, &atk);
         char b[224];
         std::snprintf(b, sizeof(b),
                       "mon[%d]: %s actor=0x%llX asc=0x%llX hp=%.1f/%.1f atk=%.1f hpok=%d",
@@ -5072,7 +5202,7 @@ static void LogHitTarget() {
     }
     if (player_asc < 0x10000) { PushLog("hit[tgt]: no player asc"); return; }
     std::uintptr_t actor = 0;
-    if (!ue::Reader::SafePtr(player_asc + 0x2388, &actor) || actor < 0x10000) {
+    if (!ue::Reader::SafePtr(player_asc + AscFieldOffset(0x2388), &actor) || actor < 0x10000) {
         PushLog("hit[tgt]: no m_AttackTarget");
         return;
     }
@@ -5081,9 +5211,9 @@ static void LogHitTarget() {
     char cname[64] = {0};
     ObjectClassName(actor, cname, sizeof(cname));
     float hp = 0.0f, maxhp = 0.0f, atk = 0.0f;
-    const bool ok = SafeF32(asc + 0x1A38, &hp);
-    SafeF32(asc + 0x1A3C, &maxhp);
-    SafeF32(asc + 0x1A50, &atk);
+    const bool ok = ReadAscHP(asc, &hp);
+    ReadAscMaxHP(asc, &maxhp);
+    ReadAscAtk(asc, &atk);
     char b[224];
     std::snprintf(b, sizeof(b), "hit[tgt]: %s actor=0x%llX asc=0x%llX hp=%.1f/%.1f atk=%.1f ok=%d",
                   cname, (unsigned long long)actor, (unsigned long long)asc,
@@ -5684,11 +5814,19 @@ static void ObjectNameUtf8(std::uintptr_t object, char* out, std::size_t cap) {
 // 瀹冪殑 UClass 灏辨槸 BP_ApplyGameplayEffectToTarget 闇€瑕佺殑 TSubclassOf銆?
 static std::uintptr_t LastDamageGeClass(std::uintptr_t asc) {
     if (asc < 0x10000) return 0;
-    std::uintptr_t def = 0;
-    if (!ue::Reader::SafePtr(asc + 0x2378, &def) || def < 0x10000) return 0;
-    std::uintptr_t cls = 0;
-    if (!ue::Reader::SafePtr(def + 0x10, &cls) || cls < 0x10000) return 0;
-    return cls;
+    // LastDamageGEDef 跟着属性块一起后移；位移锁定前按旧版本偏移读，锁定后先读新偏移，
+    // 新偏移读不出可用对象再回退旧偏移（兼容两种版本）。
+    const std::uintptr_t shifted = AscFieldOffset(0x2378);
+    const std::uintptr_t candidates[2] = {shifted, 0x2378};
+    for (int i = 0; i < 2; ++i) {
+        if (i == 1 && shifted == 0x2378) break;
+        std::uintptr_t def = 0;
+        std::uintptr_t cls = 0;
+        if (!ue::Reader::SafePtr(asc + candidates[i], &def) || def < 0x10000) continue;
+        if (!ue::Reader::SafePtr(def + 0x10, &cls) || cls < 0x10000) continue;
+        return cls;
+    }
+    return 0;
 }
 
 // 闈㈡澘閲岀殑銆屼激瀹抽噸澶嶆鏁般€嶆槸**姣忕娆℃暟**锛坮ate锛夛紝闂撮殧 = 1000/rate锛屾渶灏?16ms銆?
