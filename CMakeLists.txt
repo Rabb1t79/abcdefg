@@ -1312,6 +1312,11 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/NteVehicle/manifest.json
         PACKAGE_NAME NteVehicle
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteVehicle")
+    anomaly_add_plugin(anomaly_builtin_kx_exp
+        SOURCES plugins/AnomalyKXExp2/plugin_main.cpp
+        MANIFEST plugins/AnomalyKXExp2/manifest.json
+        PACKAGE_NAME AnomalyKXExp2
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/AnomalyKXExp2")
     anomaly_add_plugin(anomaly_builtin_night999
         SOURCES plugins/Night999/plugin.cpp
         MANIFEST plugins/Night999/manifest.json
@@ -1805,6 +1810,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
     # reaches their targets is built from the targets that actually exist.
     set(ANOMALY_BUILTIN_PLUGIN_TARGETS
         anomaly_builtin_nte_position anomaly_builtin_nte_teleport anomaly_builtin_nte_vehicle
+        anomaly_builtin_kx_exp
         anomaly_builtin_entity_esp anomaly_builtin_pink_paw_heist_esp
         anomaly_builtin_fake_uid anomaly_builtin_camera_tools
         anomaly_builtin_camera_blur_fix anomaly_builtin_better_pose
@@ -1832,6 +1838,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
     endforeach()
     if(MSVC)
         target_compile_options(anomaly_builtin_nte_vehicle PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_kx_exp PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_pink_paw_heist_esp PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_box_auto PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_combat_box PRIVATE /utf-8)
