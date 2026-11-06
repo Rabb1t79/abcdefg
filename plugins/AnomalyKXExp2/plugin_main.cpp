@@ -145,7 +145,7 @@ static char g_mon_list_name[kMonList][48] = {};
 static float g_mon_list_hp[kMonList] = {};
 static int g_mon_list_n = 0;
 static std::uintptr_t LastDamageGeClass(std::uintptr_t asc);
-static std::uintptr_t AscFieldOffset(std::uintptr_t legacy_offset);
+void RecordApplyGeClass(std::uintptr_t function, void* parameters);
 static bool ReadAscHP(std::uintptr_t asc, float* out);
 static bool ReadAscMaxHP(std::uintptr_t asc, float* out);
 static bool ReadAscAtk(std::uintptr_t asc, float* out);
@@ -1056,6 +1056,7 @@ static void ApplyTargetCapture(std::uintptr_t function, std::uintptr_t object, v
 // 200ms 再解一层，最多 6 次；成功或放弃时只写一条日志。
 static int g_resume_left = 0;
 static std::uint64_t g_resume_due_ms = 0;
+static int g_pause_depth = 0;   // 我们自己调 PauseGame 叠起来的层数
 static constexpr int kResumeAttempts = 6;
 
 void TickChronosPause() {
@@ -1101,64 +1102,72 @@ void TickChronosPause() {
     float seconds = 3600.0f;
     unsigned char pause_ret = 0;
     const char* via = "none";
-    const auto read_paused = [&]() -> unsigned char {
-        unsigned char value = 0;
-        if (g_is_paused_by_type_fn) {
-            PauseTypeParams q{kUltraSkillPauseType, 0};
-            if (call_pe(pc, reinterpret_cast<std::uintptr_t>(g_is_paused_by_type_fn), &q))
-                value = q.ret;
-        } else if (g_is_paused_fn) {
-            struct { unsigned char ret; } q{};
-            if (call_pe(pc, reinterpret_cast<std::uintptr_t>(g_is_paused_fn), &q))
-                value = q.ret;
-        }
-        return value;
-    };
-    const unsigned char paused_before = read_paused();
-    // 已经停住就不再叠一层：每多调一次 PauseGame，就要多一次 ResumeGame 才解得开。
-    if (req != 3 && paused_before != 0) {
+    // 游戏这些函数在参数区 0x1 返回的“布尔”在当前版本里并不是 0/1（实测 0x10/0x20/0xC0
+    // 这类值），不能拿来判断暂停状态。改成自己记层数：每成功 PauseGame 一次 +1，每成功
+    // ResumeGame 一次 -1；不会重复叠层，恢复时按层数逐层解开。
+    if (req != 3 && g_pause_depth > 0) {
         ok = true;
         via = "already";
+    }
+    if (req == 3 && g_pause_depth <= 0) {
+        ok = true;
+        via = "none-held";
     }
     // 优先走游戏自身的时停实现：PauseGame / ResumeGame(PG_UltraSkill_PlayPassiveEffect)。
     if (!ok && req == 3 && g_resume_fn) {
         PauseTypeParams p{kUltraSkillPauseType, 0};
         ok = call_pe(pc, reinterpret_cast<std::uintptr_t>(g_resume_fn), &p);
-        if (ok) { via = "resume"; pause_ret = p.ret; }
+        if (ok) {
+            via = "resume";
+            pause_ret = p.ret;
+            if (g_pause_depth > 0) --g_pause_depth;
+        }
     }
     if (!ok && req != 3 && g_pause_type_fn) {
         PauseTypeParams p{kUltraSkillPauseType, 0};
         ok = call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_type_fn), &p);
-        if (ok) { via = "pause-game"; pause_ret = p.ret; }
+        if (ok) {
+            via = "pause-game";
+            pause_ret = p.ret;
+            ++g_pause_depth;
+        }
     }
     // 旧路径（PausedGameExcludePlayerByTimer）作为兜底。
     if (!ok && req == 3 && g_pause_end_fn) {
         ok = call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_end_fn), nullptr);
-        if (ok) via = "timer-end";
+        if (ok) {
+            via = "timer-end";
+            g_pause_depth = 0;
+        }
     }
     if (!ok && g_pause_fn) {
         seconds = (req == 3) ? 0.0f : 3600.0f;
         ok = call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_fn), &seconds);
-        if (ok) via = "timer";
+        if (ok) {
+            via = "timer";
+            g_pause_depth = (req == 3) ? 0 : 1;
+        }
     }
     if (!ok && g_pause_fn) {
         ok = InvokeGameFunction(pc, reinterpret_cast<std::uintptr_t>(g_pause_fn),
                                 &seconds, sizeof(seconds));
-        if (ok) via = "service";
+        if (ok) {
+            via = "service";
+            g_pause_depth = (req == 3) ? 0 : 1;
+        }
     }
-    unsigned char paused_after = read_paused();
-    if (req == 3 && paused_after != 0 && g_resume_left <= 1) {
-        // 最后一搏：旧版按类型暂停可能来自计时暂停，把两条解除入口都走一遍。
+    if (req == 3 && g_pause_depth > 0 && g_resume_left <= 1) {
+        // 最后一搏：旧版计时暂停的解除入口也走一遍，直接放弃剩余层数。
         if (g_pause_end_fn) call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_end_fn), nullptr);
         if (g_pause_fn) {
             float zero = 0.0f;
             call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_fn), &zero);
         }
-        paused_after = read_paused();
-        if (paused_after == 0) via = "fallback-resume";
+        g_pause_depth = 0;
+        via = "fallback-resume";
     }
     if (req == 3) {
-        if (paused_after != 0 && g_resume_left > 1) {
+        if (g_pause_depth > 0 && g_resume_left > 1) {
             --g_resume_left;
             g_resume_due_ms = NowMs() + 200;
         } else {
@@ -1170,10 +1179,9 @@ void TickChronosPause() {
     if (req == 3 && g_resume_left != 0) return;
     char b[256];
     std::snprintf(b, sizeof(b),
-                  "chronos: req=%d ok=%d via=%s ret=%u before=%u paused_after=%u pc=0x%llX world=0x%llX pe=0x%llX pause_game=0x%llX resume=0x%llX",
+                  "chronos: req=%d ok=%d via=%s ret=%u depth=%d pc=0x%llX world=0x%llX pe=0x%llX pause_game=0x%llX resume=0x%llX",
                   req, ok ? 1 : 0, via, static_cast<unsigned>(pause_ret),
-                  static_cast<unsigned>(paused_before),
-                  static_cast<unsigned>(paused_after),
+                  g_pause_depth,
                   static_cast<unsigned long long>(pc),
                   static_cast<unsigned long long>(g_gworld_ptr),
                   static_cast<unsigned long long>(pe),
@@ -1198,6 +1206,9 @@ void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t fun
     // 杩欓噷鏄涓讳繚璇佺殑 Game 绾跨▼鍥炶皟鍩燂細ProcessEvent 鏂藉姞鍙兘鍦ㄨ繖閲屽仛锛堣 GeApplyStep锛夈€?
     if (g_ge_req != 0) ReplayApplyStep();
     if (g_cap_on != 0) PeRingPush(function, object);
+    // 记录游戏自己施加 GE 时用的类：回放需要“这一击真正生效的那个 GE”，
+    // 从调用参数里取，比读 ASC 上的缓存字段可靠，也不依赖对象布局。
+    RecordApplyGeClass(function, parameters);
     ApplyTargetCapture(function, object, parameters);
     // 涓嬮潰涓夊鍘嗗彶鎹曡幏鍦?UFunction 鏈В鏋愬墠浼氬姣忎釜浜嬩欢璋冪敤涓€娆?DecodeName锛堝涓?
     // resolve_utf8 鈫?State::mutex锛夈€傚畠浠睘浜庡凡鍏抽棴鐨勫疄楠岃矾寰勶紝榛樿涓嶅惎鐢ㄣ€?
@@ -3212,7 +3223,7 @@ void TickAscScan() {
         ue::Reader::SafePtr(o + 0x2370, &inst);
         ue::Reader::SafePtr(o + 0x2390, &coi);
         ue::Reader::SafePtr(o + 0x2368, &causer);
-        ue::Reader::SafePtr(o + AscFieldOffset(0x2388), &atk);
+        ue::Reader::SafePtr(o + 0x2388, &atk);
         const bool live = (inst >= 0x10000) || (coi >= 0x10000) || (causer >= 0x10000) || (atk >= 0x10000);
         if (!live) {
             ++g_asc_dead;
@@ -3350,7 +3361,7 @@ void TickReverseScan() {
         std::uintptr_t pc = 0, inst = 0, atk = 0;
         ue::Reader::SafePtr(asc + 0x2620, &pc);
         ue::Reader::SafePtr(asc + 0x2370, &inst);
-        ue::Reader::SafePtr(asc + AscFieldOffset(0x2388), &atk);
+        ue::Reader::SafePtr(asc + 0x2388, &atk);
         if (g_rev_logged < 8) {
             char db[160];
             std::snprintf(db, sizeof(db), "ascscan: rev char=0x%llX asc=0x%llX pc=0x%llX inst=0x%llX atk=0x%llX",
@@ -3981,7 +3992,7 @@ void ActivateGA() {
                       (unsigned long long)pawnAsc, (unsigned long long)g_player_asc, (unsigned long long)recv);
         PushLog(vb);
         if (recv >= 0x10000 && g_monster_actor >= 0x10000) {
-            const std::uintptr_t slot = recv + AscFieldOffset(0x2388);
+            const std::uintptr_t slot = recv + 0x2388;
             DWORD opT = 0;
             if (VirtualProtect(reinterpret_cast<LPVOID>(slot & ~0xFFFULL), 0x2000, PAGE_READWRITE, &opT) != 0) {
                 *reinterpret_cast<std::uintptr_t*>(slot) = g_monster_actor;
@@ -4123,7 +4134,7 @@ void ApplyGEDirect() {
         std::uintptr_t sInst = 0, sCoi = 0, sAtk = 0;
         ue::Reader::SafePtr(recv + 0x2370, &sInst);
         ue::Reader::SafePtr(recv + 0x2390, &sCoi);
-        ue::Reader::SafePtr(recv + AscFieldOffset(0x2388), &sAtk);
+        ue::Reader::SafePtr(recv + 0x2388, &sAtk);
         std::uintptr_t pick = 0;
         if (sInst >= 0x10000) pick = sInst;
         else if (sCoi >= 0x10000) pick = sCoi;
@@ -4277,6 +4288,59 @@ static int ApplyUfnIndex(std::uintptr_t function) {
     return -1;
 }
 
+// 记录游戏自己施加 GE 时用的类：ApplyGameplayEffect* 的参数块是
+// { TSubclassOf<UGameplayEffect> @0x00, UHTAbilitySystemComponent* @0x08 }（见 Dump 的
+// Params_ApplyGEToTarget），与对象布局无关。回放时优先用这里捕获到的 GE 类。
+struct ApplyGeRecord {
+    std::uintptr_t asc;
+    std::uintptr_t ge;
+    std::uint64_t ms;
+};
+static constexpr int kApplyGeRecords = 8;
+static ApplyGeRecord g_ge_rec[kApplyGeRecords];
+static int g_ge_rec_next = 0;
+
+// 结构校验：UClass 对象自身的类名以 "Class" 结尾（原生类是 "Class"，蓝图类是
+// "BlueprintGeneratedClass"）。不同 Apply 函数的参数布局不一样，误读时这个检查基本都会
+// 失败，避免把普通对象当成 GE 类记下来。
+static bool LooksLikeUClass(std::uintptr_t object) {
+    if (object < 0x10000) return false;
+    std::uintptr_t meta = 0;
+    unsigned int name_id = 0;
+    char name[64] = {0};
+    if (!ue::Reader::SafePtr(object + 0x10, &meta) || meta < 0x10000) return false;
+    if (!ue::Reader::SafeU32(meta + 0x18, &name_id) || name_id == 0) return false;
+    DecodeName(name_id, name, sizeof(name));
+    const std::size_t length = std::strlen(name);
+    return length >= 5 && std::strcmp(name + length - 5, "Class") == 0;
+}
+
+void RecordApplyGeClass(std::uintptr_t function, void* parameters) {
+    if (parameters == nullptr || function == 0 || g_au_n == 0) return;
+    if (ApplyUfnIndex(function) < 0) return;
+    std::uintptr_t ge = 0;
+    std::uintptr_t target = 0;
+    std::memcpy(&ge, parameters, sizeof(ge));
+    std::memcpy(&target, static_cast<unsigned char*>(parameters) + 8, sizeof(target));
+    if (!LooksLikeUClass(ge) || target < 0x10000) return;
+    if (g_cls_asc >= 0x10000) {
+        std::uintptr_t target_cls = 0;
+        if (!ue::Reader::SafePtr(target + 0x10, &target_cls) || target_cls != g_cls_asc) return;
+    }
+    g_ge_rec[g_ge_rec_next].asc = target;
+    g_ge_rec[g_ge_rec_next].ge = ge;
+    g_ge_rec[g_ge_rec_next].ms = NowMs();
+    g_ge_rec_next = (g_ge_rec_next + 1) % kApplyGeRecords;
+    static int logged = 0;
+    if (logged < 3) {
+        ++logged;
+        char b[128];
+        std::snprintf(b, sizeof(b), "ge: captured target=0x%llX ge=0x%llX",
+                      (unsigned long long)target, (unsigned long long)ge);
+        PushLog(b);
+    }
+}
+
 static void ObjectClassName(std::uintptr_t object, char* out, std::size_t cap) {
     if (out == nullptr || cap == 0) return;
     out[0] = 0;
@@ -4373,11 +4437,6 @@ static std::uintptr_t AttrHpOffset(std::uintptr_t asc) {
         return candidate;
     }
     return 0;
-}
-
-// ASC 上 0x2378 之后的字段（LastDamageGEDef / m_AttackTarget）跟随同一段位移。
-static std::uintptr_t AscFieldOffset(std::uintptr_t legacy_offset) {
-    return legacy_offset + g_attr_shift;
 }
 
 static bool ReadAscHP(std::uintptr_t asc, float* out) {
@@ -5202,7 +5261,7 @@ static void LogHitTarget() {
     }
     if (player_asc < 0x10000) { PushLog("hit[tgt]: no player asc"); return; }
     std::uintptr_t actor = 0;
-    if (!ue::Reader::SafePtr(player_asc + AscFieldOffset(0x2388), &actor) || actor < 0x10000) {
+    if (!ue::Reader::SafePtr(player_asc + 0x2388, &actor) || actor < 0x10000) {
         PushLog("hit[tgt]: no m_AttackTarget");
         return;
     }
@@ -5814,19 +5873,19 @@ static void ObjectNameUtf8(std::uintptr_t object, char* out, std::size_t cap) {
 // 瀹冪殑 UClass 灏辨槸 BP_ApplyGameplayEffectToTarget 闇€瑕佺殑 TSubclassOf銆?
 static std::uintptr_t LastDamageGeClass(std::uintptr_t asc) {
     if (asc < 0x10000) return 0;
-    // LastDamageGEDef 跟着属性块一起后移；位移锁定前按旧版本偏移读，锁定后先读新偏移，
-    // 新偏移读不出可用对象再回退旧偏移（兼容两种版本）。
-    const std::uintptr_t shifted = AscFieldOffset(0x2378);
-    const std::uintptr_t candidates[2] = {shifted, 0x2378};
-    for (int i = 0; i < 2; ++i) {
-        if (i == 1 && shifted == 0x2378) break;
-        std::uintptr_t def = 0;
-        std::uintptr_t cls = 0;
-        if (!ue::Reader::SafePtr(asc + candidates[i], &def) || def < 0x10000) continue;
-        if (!ue::Reader::SafePtr(def + 0x10, &cls) || cls < 0x10000) continue;
-        return cls;
+    // 优先用 ProcessEvent 里捕获到的实际 GE 类（RecordApplyGeClass）：这一击真正用的就是它，
+    // 不依赖 ASC 字段布局；当前版本把属性块后移了 0x18，但 0x2378 这一段没有跟着移。
+    std::uintptr_t captured = 0;
+    for (int i = 0; i < kApplyGeRecords; ++i) {
+        if (g_ge_rec[i].asc == asc && g_ge_rec[i].ge >= 0x10000) captured = g_ge_rec[i].ge;
     }
-    return 0;
+    if (captured >= 0x10000) return captured;
+    // 回退：旧版 ASC 缓存的 LastDamageGEDef（仅旧偏移，不再猜位移）。
+    std::uintptr_t def = 0;
+    std::uintptr_t cls = 0;
+    if (!ue::Reader::SafePtr(asc + 0x2378, &def) || def < 0x10000) return 0;
+    if (!ue::Reader::SafePtr(def + 0x10, &cls) || cls < 0x10000) return 0;
+    return cls;
 }
 
 // 闈㈡澘閲岀殑銆屼激瀹抽噸澶嶆鏁般€嶆槸**姣忕娆℃暟**锛坮ate锛夛紝闂撮殧 = 1000/rate锛屾渶灏?16ms銆?
