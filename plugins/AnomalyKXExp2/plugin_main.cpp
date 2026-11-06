@@ -5787,9 +5787,36 @@ static std::uintptr_t PlayerAscForApply() {
     g_player_asc = 0;                          // 失效：换场景/重生后重新解析
     std::uintptr_t pawn = ResolvePlayerPawn();
     if (pawn < 0x10000) pawn = g_player_pawn;
-    if (pawn < 0x10000) return 0;
+    if (pawn < 0x10000) {
+        static std::uint64_t next_log = 0;
+        const std::uint64_t now = NowMs();
+        if (now >= next_log) {
+            next_log = now + 2000;
+            char b[160];
+            std::snprintf(b, sizeof(b), "replay: no player pawn pc=0x%llX world=0x%llX",
+                          (unsigned long long)reinterpret_cast<std::uintptr_t>(g_pc_inst),
+                          (unsigned long long)g_gworld_ptr);
+            PushLog(b);
+        }
+        return 0;
+    }
     std::uintptr_t asc = 0;
-    if (!ue::Reader::SafePtr(pawn + 0x940, &asc) || !AscLooksLikeAsc(asc)) return 0;
+    if (!ue::Reader::SafePtr(pawn + 0x940, &asc) || !AscLooksLikeAsc(asc)) {
+        // 和怪物扫描同一条兜底：直接按类在 actor 的组件里找 ASC。
+        asc = FindAscInActor(pawn);
+        if (asc < 0x10000) {
+            static std::uint64_t next_log = 0;
+            const std::uint64_t now = NowMs();
+            if (now >= next_log) {
+                next_log = now + 2000;
+                char b[176];
+                std::snprintf(b, sizeof(b), "replay: no player asc pawn=0x%llX raw=0x%llX",
+                              (unsigned long long)pawn, (unsigned long long)asc);
+                PushLog(b);
+            }
+            return 0;
+        }
+    }
     g_player_asc = asc;
     g_player_pawn = pawn;
     return asc;
@@ -6143,16 +6170,43 @@ void ReplayApplyStep() {
     g_ge_req = 0;
     const int applies = g_ge_shots > 0 ? g_ge_shots : 0;
     g_ge_shots = 0;
-    if (g_ui_state.damage == 0 || g_rt_n == 0 || applies <= 0) return;
-    if (g_gec_ufn == 0 || g_gea_ufn == 0) return;
-    const std::uintptr_t src = PlayerAscForApply();
-    if (src < 0x10000) return;
+    const bool helpers = g_gec_ufn != 0 && g_gea_ufn != 0;
+    const bool ready = g_ui_state.damage != 0 && g_rt_n != 0 && applies > 0 && helpers;
+    const std::uintptr_t src = ready ? PlayerAscForApply() : 0;
     std::uintptr_t pe = static_cast<std::uintptr_t>(g_pe_addr);
     if (pe < 0x10000) {
         const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(GetModuleHandleA("HTGame.exe"));
         if (base != 0) pe = base + 0x3E41360;
     }
-    if (pe < 0x10000) return;
+    if (!ready || src < 0x10000 || pe < 0x10000) {
+        // 回放“界面有变化但没伤害”时，第一现场就是这里；限频把每个闸门的值写出来。
+        static std::uint64_t next_log = 0;
+        const std::uint64_t now = NowMs();
+        if (now >= next_log) {
+            next_log = now + 2000;
+            char b[256];
+            std::snprintf(b, sizeof(b),
+                          "replay: gate damage=%d rt=%d applies=%d helpers=%d/%d src=0x%llX "
+                          "player_asc=0x%llX pawn=0x%llX pc=0x%llX world=0x%llX pe=0x%llX",
+                          g_ui_state.damage, g_rt_n, applies, g_gec_ufn != 0 ? 1 : 0,
+                          g_gea_ufn != 0 ? 1 : 0, (unsigned long long)src,
+                          (unsigned long long)g_player_asc,
+                          (unsigned long long)g_player_pawn,
+                          (unsigned long long)reinterpret_cast<std::uintptr_t>(g_pc_inst),
+                          (unsigned long long)g_gworld_ptr, (unsigned long long)pe);
+            PushLog(b);
+        }
+        return;
+    }
+    static int apply_logged = 0;
+    if (apply_logged < 3) {
+        ++apply_logged;
+        char b[160];
+        std::snprintf(b, sizeof(b), "replay: apply src=0x%llX rt=%d ge=0x%llX tgt=0x%llX",
+                      (unsigned long long)src, g_rt_n, (unsigned long long)g_rt[0].ge_class,
+                      (unsigned long long)g_rt[0].asc);
+        PushLog(b);
+    }
     g_cap_suppress = 1;
     for (int k = 0; k < applies; ++k) {
         // 每一发都用新的 effect context：同一个 ctx 复用到多发表演上，语义没验证过。
