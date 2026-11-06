@@ -1038,8 +1038,8 @@ static void SendEventCapture(std::uintptr_t object, std::uintptr_t function, voi
 static void ApplyTargetCapture(std::uintptr_t function, std::uintptr_t object, void* parameters);
 
 // 时停：在游戏的 ProcessEvent 回调域里执行（暂停函数在这个上下文才真正生效）。
-// 关键修正：直连的是 ue5.ProcessEvent（HTGame.exe+0x18AACF0），不是之前误用的
-// AActorProcessEvent（+0x3E41360）；后者被宿主 hook 后会用错误的参数布局解引用而崩溃。
+// 关键修正：直连的是 ue5.ProcessEvent 本身，不是之前误用的 AActorProcessEvent
+// （+0x3E41360）；后者被宿主 hook 后会用错误的参数布局解引用而崩溃。
 void TickChronosPause() {
     if (g_chronos_req == 0) return;
     // 每次都取当前世界的 PlayerController：切关卡或重开游戏后旧实例会失效，
@@ -1050,12 +1050,10 @@ void TickChronosPause() {
     g_chronos_req = 0;
     const auto pc = reinterpret_cast<std::uintptr_t>(g_pc_inst);
 
-    std::uintptr_t pe = static_cast<std::uintptr_t>(g_pe_addr);
-    if (pe < 0x10000) {
-        const std::uintptr_t base =
-            reinterpret_cast<std::uintptr_t>(GetModuleHandleA("HTGame.exe"));
-        if (base != 0) pe = base + 0x18AACF0;   // Host Profile: ue5.ProcessEvent
-    }
+    // 只用 InitUe 解析出的 ue5.ProcessEvent（未 hook 时直连入口，已 hook 时走跳板）。
+    // 这里不能回填任何写死的 RVA：2.4.1 的 +0x18AACF0 在 2.6.0 上已经是另一个函数，
+    // 调用会“成功”返回但游戏状态完全不变。
+    const auto pe = static_cast<std::uintptr_t>(g_pe_addr);
     const auto call_pe = [pe](std::uintptr_t object, std::uintptr_t function,
                               void* parameters) -> bool {
         if (pe < 0x10000 || object < 0x10000 || function < 0x10000) return false;
@@ -6115,7 +6113,35 @@ constexpr const char* kGameSection = ".text";
 constexpr const char* kProcessEventSig =
     "40 55 56 57 41 54 41 55 41 56 41 57 48 81 EC 00 01 00 00 48 8D 6C 24 30 "
     "48 89 9D 28 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C5 48 89 85 C0 00 00 00";
+// 宿主在 game-ready 之前就给 ue5.ProcessEvent 装了 hook：入口前 5 字节被替换成 E9 rel32，
+// 原始 prologue 已经不在进程里，按 kProcessEventSig 扫描必然失败。用被改写后的入口特征
+// （E9 + 紧随其后的原始第 6 字节起）定位同一个入口，再拼一个可调用的跳板。
+constexpr const char* kProcessEventHookedSig =
+    "E9 ?? ?? ?? ?? 54 41 55 41 56 41 57 48 81 EC 00 01 00 00 48 8D 6C 24 30 "
+    "48 89 9D 28 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C5 48 89 85 C0 00 00 00";
 constexpr const char* kGWorldSig = "48 8B 1D ?? ?? ?? ?? 48 85 DB 74 ?? 41 B0 01";
+
+// 入口被 hook 覆盖掉的 5 字节是 40 55 56 57 41（push rbp / rsi / rdi / r13），全部是
+// 单条、无重定位的压栈指令。跳板重放这 5 字节后用绝对间接跳转进入 entry+5，栈帧与直接
+// 调用原函数完全一致；直接调 entry 会再次进入宿主 hook，宿主会把插件自己的调用再分发
+// 给订阅者一次。绝对跳转不依赖 ±2GB 内的内存，VirtualAlloc 落在哪里都能用。
+static std::uintptr_t BuildProcessEventThunk(std::uintptr_t entry) {
+    unsigned char stub[19] = {0x40, 0x55, 0x56, 0x57, 0x41,
+                              0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,
+                              0, 0, 0, 0, 0, 0, 0, 0};
+    const std::uintptr_t target = entry + 5;
+    std::memcpy(stub + 11, &target, sizeof(target));
+    void* memory = ::VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (memory == nullptr) return 0;
+    std::memcpy(memory, stub, sizeof(stub));
+    ::FlushInstructionCache(::GetCurrentProcess(), memory, sizeof(stub));
+    DWORD previous = 0;
+    if (!::VirtualProtect(memory, 0x1000, PAGE_EXECUTE_READ, &previous)) {
+        ::VirtualFree(memory, 0, MEM_RELEASE);
+        return 0;
+    }
+    return reinterpret_cast<std::uintptr_t>(memory);
+}
 
 // g_ue defined earlier
 
@@ -6158,8 +6184,28 @@ bool InitUe(const void* signature_service, const void* names_service) {
             g_gworld_instr = (unsigned long long)gaddr;
         std::uintptr_t peaddr = 0;
         AnomalyStringViewV1 pep{kProcessEventSig, std::strlen(kProcessEventSig)};
-        if (sig->resolve(sig->user, mod, sec, pep, &peaddr).code == ANOMALY_STATUS_V1_OK)
-            g_pe_addr = (unsigned long long)peaddr;
+        const bool direct =
+            sig->resolve(sig->user, mod, sec, pep, &peaddr).code == ANOMALY_STATUS_V1_OK &&
+            peaddr >= 0x10000;
+        std::uintptr_t hooked = 0;
+        bool thunked = false;
+        if (!direct) {
+            AnomalyStringViewV1 hop{kProcessEventHookedSig, std::strlen(kProcessEventHookedSig)};
+            if (sig->resolve(sig->user, mod, sec, hop, &hooked).code == ANOMALY_STATUS_V1_OK &&
+                hooked >= 0x10000) {
+                const std::uintptr_t thunk = BuildProcessEventThunk(hooked);
+                if (thunk != 0) {
+                    peaddr = static_cast<std::uintptr_t>(thunk);
+                    thunked = true;
+                }
+            }
+        }
+        if (direct || thunked) g_pe_addr = (unsigned long long)peaddr;
+        char pb[160];
+        std::snprintf(pb, sizeof(pb), "pe: resolve direct=%d hooked=0x%llX call=0x%llX",
+                      direct ? 1 : 0, (unsigned long long)hooked,
+                      (unsigned long long)g_pe_addr);
+        PushLog(pb);
     }
     g_sig_ok = 1;
     g_names_ok = 1;
