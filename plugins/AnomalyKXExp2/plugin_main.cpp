@@ -146,6 +146,7 @@ static float g_mon_list_hp[kMonList] = {};
 static int g_mon_list_n = 0;
 static std::uintptr_t LastDamageGeClass(std::uintptr_t asc);
 void RecordApplyGeClass(std::uintptr_t function, void* parameters);
+static std::uintptr_t ReadWorldFresh();
 static bool ReadAscHP(std::uintptr_t asc, float* out);
 static bool ReadAscMaxHP(std::uintptr_t asc, float* out);
 static bool ReadAscAtk(std::uintptr_t asc, float* out);
@@ -1064,7 +1065,21 @@ void TickChronosPause() {
     if (g_chronos_req == 0 && NowMs() < g_resume_due_ms) return;
     // 每次都取当前世界的 PlayerController：切关卡或重开游戏后旧实例会失效，
     // 对失效实例发送 UFunction 会返回成功但完全没有效果。
-    if (void* world_pc = PlayerControllerFromWorld()) g_pc_inst = world_pc;
+    // g_gworld_ptr 是早期缓存的旧世界（实测会和怪物扫描用的世界差一个关卡），
+    // 用旧世界取到的 PC 发 ProcessEvent 会直接异常，所以先用新读到的 GWorld 刷新。
+    {
+        const std::uintptr_t fresh = ReadWorldFresh();
+        if (fresh >= 0x10000) g_gworld_ptr = fresh;
+    }
+    if (void* world_pc = PlayerControllerFromWorld()) {
+        bool valid = true;
+        if (g_cls_pc >= 0x10000) {
+            std::uintptr_t cls = 0;
+            valid = ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(world_pc) + 0x10, &cls) &&
+                cls == g_cls_pc;
+        }
+        if (valid) g_pc_inst = world_pc;
+    }
     if (g_pc_inst == nullptr) return;
     const int req = g_chronos_req != 0 ? g_chronos_req : 3;
     g_chronos_req = 0;
@@ -1087,6 +1102,15 @@ void TickChronosPause() {
             reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(object),
                                         reinterpret_cast<void*>(function), parameters);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
+            static int faults = 0;
+            if (faults < 3) {
+                ++faults;
+                char fb[144];
+                std::snprintf(fb, sizeof(fb), "chronos: call fault pe=0x%llX obj=0x%llX fn=0x%llX",
+                              (unsigned long long)pe, (unsigned long long)object,
+                              (unsigned long long)function);
+                PushLog(fb);
+            }
             return false;
         }
         return true;
@@ -5871,21 +5895,93 @@ static void ObjectNameUtf8(std::uintptr_t object, char* out, std::size_t cap) {
 
 // HTAbilitySystemComponent::LastDamageGEDef @0x2378 鈥斺€?鍙楀鏂?ASC 缂撳瓨鐨勪笂涓€娆′激瀹?GE銆?
 // 瀹冪殑 UClass 灏辨槸 BP_ApplyGameplayEffectToTarget 闇€瑕佺殑 TSubclassOf銆?
+// 回放需要“这一击用的 GE 类”。当前版本 Apply* 调用不再经过 ProcessEvent，LastDamageGEDef
+// 的偏移也变了；退而求其次：在受害 ASC 上按“类继承自 UGameplayEffect”的条件找一次，
+// 找到后记住相对偏移，后续只读那个位置。校验走类继承指针比较，不看类名。
+static std::uintptr_t g_ge_field_offset = 0;
+static std::uintptr_t g_cls_ge = 0;
+
+static bool ClassIsOrDerivesFrom(std::uintptr_t cls, std::uintptr_t base) {
+    for (int depth = 0; depth < 24 && cls >= 0x10000 && base >= 0x10000; ++depth) {
+        if (cls == base) return true;
+        std::uintptr_t super = 0;
+        if (!ue::Reader::SafePtr(cls + 0x40, &super)) return false;
+        cls = super;
+    }
+    return false;
+}
+
+static std::uintptr_t FindGeClassOnAsc(std::uintptr_t asc) {
+    if (g_cls_ge < 0x10000) {
+        const unsigned int id = FindNameIdByPath("/Script/GameplayAbilities.GameplayEffect");
+        if (id == 0) return 0;
+        g_cls_ge = reinterpret_cast<std::uintptr_t>(g_ue.FindClassById(id));
+        if (g_cls_ge < 0x10000) return 0;
+    }
+    if (g_ge_field_offset != 0) {
+        std::uintptr_t obj = 0;
+        std::uintptr_t cls = 0;
+        if (!ue::Reader::SafePtr(asc + g_ge_field_offset, &obj) || obj < 0x10000) return 0;
+        if (!ue::Reader::SafePtr(obj + 0x10, &cls) || cls < 0x10000) return 0;
+        return ClassIsOrDerivesFrom(cls, g_cls_ge) ? cls : 0;
+    }
+    // LastDamageGEDef 旧位置 0x2378，属性块后移后大概在这附近；一次扫描 0x2200..0x2600。
+    char diag[220] = {0};
+    int diag_n = 0;
+    for (std::uintptr_t offset = 0x2200; offset <= 0x2600; offset += 8) {
+        std::uintptr_t obj = 0;
+        std::uintptr_t cls = 0;
+        if (!ue::Reader::SafePtr(asc + offset, &obj) || obj < 0x10000) continue;
+        if (!ue::Reader::SafePtr(obj + 0x10, &cls) || cls < 0x10000) continue;
+        if (ClassIsOrDerivesFrom(cls, g_cls_ge)) {
+            g_ge_field_offset = offset;
+            char b[128];
+            std::snprintf(b, sizeof(b), "ge: field=0x%llX cls=0x%llX", (unsigned long long)offset,
+                          (unsigned long long)cls);
+            PushLog(b);
+            return cls;
+        }
+        if (diag_n < 3) {
+            char name[64] = {0};
+            unsigned int nid = 0;
+            if (ue::Reader::SafeU32(cls + 0x18, &nid) && nid != 0) {
+                DecodeName(nid, name, sizeof(name));
+                if (name[0] != 0) {
+                    const std::size_t used = std::strlen(diag);
+                    const int written = std::snprintf(diag + used, sizeof(diag) - used,
+                                                      "%s0x%llX:%s", diag_n > 0 ? "," : "",
+                                                      (unsigned long long)offset, name);
+                    if (written > 0) ++diag_n;
+                }
+            }
+        }
+    }
+    if (diag_n > 0) {
+        char b[256];
+        std::snprintf(b, sizeof(b), "ge: scan miss %s", diag);
+        PushLog(b);
+    }
+    return 0;
+}
+
 static std::uintptr_t LastDamageGeClass(std::uintptr_t asc) {
     if (asc < 0x10000) return 0;
-    // 优先用 ProcessEvent 里捕获到的实际 GE 类（RecordApplyGeClass）：这一击真正用的就是它，
-    // 不依赖 ASC 字段布局；当前版本把属性块后移了 0x18，但 0x2378 这一段没有跟着移。
+    // 1) ProcessEvent 里捕获到的实际 GE 类（如果这条路径还存在）。
     std::uintptr_t captured = 0;
     for (int i = 0; i < kApplyGeRecords; ++i) {
         if (g_ge_rec[i].asc == asc && g_ge_rec[i].ge >= 0x10000) captured = g_ge_rec[i].ge;
     }
     if (captured >= 0x10000) return captured;
-    // 回退：旧版 ASC 缓存的 LastDamageGEDef（仅旧偏移，不再猜位移）。
+    // 2) 旧版 ASC 缓存的 LastDamageGEDef（仅旧偏移），必须确认是 GameplayEffect 子类。
     std::uintptr_t def = 0;
     std::uintptr_t cls = 0;
-    if (!ue::Reader::SafePtr(asc + 0x2378, &def) || def < 0x10000) return 0;
-    if (!ue::Reader::SafePtr(def + 0x10, &cls) || cls < 0x10000) return 0;
-    return cls;
+    if (ue::Reader::SafePtr(asc + 0x2378, &def) && def >= 0x10000 &&
+        ue::Reader::SafePtr(def + 0x10, &cls) && cls >= 0x10000 &&
+        ClassIsOrDerivesFrom(cls, g_cls_ge)) {
+        return cls;
+    }
+    // 3) 在 ASC 上找一次真实的 GE 实例。
+    return FindGeClassOnAsc(asc);
 }
 
 // 闈㈡澘閲岀殑銆屼激瀹抽噸澶嶆鏁般€嶆槸**姣忕娆℃暟**锛坮ate锛夛紝闂撮殧 = 1000/rate锛屾渶灏?16ms銆?
