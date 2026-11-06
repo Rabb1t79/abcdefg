@@ -1161,7 +1161,7 @@ void TickChronosPause() {
             via = "timer-end";
         }
         if (g_pause_fn) {
-            const float zero = 0.0f;
+            float zero = 0.0f;
             if (call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_fn), &zero)) {
                 ok = true;
                 via = "timer";
