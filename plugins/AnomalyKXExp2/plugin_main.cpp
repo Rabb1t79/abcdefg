@@ -6223,7 +6223,8 @@ void ReplayTick() {
 // target of this turn is hit on the same tick.
 void ReplayApplyStep() {
     g_ge_req = 0;
-    const int applies = g_ge_shots > 0 ? g_ge_shots : 0;
+    int applies = g_ge_shots > 0 ? g_ge_shots : 0;
+    if (applies > 4) applies = 4;   // 每帧最多补 4 发，顺带挡住任何写坏的值
     g_ge_shots = 0;
     const bool helpers = g_gec_ufn != 0 && g_gea_ufn != 0;
     const bool ready = g_ui_state.damage != 0 && g_rt_n != 0 && applies > 0 && helpers &&
@@ -6263,10 +6264,34 @@ void ReplayApplyStep() {
                       (unsigned long long)g_rt[0].asc);
         PushLog(b);
     }
+    // 参数缓冲必须按 UFunction::ParmsSize 给（profile: ufunction.parmsSize = 0xB6）。
+    // 旧代码固定 params 0x38 / ctx 0x18，比真实 ParmsSize 小，游戏往栈上越界写，
+    // 会把 applies 这类局部量冲掉——表现就是"施加计数乱跳、时有时无"。
+    unsigned short parms_size = 0;
+    unsigned short ctx_size = 0;
+    __try {
+        parms_size = *reinterpret_cast<const unsigned short*>(g_gea_ufn + 0xB6);
+        ctx_size = *reinterpret_cast<const unsigned short*>(g_gec_ufn + 0xB6);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        parms_size = 0;
+        ctx_size = 0;
+    }
+    if (parms_size < 0x38 || parms_size > 0x200) parms_size = 0x78;
+    if (ctx_size < 0x18 || ctx_size > 0x40) ctx_size = 0x18;
+    {
+        static int size_logged = 0;
+        if (size_logged < 3) {
+            ++size_logged;
+            char b[128];
+            std::snprintf(b, sizeof(b), "replay: parms apply=%u ctx=%u",
+                          static_cast<unsigned>(parms_size), static_cast<unsigned>(ctx_size));
+            PushLog(b);
+        }
+    }
     g_cap_suppress = 1;
     for (int k = 0; k < applies; ++k) {
         // 每一发都用新的 effect context：同一个 ctx 复用到多发表演上，语义没验证过。
-        unsigned char ctx[0x18] = {0};
+        unsigned char ctx[0x40] = {0};
         reinterpret_cast<PE_FN>(pe)(reinterpret_cast<void*>(src),
                                    reinterpret_cast<void*>(g_gec_ufn), ctx);
         for (int i = 0; i < g_rt_n; ++i) {
@@ -6277,7 +6302,7 @@ void ReplayApplyStep() {
                 ++g_rep_fail;   // 目标无效：这次算失败
                 continue;
             }
-            unsigned char params[0x38] = {0};
+            unsigned char params[0x200] = {0};
             const float level = 1.0f;
             std::memcpy(params + 0x00, &t.ge_class, 8);
             std::memcpy(params + 0x08, &t.asc, 8);
