@@ -338,7 +338,7 @@ UiState g_ui_state;
 int GmToggleOn() { return g_ui_state.gm; }
 bool g_ui_dirty = false;
 
-constexpr const char* kWindowTitle = "AnomalyUltimate##";
+constexpr const char* kWindowTitle = "AnomalyKX Exp";
 constexpr const char* kDamageSchemaId = "anomaly.ultimate.damage-replay.settings";
 
 // 勾选状态/次数持久化：借 anomaly.config 的 schema 文档（宿主持久化）。
@@ -5956,11 +5956,22 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     }
 
     static int open = 1;
+    if (ui->set_next_window_size != nullptr) {
+        ui->set_next_window_size(ui->user, 760.0F, 620.0F, 0U);
+    }
     AnomalyStringViewV1 title{kWindowTitle, std::strlen(kWindowTitle)};
-    if (ui->begin_window(ui->user, title, &open, 0) != 0) {
+    const int began = ui->begin_window(ui->user, title, &open, 0);
+    if (began != 0) {
         DrawTabs(ui);
     }
     ui->end_window(ui->user);
+    static int reported = 0;
+    if (reported < 3) {
+        ++reported;
+        char rb[96];
+        std::snprintf(rb, sizeof(rb), "window: begin=%d open=%d", began, open);
+        PushLog(rb);
+    }
 }
 
 const AnomalyPluginDescriptorV1 kDescriptor = {
