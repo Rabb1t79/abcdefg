@@ -1071,16 +1071,20 @@ void TickChronosPause() {
         const std::uintptr_t fresh = ReadWorldFresh();
         if (fresh >= 0x10000) g_gworld_ptr = fresh;
     }
-    if (void* world_pc = PlayerControllerFromWorld()) {
-        bool valid = true;
-        if (g_cls_pc >= 0x10000) {
-            std::uintptr_t cls = 0;
-            valid = ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(world_pc) + 0x10, &cls) &&
-                cls == g_cls_pc;
+    if (void* world_pc = PlayerControllerFromWorld()) g_pc_inst = world_pc;
+    if (g_pc_inst == nullptr) {
+        // 旧实现这里直接 return，看不出为什么没反应；限频写一行，便于定位。
+        static std::uint64_t next_log = 0;
+        const std::uint64_t now = NowMs();
+        if (now >= next_log) {
+            next_log = now + 2000;
+            char b[128];
+            std::snprintf(b, sizeof(b), "chronos: no player controller world=0x%llX",
+                          (unsigned long long)g_gworld_ptr);
+            PushLog(b);
         }
-        if (valid) g_pc_inst = world_pc;
+        return;
     }
-    if (g_pc_inst == nullptr) return;
     const int req = g_chronos_req != 0 ? g_chronos_req : 3;
     g_chronos_req = 0;
     if (req == 3) {
@@ -1127,8 +1131,8 @@ void TickChronosPause() {
     unsigned char pause_ret = 0;
     const char* via = "none";
     // 游戏这些函数在参数区 0x1 返回的“布尔”在当前版本里并不是 0/1（实测 0x10/0x20/0xC0
-    // 这类值），不能拿来判断暂停状态。改成自己记层数：每成功 PauseGame 一次 +1，每成功
-    // ResumeGame 一次 -1；不会重复叠层，恢复时按层数逐层解开。
+    // 这类值），不能拿来判断暂停状态。改成自己记层数：PauseGame 成功一次 +1，恢复时把
+    // 三条已知的解除入口依次都走一遍——只调 ResumeGame 实测“调用成功但游戏仍然暂停”。
     if (req != 3 && g_pause_depth > 0) {
         ok = true;
         via = "already";
@@ -1137,15 +1141,33 @@ void TickChronosPause() {
         ok = true;
         via = "none-held";
     }
-    // 优先走游戏自身的时停实现：PauseGame / ResumeGame(PG_UltraSkill_PlayPassiveEffect)。
-    if (!ok && req == 3 && g_resume_fn) {
-        PauseTypeParams p{kUltraSkillPauseType, 0};
-        ok = call_pe(pc, reinterpret_cast<std::uintptr_t>(g_resume_fn), &p);
-        if (ok) {
-            via = "resume";
-            pause_ret = p.ret;
-            if (g_pause_depth > 0) --g_pause_depth;
+    if (!ok && req == 3) {
+        // 恢复：按层数重复，再把旧版计时暂停的两条解除入口也走一遍。
+        int layers = g_pause_depth > 0 ? g_pause_depth : 1;
+        if (layers > 4) layers = 4;
+        for (int i = 0; i < layers; ++i) {
+            if (g_resume_fn) {
+                PauseTypeParams p{kUltraSkillPauseType, 0};
+                if (call_pe(pc, reinterpret_cast<std::uintptr_t>(g_resume_fn), &p)) {
+                    ok = true;
+                    via = "resume";
+                    pause_ret = p.ret;
+                }
+            }
         }
+        if (g_pause_end_fn &&
+            call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_end_fn), nullptr)) {
+            ok = true;
+            via = "timer-end";
+        }
+        if (g_pause_fn) {
+            const float zero = 0.0f;
+            if (call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_fn), &zero)) {
+                ok = true;
+                via = "timer";
+            }
+        }
+        g_pause_depth = 0;
     }
     if (!ok && req != 3 && g_pause_type_fn) {
         PauseTypeParams p{kUltraSkillPauseType, 0};
@@ -1157,47 +1179,23 @@ void TickChronosPause() {
         }
     }
     // 旧路径（PausedGameExcludePlayerByTimer）作为兜底。
-    if (!ok && req == 3 && g_pause_end_fn) {
-        ok = call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_end_fn), nullptr);
-        if (ok) {
-            via = "timer-end";
-            g_pause_depth = 0;
-        }
-    }
-    if (!ok && g_pause_fn) {
-        seconds = (req == 3) ? 0.0f : 3600.0f;
+    if (!ok && req != 3 && g_pause_fn) {
+        seconds = 3600.0f;
         ok = call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_fn), &seconds);
         if (ok) {
             via = "timer";
-            g_pause_depth = (req == 3) ? 0 : 1;
+            g_pause_depth = 1;
         }
     }
-    if (!ok && g_pause_fn) {
+    if (!ok && req != 3 && g_pause_fn) {
         ok = InvokeGameFunction(pc, reinterpret_cast<std::uintptr_t>(g_pause_fn),
                                 &seconds, sizeof(seconds));
         if (ok) {
             via = "service";
-            g_pause_depth = (req == 3) ? 0 : 1;
+            g_pause_depth = 1;
         }
     }
-    if (req == 3 && g_pause_depth > 0 && g_resume_left <= 1) {
-        // 最后一搏：旧版计时暂停的解除入口也走一遍，直接放弃剩余层数。
-        if (g_pause_end_fn) call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_end_fn), nullptr);
-        if (g_pause_fn) {
-            float zero = 0.0f;
-            call_pe(pc, reinterpret_cast<std::uintptr_t>(g_pause_fn), &zero);
-        }
-        g_pause_depth = 0;
-        via = "fallback-resume";
-    }
-    if (req == 3) {
-        if (g_pause_depth > 0 && g_resume_left > 1) {
-            --g_resume_left;
-            g_resume_due_ms = NowMs() + 200;
-        } else {
-            g_resume_left = 0;
-        }
-    }
+    if (req == 3) g_resume_left = 0;
     g_chronos_rc = ok ? req : -req;
     // 还在逐层解暂停时不刷日志，只在最后一次（成功或放弃）写一行。
     if (req == 3 && g_resume_left != 0) return;
@@ -1360,6 +1358,12 @@ static const char* kHotkeyLabels[3] = {
 
 void ANOMALY_CALL OnHotkey(void* user, AnomalyGenerationHandleV1, const AnomalyInputSnapshotV1*) {
     const int index = static_cast<int>(reinterpret_cast<std::uintptr_t>(user));
+    // 热键是唯一不依赖面板的入口；记一行，方便区分“没收到按键”和“收到但没生效”。
+    {
+        char b[64];
+        std::snprintf(b, sizeof(b), "hotkey: index=%d", index);
+        PushLog(b);
+    }
     if (index == 3) {
         // F3 = 恢复速度（解除暂停）
         g_hot_restore = 1;
@@ -5913,10 +5917,13 @@ static bool ClassIsOrDerivesFrom(std::uintptr_t cls, std::uintptr_t base) {
 
 static std::uintptr_t FindGeClassOnAsc(std::uintptr_t asc) {
     if (g_cls_ge < 0x10000) {
-        const unsigned int id = FindNameIdByPath("/Script/GameplayAbilities.GameplayEffect");
-        if (id == 0) return 0;
-        g_cls_ge = reinterpret_cast<std::uintptr_t>(g_ue.FindClassById(id));
-        if (g_cls_ge < 0x10000) return 0;
+        unsigned int id = 0;
+        g_ue.NameId("GameplayEffect", &id);
+        if (id != 0) g_cls_ge = reinterpret_cast<std::uintptr_t>(g_ue.FindClassById(id));
+        if (g_cls_ge < 0x10000) {
+            PushLog("ge: UGameplayEffect class not resolved");
+            return 0;
+        }
     }
     if (g_ge_field_offset != 0) {
         std::uintptr_t obj = 0;
