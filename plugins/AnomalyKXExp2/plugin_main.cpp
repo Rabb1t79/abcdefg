@@ -5899,15 +5899,21 @@ static void ObjectNameUtf8(std::uintptr_t object, char* out, std::size_t cap) {
 
 // HTAbilitySystemComponent::LastDamageGEDef @0x2378 鈥斺€?鍙楀鏂?ASC 缂撳瓨鐨勪笂涓€娆′激瀹?GE銆?
 // 瀹冪殑 UClass 灏辨槸 BP_ApplyGameplayEffectToTarget 闇€瑕佺殑 TSubclassOf銆?
-// 回放需要“这一击用的 GE 类”。当前版本 Apply* 调用不再经过 ProcessEvent，LastDamageGEDef
-// 的偏移也变了；退而求其次：在受害 ASC 上按“类继承自 UGameplayEffect”的条件找一次，
-// 找到后记住相对偏移，后续只读那个位置。校验走类继承指针比较，不看类名。
+// 回放需要“这一击用的 GE 类”。当前版本 Apply* 调用不再经过 ProcessEvent，
+// LastDamageGEDef 的旧偏移读出来是 0；退而求其次：在受害 ASC 上按“类的继承链里
+// 有 GameplayEffect”的条件找一次，找到后记住相对偏移。校验按类名走继承链，不依赖
+// 额外解析 UGameplayEffect 类（那条路实测 NameId 解析失败，而且全对象扫描很贵）。
 static std::uintptr_t g_ge_field_offset = 0;
-static std::uintptr_t g_cls_ge = 0;
+static int g_ge_scan_tries = 0;
+static int g_ge_scan_given_up = 0;
 
-static bool ClassIsOrDerivesFrom(std::uintptr_t cls, std::uintptr_t base) {
-    for (int depth = 0; depth < 24 && cls >= 0x10000 && base >= 0x10000; ++depth) {
-        if (cls == base) return true;
+static bool ClassChainHasName(std::uintptr_t cls, const char* want) {
+    for (int depth = 0; depth < 20 && cls >= 0x10000; ++depth) {
+        unsigned int nid = 0;
+        char nm[96] = {0};
+        if (!ue::Reader::SafeU32(cls + 0x18, &nid) || nid == 0) return false;
+        DecodeName(nid, nm, sizeof(nm));
+        if (std::strcmp(nm, want) == 0) return true;
         std::uintptr_t super = 0;
         if (!ue::Reader::SafePtr(cls + 0x40, &super)) return false;
         cls = super;
@@ -5916,31 +5922,29 @@ static bool ClassIsOrDerivesFrom(std::uintptr_t cls, std::uintptr_t base) {
 }
 
 static std::uintptr_t FindGeClassOnAsc(std::uintptr_t asc) {
-    if (g_cls_ge < 0x10000) {
-        unsigned int id = 0;
-        g_ue.NameId("GameplayEffect", &id);
-        if (id != 0) g_cls_ge = reinterpret_cast<std::uintptr_t>(g_ue.FindClassById(id));
-        if (g_cls_ge < 0x10000) {
-            PushLog("ge: UGameplayEffect class not resolved");
-            return 0;
-        }
-    }
     if (g_ge_field_offset != 0) {
         std::uintptr_t obj = 0;
         std::uintptr_t cls = 0;
         if (!ue::Reader::SafePtr(asc + g_ge_field_offset, &obj) || obj < 0x10000) return 0;
         if (!ue::Reader::SafePtr(obj + 0x10, &cls) || cls < 0x10000) return 0;
-        return ClassIsOrDerivesFrom(cls, g_cls_ge) ? cls : 0;
+        return ClassChainHasName(cls, "GameplayEffect") ? cls : 0;
     }
-    // LastDamageGEDef 旧位置 0x2378，属性块后移后大概在这附近；一次扫描 0x2200..0x2600。
+    if (g_ge_scan_given_up != 0) return 0;
+    // 每次武装都全窗口扫一遍太贵：最多扫 3 次，之后放弃并留一行日志。
+    if (++g_ge_scan_tries > 3) {
+        g_ge_scan_given_up = 1;
+        PushLog("ge: scan given up");
+        return 0;
+    }
+    // LastDamageGEDef 旧位置 0x2378，属性块后移后大概在附近；扫 0x2000..0x2800。
     char diag[220] = {0};
     int diag_n = 0;
-    for (std::uintptr_t offset = 0x2200; offset <= 0x2600; offset += 8) {
+    for (std::uintptr_t offset = 0x2000; offset <= 0x2800; offset += 8) {
         std::uintptr_t obj = 0;
         std::uintptr_t cls = 0;
         if (!ue::Reader::SafePtr(asc + offset, &obj) || obj < 0x10000) continue;
         if (!ue::Reader::SafePtr(obj + 0x10, &cls) || cls < 0x10000) continue;
-        if (ClassIsOrDerivesFrom(cls, g_cls_ge)) {
+        if (ClassChainHasName(cls, "GameplayEffect")) {
             g_ge_field_offset = offset;
             char b[128];
             std::snprintf(b, sizeof(b), "ge: field=0x%llX cls=0x%llX", (unsigned long long)offset,
@@ -5984,7 +5988,7 @@ static std::uintptr_t LastDamageGeClass(std::uintptr_t asc) {
     std::uintptr_t cls = 0;
     if (ue::Reader::SafePtr(asc + 0x2378, &def) && def >= 0x10000 &&
         ue::Reader::SafePtr(def + 0x10, &cls) && cls >= 0x10000 &&
-        ClassIsOrDerivesFrom(cls, g_cls_ge)) {
+        ClassChainHasName(cls, "GameplayEffect")) {
         return cls;
     }
     // 3) 在 ASC 上找一次真实的 GE 实例。
@@ -6223,8 +6227,7 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     ProbeExtraServices();
     if (g_probe_on) ProbeScanStep();
     TickFeatures();
-    if (g_cap_on != 0 && !g_pe_subscribed && (g_draw_count % 30) == 0) EnsureSubscription();
-    if (g_cap_on == 0 && g_pe_subscribed != 0) ReleaseCaptureSubscription();
+    if (!g_pe_subscribed && (g_draw_count % 30) == 0) EnsureSubscription();
     CollectApplyUfns();
     ConsumePendingCapture();
     ConsumeEcsCapture();
