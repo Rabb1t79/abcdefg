@@ -1,0 +1,100 @@
+#define UNICODE
+#define _UNICODE
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <windowsx.h>
+#include <commctrl.h>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cmath>
+#include <cstdarg>
+#include <cstring>
+#include <cstdlib>
+#include <new>
+#include <stdio.h>
+#include <stdexcept>
+#include <cstdint>
+#include <cstdio>
+#include <cwchar>
+#include <memory>
+#include <mutex>
+#include <numeric>
+#include <random>
+#include <limits>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "comctl32.lib")
+
+namespace {
+constexpr int COLS = 10;
+constexpr int ROWS = 20;
+constexpr UINT WM_APP_LOG = WM_APP + 1;
+constexpr UINT WM_APP_REGION = WM_APP + 2;
+constexpr UINT WM_APP_FINISHED = WM_APP + 3;
+constexpr UINT WM_APP_TRAIN_STATS = WM_APP + 4;
+constexpr int ID_WINDOW = 1001;
+constexpr int ID_REFRESH = 1002;
+constexpr int ID_SELECT = 1003;
+constexpr int ID_TEST = 1004;
+constexpr int ID_START = 1005;
+constexpr int ID_STOP = 1006;
+constexpr int ID_THRESHOLD = 1007;
+constexpr int ID_PREVIEW = 1008;
+constexpr int ID_LOG = 1009;
+constexpr int ID_REGION = 1010;
+constexpr int ID_STATUS = 1011;
+constexpr int ID_HELP = 1012;
+constexpr int ID_SCORE = 1013;
+constexpr int ID_SUBMIT_SCORE = 1014;
+constexpr int ID_LEARNING_RATE = 1015;
+constexpr int ID_EPSILON = 1016;
+constexpr int ID_TEMPERATURE = 1017;
+constexpr int ID_RESET_MODEL = 1018;
+constexpr int ID_TRAIN_STATS = 1019;
+constexpr int HOTKEY_STOP = 1;
+
+struct Cell { int x{}, y{}; };
+struct Rgb { int r{}, g{}, b{}; };
+struct Pixel { uint8_t b{}, g{}, r{}, a{}; };
+struct Rect { int left{}, top{}, width{}, height{}; };
+
+static HINSTANCE g_instance{};
+static HWND g_mainWindow{};
+static int g_virtualLeft{}, g_virtualTop{};
+static POINT g_selectStart{};
+static POINT g_selectCurrent{};
+static bool g_selectDragging{};
+
+std::wstring Format(const wchar_t* fmt, ...) {
+    wchar_t buffer[1024]{};
+    va_list args;
+    va_start(args, fmt);
+    _vsnwprintf_s(buffer, _countof(buffer), _TRUNCATE, fmt, args);
+    va_end(args);
+    return buffer;
+}
+
+void PostLog(HWND hwnd, const std::wstring& message) {
+    if (!IsWindow(hwnd)) return;
+    auto* copy = new (std::nothrow) std::wstring(message);
+    if (copy && !PostMessageW(hwnd, WM_APP_LOG, 0, reinterpret_cast<LPARAM>(copy))) delete copy;
+}
+
+std::vector<Cell> Normalize(std::vector<Cell> cells) {
+    if (cells.empty()) return cells;
+    int minX = cells.front().x, minY = cells.front().y;
+    for (const auto& c : cells) { minX = (std::min)(minX, c.x); minY = (std::min)(minY, c.y); }
+    for (auto& c : cells) { c.x -= minX; c.y -= minY; }
+    std::sort(cells.begin(), cells.end(), [](const Cell& a, const Cell& b) {
+        return a.y == b.y ? a.x < b.x : a.y < b.y;
+    });
+    return cells;
+}

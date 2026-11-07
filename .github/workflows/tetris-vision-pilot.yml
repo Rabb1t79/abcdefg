@@ -1,0 +1,46 @@
+name: Tetris Vision Pilot - Windows
+
+on:
+  push:
+    branches:
+      - feat/tetris-vision-pilot-20261108
+    paths:
+      - "tools/TetrisVisionPilot/**"
+      - ".github/workflows/tetris-vision-pilot.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Windows x64
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S tools/TetrisVisionPilot -B build/tetris-vision-pilot -A x64
+
+      - name: Build
+        run: cmake --build build/tetris-vision-pilot --config Release --parallel
+
+      - name: Verify executable
+        shell: pwsh
+        run: |
+          $exe = "build/tetris-vision-pilot/Release/TetrisVisionPilot.exe"
+          if (!(Test-Path $exe)) {
+            throw "Expected executable was not produced: $exe"
+          }
+          Get-Item $exe | Format-List FullName,Length,LastWriteTime
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: TetrisVisionPilot-Windows-x64
+          if-no-files-found: error
+          path: |
+            build/tetris-vision-pilot/Release/TetrisVisionPilot.exe
+            tools/TetrisVisionPilot/README.md
+            tools/TetrisVisionPilot/LEARNING_GUIDE.md
