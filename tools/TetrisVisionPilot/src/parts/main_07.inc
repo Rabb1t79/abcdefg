@@ -7,7 +7,7 @@
         while(!s->stop.load()) {
             std::wstring capError;
             VisionResult vision=AnalyzeStable(rect,threshold,capError);
-            if(!capError.empty()) throw std::runtime_error("屏幕截图失败："+std::string("请确认游戏窗口可见且棋盘区域有效。"));
+            if(!capError.empty()) { log(L"屏幕截图失败："+capError); break; }
             if(!vision.hasActive) {
                 if(GetTickCount()-noPieceSince>8000) { log(L"连续 8 秒未识别到出生区方块，已停止。请检查棋盘框选范围和识别阈值。"); break; }
                 SleepCheck(s->stop,120); continue;
@@ -16,7 +16,7 @@
             Candidate piece=vision.active;
             SleepCheck(s->stop,85); if(s->stop.load())break;
             VisionResult check=AnalyzeStable(rect,threshold,capError);
-            if(!capError.empty()) throw std::runtime_error("复核截图失败。");
+            if(!capError.empty()) { log(L"复核截图失败："+capError); break; }
             if(!check.hasActive || check.active.name!=piece.name || check.active.rotation!=piece.rotation || check.active.minX!=piece.minX) continue;
             piece=check.active;
             Board board=BoardWithoutActive(check);
