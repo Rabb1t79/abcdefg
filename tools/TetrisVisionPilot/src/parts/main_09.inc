@@ -105,6 +105,11 @@ HWND SelectedWindow(AppState* s) {
 
 void TestRecognition(AppState* s) {
     if(s->boardRect.width<=0){MessageBoxW(s->hwnd,L"请先点击“框选棋盘区域”。",L"尚未选择棋盘",MB_ICONWARNING);return;}
+    if(s->boardRect.width<80 || s->boardRect.height<160) {
+        MessageBoxW(s->hwnd,Format(L"棋盘区域只有 %d × %d px；10×20 棋盘至少需要 80 × 160 px。请重新框选棋盘。",
+            s->boardRect.width,s->boardRect.height).c_str(),L"棋盘区域尺寸不正确",MB_ICONWARNING);
+        return;
+    }
     CapturedImage image;std::wstring error;
     if(!CaptureScreenRect(s->boardRect,image,error)){MessageBoxW(s->hwnd,error.c_str(),L"截图失败",MB_ICONERROR);AppendLog(s,error);return;}
     VisionResult result=Analyze(image,ReadThreshold(s));s->previewData=result;s->hasPreview=true;InvalidateRect(s->preview,nullptr,TRUE);

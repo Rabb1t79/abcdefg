@@ -68,8 +68,12 @@ struct CapturedImage {
 };
 
 bool CaptureScreenRect(const Rect& rect, CapturedImage& out, std::wstring& error) {
-    if (rect.width < 80 || rect.height < 160 || rect.width > 10000 || rect.height > 10000) {
-        error = L"棋盘区域尺寸不合理，请重新框选完整的 10×20 棋盘。";
+    // Generic screen capture is shared by the board and the much smaller NEXT panel.
+    // Validate only safe bitmap bounds here; the board-specific 10x20 minimum is checked
+    // by TestRecognition before it calls Analyze().
+    if (rect.width < 8 || rect.height < 8 || rect.width > 10000 || rect.height > 10000) {
+        error = Format(L"截图区域尺寸无效：%d × %d px（允许范围 8–10000 px）。",
+            rect.width, rect.height);
         return false;
     }
     HDC screen = GetDC(nullptr);
