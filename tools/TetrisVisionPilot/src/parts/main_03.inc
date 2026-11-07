@@ -1,15 +1,9 @@
-            result.active.centerX = centerX;
-            result.active.centerY = centerY;
-        }
-    }
-    return result;
-}
 
 using Board = std::array<std::array<int, COLS>, ROWS>;
 Board BoardWithoutActive(const VisionResult& v) {
     Board b{};
     for (int y=0;y<ROWS;++y) for (int x=0;x<COLS;++x) b[y][x] = v.occupied[y][x] ? 1 : 0;
-    if (v.hasActive) for (const auto& c : v.active.cells) b[c.y][c.x] = 0;
+    if (v.hasActive) for (const auto& c : v.active.cells) if (c.y >= 0 && c.y < ROWS && c.x >= 0 && c.x < COLS) b[c.y][c.x] = 0;
     return b;
 }
 
