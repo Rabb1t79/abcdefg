@@ -17,16 +17,6 @@ typedef struct AnomalyUe5FunctionsServiceV1 {
         void* parameters, size_t parameters_size);
 } AnomalyUe5FunctionsServiceV1;
 
-#ifndef ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID
-typedef struct AnomalyNteDamageChainServiceV1 {
-    uint32_t struct_size;
-    uint32_t service_version;
-    void* user;
-    AnomalyStatusV1 (ANOMALY_CALL *apply_address)(void* user, uintptr_t* address);
-    AnomalyStatusV1 (ANOMALY_CALL *gate_address)(void* user, uintptr_t* address);
-} AnomalyNteDamageChainServiceV1;
-#endif
-
 #ifdef __cplusplus
 }
 #endif

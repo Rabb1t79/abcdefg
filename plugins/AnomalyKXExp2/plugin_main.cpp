@@ -86,7 +86,6 @@ struct Ctx {
     const AnomalyHostApiV1* host;
     const void* core;
     const void* config;
-    const void* signature;
     const void* ue5_framework;
     const void* ue5_names;
     const void* ue5_objects;
@@ -95,7 +94,6 @@ struct Ctx {
     const void* patch;
     const void* process_event;
     const void* hook;
-    const void* damage_chain;
     const void* input;
     const void* entities;
     const void* actors;
@@ -222,7 +220,10 @@ static int g_draw_count = 0;
 static int g_names_ok = 0;
 void TickFeatures();
 void TickChronosPause();
-bool InitUe(const void* signature_service, const void* names_service);
+bool InitUe(const void* names_service);
+static std::uintptr_t g_dc_apply_addr = 0;
+static std::uintptr_t g_dc_gate_addr = 0;
+void ResolveDamageChain();
 
 void TickCombatEvents();
 void ReleaseHooks();
@@ -248,7 +249,7 @@ void UnwatchProcessEvent();
 void TryInvokeApplyGE();   // Game 缂備焦宕樺▔鏇㈠煝婵傜鏄ラ柣鏃€妞块崵銏犆圭粭鍝勨偓鏇㈩敊婵犲啰顩查悗锝傛櫆椤愪粙鏌ㄥ☉妯煎閻㈩垯鍗抽弻锕傚醇濠靛牏锛涢梺鍝勫暢椤旀劗妲?
 
 void ChronosLoad(const AnomalyHostApiV1*, void** out) {
-    if (!g_ctx || !g_ctx->signature) { *out = nullptr; return; }
+    if (!g_ctx) { *out = nullptr; return; }
     *out = g_ctx;  // 闂佺儵鏅╅崰妤呮偉閿濆洦鍠嗛柨婵嗘閳ь兛绮欓弫宥夊捶椤ь溁sedGameExcludePlayerByTimer闂佹寧绋戦ˇ闈涖€掗懜鍨氦闁归偊鍨奸弨浠嬫煛閸愩劌顣虫い鎺斿厴瀹曘儱顓艰箛鏇狀槷闁?manifest
 }
 void DamageLoad(const AnomalyHostApiV1*, void** out) {
@@ -260,7 +261,7 @@ void VolleyLoad(const AnomalyHostApiV1*, void** out) {
     *out = g_ctx;
 }
 void GmLoad(const AnomalyHostApiV1*, void** out) {
-    if (!g_ctx || !g_ctx->signature) { *out = nullptr; return; }
+    if (!g_ctx) { *out = nullptr; return; }
     *out = g_ctx;
 }
 void Noop(void*) {}
@@ -275,7 +276,6 @@ AnomalyStatusV1 ANOMALY_CALL on_load(const AnomalyHostApiV1* host, void** out) {
     // 闂佸憡顭囬崰搴綖?on_load 闂佹眹鍔岀€氼厼锕㈤崶顒€绀夐柍鈺佸暟閸欌偓闁荤姴娲㈤崹浠嬪Υ鎼淬垺鍎熼煫鍥ュ劤缁€鍓唀t_trace 闁诲骸婀遍崑鐐电矈閹绢喗鏅?
     ctx->config       = Query(host, "anomaly.config", 1);
     ctx->core         = Query(host, "anomaly.core", 1);
-    ctx->signature    = Query(host, "anomaly.interop.signature", 1);
     ctx->ue5_framework= Query(host, "anomaly.ue5.framework", 1);
     ctx->ue5_names    = Query(host, "anomaly.ue5.names", 2);
     ctx->ue5_objects  = Query(host, "anomaly.ue5.objects", 1);
@@ -287,7 +287,7 @@ AnomalyStatusV1 ANOMALY_CALL on_load(const AnomalyHostApiV1* host, void** out) {
     ctx->actors       = Query(host, "anomaly.nte.actors", 1);
     g_ctx = ctx;
     ctx->input        = Query(host, "anomaly.input", 1);
-    InitUe(ctx->signature, ctx->ue5_names);
+    InitUe(ctx->ue5_names);
 
     if (!ctx->config) { delete ctx; g_ctx = nullptr;
         return fail(ANOMALY_STATUS_V1_UNAVAILABLE, "config service is unavailable"); }
@@ -669,8 +669,8 @@ void ProbeHook() {
     done = 1;
     const void* hook = LazyService(&g_ctx->hook, "anomaly.interop.hook", 1);
     g_hook_ok = hook ? 1 : 0;
-    const void* dmg = LazyService(&g_ctx->damage_chain, "anomaly.nte.damage-chain", 1);
-    g_dmg_chain_ok = dmg ? 1 : 0;
+    ResolveDamageChain();
+    g_dmg_chain_ok = (g_dc_apply_addr >= 0x10000 && g_dc_gate_addr >= 0x10000) ? 1 : 0;
 }
 
 void EnsureSubscription() {
@@ -1534,12 +1534,9 @@ static unsigned char GateDetour(void* a1, void* a2, void* a3, void* a4,
 
 void InstallGateHook() {
     if (g_gate_state != 0 || !g_ctx) return;
-    const void* svc = LazyService(&g_ctx->damage_chain, "anomaly.nte.damage-chain", 1);
-    if (!svc) { g_gate_rc = -1; return; }
-    const auto* dc = static_cast<const AnomalyNteDamageChainServiceV1*>(svc);
-    if (!dc->gate_address) { g_gate_rc = -2; return; }
-    std::uintptr_t addr = 0;
-    if (dc->gate_address(dc->user, &addr).code != ANOMALY_STATUS_V1_OK || addr == 0) { g_gate_rc = -3; return; }
+    ResolveDamageChain();
+    const std::uintptr_t addr = g_dc_gate_addr;
+    if (addr < 0x10000) { g_gate_rc = -3; return; }
     const void* hook_service = LazyService(&g_ctx->hook, "anomaly.interop.hook", 1);
     if (!hook_service) { g_gate_rc = -4; return; }
     const auto* hook = static_cast<const AnomalyHookServiceV1*>(hook_service);
@@ -2832,12 +2829,9 @@ static void* ApplyDetour(void* a1, void* a2, void* a3, void* a4,
 
 void InstallApplyHook() {
     if (g_apply_state != 0 || !g_ctx) return;
-    const void* svc = LazyService(&g_ctx->damage_chain, "anomaly.nte.damage-chain", 1);
-    if (!svc) { g_apply_rc = -1; return; }
-    const auto* dc = static_cast<const AnomalyNteDamageChainServiceV1*>(svc);
-    if (!dc->apply_address) { g_apply_rc = -2; return; }
-    std::uintptr_t addr = 0;
-    if (dc->apply_address(dc->user, &addr).code != ANOMALY_STATUS_V1_OK || addr == 0) { g_apply_rc = -3; return; }
+    ResolveDamageChain();
+    std::uintptr_t addr = g_dc_apply_addr;
+    if (addr < 0x10000) { g_apply_rc = -3; return; }
     // 闁诲酣娼х紞濠勭礊閸儱绀嗛柟娈垮枟閸╁倿鎮楅崷顓炰粶闁搞倝浜跺顐﹀级閸喖姹查梺鍛婄懕缂嶅洨妲愬鏉沷file 闂佺粯顨堥幊鎾舵濞戙垹鐭楁い鏍ㄧ箓閸樻挳鏌﹂埀顒勬寠婢跺鍚梺鍛婂灱婵倝寮抽悢鐓庣闁告稒娼欓崝銉╂煛娴ｈ绶查柣鈯欏洦鍤嶉柛灞剧懅椤撴椽鏌涘顒€鍤辩紒?
     {
         unsigned char head[32] = {0};
@@ -3046,13 +3040,10 @@ static int g_dump512_done = 0;
 static int g_dump512_rc = 0;
 void DumpDamageChain512() {
     if (g_dump512_done || !g_ctx || !g_apply_original) return;
-    const void* svc = LazyService(&g_ctx->damage_chain, "anomaly.nte.damage-chain", 1);
-    if (!svc) return;
-    const auto* dc = static_cast<const AnomalyNteDamageChainServiceV1*>(svc);
-    if (!dc->apply_address || !dc->gate_address) { g_dump512_done = 1; g_dump512_rc = -1; return; }
-    std::uintptr_t a = 0, g = 0;
-    if (dc->apply_address(dc->user, &a).code != ANOMALY_STATUS_V1_OK) { g_dump512_done = 1; g_dump512_rc = -2; return; }
-    if (dc->gate_address(dc->user, &g).code != ANOMALY_STATUS_V1_OK) { g_dump512_done = 1; g_dump512_rc = -3; return; }
+    ResolveDamageChain();
+    std::uintptr_t a = g_dc_apply_addr;
+    std::uintptr_t g = g_dc_gate_addr;
+    if (a < 0x10000 || g < 0x10000) { g_dump512_done = 1; g_dump512_rc = -1; return; }
     const void* core_svc = LazyService(&g_ctx->core, "anomaly.core", 1);
     if (!core_svc) { g_dump512_done = 1; g_dump512_rc = -1; return; }
     const auto* core = static_cast<const AnomalyCoreServiceV1*>(core_svc);
@@ -6591,6 +6582,120 @@ constexpr const char* kProcessEventHookedSig =
     "48 89 9D 28 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C5 48 89 85 C0 00 00 00";
 constexpr const char* kGWorldSig = "48 8B 1D ?? ?? ?? ?? 48 85 DB 74 ?? 41 B0 01";
 
+// 伤害链（Apply / Gate）的入口特征。这两条原来放在宿主 profile 里、由
+// anomaly.nte.damage-chain 服务解析；为了让插件在 core 删除该服务后仍能工作，
+// 现在由插件自己扫描。
+constexpr const char* kDamageChainApplySig =
+    "48 85 D2 0F 84 41 01 00 00 57 48 83 EC 60 48 8B F9 4D 85 C0 0F 84 2B 01 00 00 "
+    "48 89 5C 24 70 48";
+constexpr const char* kDamageChainGateSig =
+    "48 8B C4 48 89 58 08 48 89 70 18 48 89 78 20 55 41 54 41 55 41 56 41 57 48 8D 68 A9 "
+    "48 81 EC D0";
+
+// ---- 自带符号扫描 ---------------------------------------------------------
+// 不再依赖宿主的 anomaly.interop.signature：core 更新删掉这个服务也不影响插件。
+// 这个 build 的节名被混淆（全是 ".std"），所以按 IMAGE_SCN_MEM_EXECUTE 选代码段。
+static bool FindGameCodeSection(std::uintptr_t* begin, std::size_t* size) {
+    if (begin == nullptr || size == nullptr) return false;
+    const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleA(kGameModule));
+    if (base < 0x10000) return false;
+    __try {
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
+        const auto* section = IMAGE_FIRST_SECTION(nt);
+        for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+            if ((section[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) == 0) continue;
+            if (section[i].Misc.VirtualSize < 0x1000) continue;
+            *begin = base + section[i].VirtualAddress;
+            *size = section[i].Misc.VirtualSize;
+            return true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return false;
+}
+
+// 模式写法与 Profile 一致："48 8B ?? ??"。返回第一个命中与命中数，调用方要求唯一。
+static bool ScanGamePattern(const char* pattern, std::uintptr_t* out, int* out_matches) {
+    if (out != nullptr) *out = 0;
+    if (out_matches != nullptr) *out_matches = 0;
+    if (pattern == nullptr) return false;
+    unsigned char bytes[96] = {0};
+    unsigned char mask[96] = {0};
+    int length = 0;
+    const char* cursor = pattern;
+    const auto hex = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    while (*cursor != 0 && length < static_cast<int>(sizeof(bytes))) {
+        while (*cursor == ' ') ++cursor;
+        if (*cursor == 0) break;
+        if (cursor[0] == '?' && cursor[1] == '?') {
+            bytes[length] = 0;
+            mask[length] = 0;
+            ++length;
+            cursor += 2;
+            continue;
+        }
+        const int high = hex(cursor[0]);
+        const int low = hex(cursor[1]);
+        if (high < 0 || low < 0) return false;
+        bytes[length] = static_cast<unsigned char>((high << 4) | low);
+        mask[length] = 1;
+        ++length;
+        cursor += 2;
+    }
+    if (length == 0) return false;
+    std::uintptr_t begin = 0;
+    std::size_t size = 0;
+    if (!FindGameCodeSection(&begin, &size)) return false;
+    const auto* data = reinterpret_cast<const unsigned char*>(begin);
+    int matches = 0;
+    std::uintptr_t first = 0;
+    for (std::size_t i = 0; i + static_cast<std::size_t>(length) <= size; ++i) {
+        bool hit = true;
+        for (int k = 0; k < length; ++k) {
+            if (mask[k] != 0 && data[i + static_cast<std::size_t>(k)] != bytes[k]) {
+                hit = false;
+                break;
+            }
+        }
+        if (!hit) continue;
+        if (matches == 0) first = begin + i;
+        if (++matches > 8) break;
+    }
+    if (out != nullptr) *out = first;
+    if (out_matches != nullptr) *out_matches = matches;
+    return matches > 0;
+}
+
+void ResolveDamageChain() {
+    if (g_dc_apply_addr != 0 && g_dc_gate_addr != 0) return;
+    int apply_matches = 0;
+    int gate_matches = 0;
+    std::uintptr_t apply_addr = 0;
+    std::uintptr_t gate_addr = 0;
+    if (g_dc_apply_addr == 0) {
+        ScanGamePattern(kDamageChainApplySig, &apply_addr, &apply_matches);
+        if (apply_matches == 1 && apply_addr >= 0x10000) g_dc_apply_addr = apply_addr;
+    }
+    if (g_dc_gate_addr == 0) {
+        ScanGamePattern(kDamageChainGateSig, &gate_addr, &gate_matches);
+        if (gate_matches == 1 && gate_addr >= 0x10000) g_dc_gate_addr = gate_addr;
+    }
+    char b[160];
+    std::snprintf(b, sizeof(b), "dc: apply=0x%llX(%d) gate=0x%llX(%d)",
+                  (unsigned long long)g_dc_apply_addr, apply_matches,
+                  (unsigned long long)g_dc_gate_addr, gate_matches);
+    PushLog(b);
+}
+
 // 入口被 hook 覆盖掉的 5 字节是 40 55 56 57 41（push rbp / rsi / rdi / r13），全部是
 // 单条、无重定位的压栈指令。跳板重放这 5 字节后用绝对间接跳转进入 entry+5，栈帧与直接
 // 调用原函数完全一致；直接调 entry 会再次进入宿主 hook，宿主会把插件自己的调用再分发
@@ -6615,19 +6720,22 @@ static std::uintptr_t BuildProcessEventThunk(std::uintptr_t entry) {
 
 // g_ue defined earlier
 
-bool InitUe(const void* signature_service, const void* names_service) {
-    g_sig_svc = signature_service ? 1 : 0;
-    if (!signature_service || !names_service) { g_sig_rc = -2; return false; }
-    const auto* sig = static_cast<const AnomalySignatureServiceV1*>(signature_service);
-    if (!sig->resolve) return false;
-    std::uintptr_t address = 0;
-    AnomalyStringViewV1 mod{kGameModule, std::strlen(kGameModule)};
-    AnomalyStringViewV1 sec{kGameSection, std::strlen(kGameSection)};
-    AnomalyStringViewV1 pat{kGObjectsSig, std::strlen(kGObjectsSig)};
-    g_sig_rc = (int)sig->resolve(sig->user, mod, sec, pat, &address).code;
-    if (g_sig_rc != ANOMALY_STATUS_V1_OK) return false;
-    g_sig_addr = (unsigned long long)address;
+bool InitUe(const void* names_service) {
+    g_sig_svc = 0;
+    if (!names_service) { g_sig_rc = -2; return false; }
     g_ue.names = static_cast<const AnomalyUe5NamesServiceV1*>(names_service);
+    std::uintptr_t address = 0;
+    int matches = 0;
+    ScanGamePattern(kGObjectsSig, &address, &matches);
+    if (matches != 1 || address < 0x10000) {
+        g_sig_rc = -3;
+        char b[96];
+        std::snprintf(b, sizeof(b), "sig: GObjects matches=%d", matches);
+        PushLog(b);
+        return false;
+    }
+    g_sig_rc = 0;
+    g_sig_addr = address;
     g_ue.get_object = reinterpret_cast<ue::GetObjFn>(address);
     // GObjects 的 items 数组指针：访问器首指令 mov rax,[rip+disp] 的 RIP 目标里存着它
     // （profile: rip-rel32, instructionSize 7, addend -16，即 items 在 FUObjectArray+16）。
@@ -6649,32 +6757,32 @@ bool InitUe(const void* signature_service, const void* names_service) {
     }
     {
         std::uintptr_t gaddr = 0;
-        AnomalyStringViewV1 gpat{kGWorldSig, std::strlen(kGWorldSig)};
-        if (sig->resolve(sig->user, mod, sec, gpat, &gaddr).code == ANOMALY_STATUS_V1_OK)
-            g_gworld_instr = (unsigned long long)gaddr;
+        int gm = 0;
+        ScanGamePattern(kGWorldSig, &gaddr, &gm);
+        if (gm == 1 && gaddr >= 0x10000) g_gworld_instr = (unsigned long long)gaddr;
         std::uintptr_t peaddr = 0;
-        AnomalyStringViewV1 pep{kProcessEventSig, std::strlen(kProcessEventSig)};
-        const bool direct =
-            sig->resolve(sig->user, mod, sec, pep, &peaddr).code == ANOMALY_STATUS_V1_OK &&
-            peaddr >= 0x10000;
+        int pm = 0;
+        ScanGamePattern(kProcessEventSig, &peaddr, &pm);
+        const bool direct = pm == 1 && peaddr >= 0x10000;
         std::uintptr_t hooked = 0;
+        int hm = 0;
         bool thunked = false;
         if (!direct) {
-            AnomalyStringViewV1 hop{kProcessEventHookedSig, std::strlen(kProcessEventHookedSig)};
-            if (sig->resolve(sig->user, mod, sec, hop, &hooked).code == ANOMALY_STATUS_V1_OK &&
-                hooked >= 0x10000) {
+            ScanGamePattern(kProcessEventHookedSig, &hooked, &hm);
+            if (hm == 1 && hooked >= 0x10000) {
                 const std::uintptr_t thunk = BuildProcessEventThunk(hooked);
                 if (thunk != 0) {
-                    peaddr = static_cast<std::uintptr_t>(thunk);
+                    peaddr = thunk;
                     thunked = true;
                 }
             }
         }
         if (direct || thunked) g_pe_addr = (unsigned long long)peaddr;
-        char pb[160];
-        std::snprintf(pb, sizeof(pb), "pe: resolve direct=%d hooked=0x%llX call=0x%llX",
-                      direct ? 1 : 0, (unsigned long long)hooked,
-                      (unsigned long long)g_pe_addr);
+        char pb[192];
+        std::snprintf(pb, sizeof(pb),
+                      "pe: scan direct=%d(%d) hooked=0x%llX(%d) call=0x%llX gworld=%d",
+                      direct ? 1 : 0, pm, (unsigned long long)hooked, hm,
+                      (unsigned long long)g_pe_addr, gm);
         PushLog(pb);
     }
     g_sig_ok = 1;
