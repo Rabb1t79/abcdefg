@@ -96,3 +96,6 @@ Features ExtractFeatures(const Board& board, int linesCleared) {
         int floor = (std::min)(left, right);
         if (floor > heights[x]) wells += floor - heights[x];
     }
+    }
+    for (int y = 0; y < ROWS; ++y) {
+        int previous = 1; // wall
