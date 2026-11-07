@@ -20,8 +20,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Tesseract OCR (static x64)
+        shell: pwsh
+        run: |
+          $vcpkg = Join-Path $env:VCPKG_INSTALLATION_ROOT "vcpkg.exe"
+          & $vcpkg install tesseract:x64-windows-static
+
+      - name: Download English OCR model
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force tools/TetrisVisionPilot/tessdata | Out-Null
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata" -OutFile "tools/TetrisVisionPilot/tessdata/eng.traineddata"
+
       - name: Configure
-        run: cmake -S tools/TetrisVisionPilot -B build/tetris-vision-pilot -A x64
+        shell: pwsh
+        run: cmake -S tools/TetrisVisionPilot -B build/tetris-vision-pilot -A x64 "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static
 
       - name: Build
         run: cmake --build build/tetris-vision-pilot --config Release --parallel
@@ -44,3 +57,4 @@ jobs:
             build/tetris-vision-pilot/Release/TetrisVisionPilot.exe
             tools/TetrisVisionPilot/README.md
             tools/TetrisVisionPilot/LEARNING_GUIDE.md
+            build/tetris-vision-pilot/Release/tessdata/eng.traineddata

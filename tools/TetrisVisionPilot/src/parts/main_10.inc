@@ -40,11 +40,13 @@ void StartBot(AppState* s) {
     const int lookaheadDepth=static_cast<int>(ReadDoubleEdit(s->lookaheadEdit,4,1,6));
     const double epsilon=ReadDoubleEdit(s->epsilonEdit,15.0,0.0,60.0)/100.0;
     const double temperature=ReadDoubleEdit(s->temperatureEdit,0.80,0.05,5.0);
+    const double learningRate=ReadDoubleEdit(s->learningRateEdit,0.08,0.001,0.50);
+    const bool autoRetry=SendMessageW(s->autoRetryCheck,BM_GETCHECK,0,0)==BST_CHECKED;
     const int keyHoldMs=static_cast<int>(ReadDoubleEdit(s->keyHoldEdit,26,8,80));
     const int keyGapMs=static_cast<int>(ReadDoubleEdit(s->keyGapEdit,12,0,80));
     const int dropWaitMs=static_cast<int>(ReadDoubleEdit(s->dropWaitEdit,190,80,1000));
     SaveConfig(s);
-    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature,keyHoldMs,keyGapMs,dropWaitMs); }
+    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature,keyHoldMs,keyGapMs,dropWaitMs,learningRate,autoRetry); }
     catch(...) { s->running.store(false);EnableWindow(s->startButton,TRUE);EnableWindow(s->stopButton,FALSE);SetWindowTextW(s->statusLabel,L"状态：启动失败");MessageBoxW(s->hwnd,L"无法创建自动控制线程。",L"启动失败",MB_ICONERROR); }
 }
 
@@ -83,7 +85,8 @@ void CreateUi(AppState* s) {
     s->startButton=make(0,L"BUTTON",L"开始自动落块",BS_PUSHBUTTON,145,170,145,34,ID_START);
     s->stopButton=make(0,L"BUTTON",L"停止",BS_PUSHBUTTON,300,170,90,34,ID_STOP);EnableWindow(s->stopButton,FALSE);
     s->statusLabel=make(0,L"STATIC",L"状态：就绪",SS_LEFT,410,176,175,24,ID_STATUS);
-    make(0,L"STATIC",L"按键：← 左移　→ 右移　↑ 顺时针旋转　Space 硬降　｜　F8 紧急停止",SS_LEFT,20,215,760,24,ID_HELP);
+    make(0,L"STATIC",L"按键：← 左移　→ 右移　↑ 旋转　Space 硬降　｜　F8 紧急停止",SS_LEFT,20,215,700,24,ID_HELP);
+    s->autoRetryCheck=make(0,L"BUTTON",L"Game Over 后自动记录分数并点击 Again 重开",BS_AUTOCHECKBOX|WS_TABSTOP,735,212,340,27,ID_AUTO_RETRY);
 
     // Training controls: reward comes from the real end-of-game score entered by the user.
     make(0,L"STATIC",L"成绩反馈学习（高于基准时正向强化；低分只记录原因，不反向惩罚权重）",SS_LEFT,20,252,900,22,0);
@@ -111,6 +114,7 @@ void CreateUi(AppState* s) {
     AppendLog(s,L"算法是可解释的线性策略模型；8 个权重会影响多步搜索评分。");
     AppendLog(s,L"温和训练模式：成绩高于基准时做正向更新；低于基准时仅保存诊断记录，不执行负向权重更新。");
     AppendLog(s,L"输入节奏可在 NEXT 参数右侧调整：按住/间隔/落稳（毫秒）。请从默认值开始逐步加快。");
+    AppendLog(s,L"自动结算使用英文 OCR：运行中读取底部 SCORE，识别 GAME OVER 后保存分数；自动点击 Again 默认关闭。");
 }
 
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {

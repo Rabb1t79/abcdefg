@@ -28,6 +28,8 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <cctype>
+#include <tesseract/baseapi.h>
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -66,7 +68,9 @@ constexpr int ID_LOOKAHEAD = 1022;
 constexpr int ID_KEY_HOLD = 1023;
 constexpr int ID_KEY_GAP = 1024;
 constexpr int ID_DROP_WAIT = 1025;
+constexpr int ID_AUTO_RETRY = 1026;
 constexpr int HOTKEY_STOP = 1;
+constexpr UINT WM_APP_SCORE_RECORDED = WM_APP + 6;
 
 struct Cell { int x{}, y{}; };
 struct Rgb { int r{}, g{}, b{}; };
