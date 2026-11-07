@@ -147,7 +147,6 @@ static int g_mon_list_n = 0;
 static std::uintptr_t LastDamageGeClass(std::uintptr_t asc);
 void RecordApplyGeClass(std::uintptr_t function, void* parameters);
 static std::uintptr_t ReadWorldFresh();
-static void ProbeWorldPaused();
 static bool ReadAscHP(std::uintptr_t asc, float* out);
 static bool ReadAscMaxHP(std::uintptr_t asc, float* out);
 static bool ReadAscAtk(std::uintptr_t asc, float* out);
@@ -1215,7 +1214,6 @@ void TickChronosPause() {
 
 void ANOMALY_CALL OnProcessEvent(void* /*user*/, uintptr_t object, uintptr_t function, void* parameters) {
     ++g_pe_total;
-    ProbeWorldPaused();
     // 时停请求在这个 PE 回调域里执行（暂停函数在这里才真正生效）；TickChronosPause
     // 只调用 ue5.ProcessEvent，并在调用前后做 SEH 保护与 paused_after 诊断。
     TickChronosPause();
@@ -6088,14 +6086,11 @@ void ReplayArm(std::uintptr_t asc, const char* name, std::uintptr_t ge_class, fl
 // UI-thread cadence: samples each target HP (damage lands asynchronously, so the
 // delta seen here belongs to the previous turn), drops dead/stale targets, and
 // hands one activation turn to the game thread.
-// 游戏暂停（ESC 菜单/过场）或窗口失焦时世界是停的，这时继续发放回放会把伤害"存"
-// 到恢复后一起爆出来，也会把 landed/dmg 计数算错。用三个信号一起压住：
-//   1) 游戏自己的 IsGamePaused（只能在游戏线程调，200ms 采样一次）；
-//   2) 我们自己的时停层数；
-//   3) 游戏窗口是否在前台。
-static int g_world_paused = 0;
-static std::uint64_t g_paused_probe_ms = 0;
-
+// 游戏自己暂停（ESC 菜单/过场）或窗口失焦时世界是停的，这时继续发放回放会把伤害"存"
+// 到恢复后一起爆出来，也会把 landed/dmg 计数算错。用两个信号压住：
+//   1) AWorldSettings::PauserPlayerState 非空（玩家暂停），纯内存读；
+//   2) 游戏窗口是否在前台。
+// 我们自己的时停（g_pause_depth>0）不算暂停：时停+倍攻就是要在这期间继续出伤害。
 static bool GameWindowFocused() {
     const HWND foreground = ::GetForegroundWindow();
     if (foreground == nullptr) return false;
@@ -6104,27 +6099,38 @@ static bool GameWindowFocused() {
     return pid == ::GetCurrentProcessId();
 }
 
+// 游戏自己停没停：直接读 AWorldSettings::PauserPlayerState（Dump: 0x04C8）。
+// 玩家用 ESC 暂停时这里会写入 PauserPlayerState，非空即"被自己停住"。
+// 注意不要用 IsGamePaused 的 UFunction：在 ProcessEvent 回调里再发 ProcessEvent 会让
+// 宿主派发重入，实测崩在 Anomaly.Core 的订阅引用计数上（Core+0x3E9317）。
+static std::uintptr_t WorldSettingsPtr() {
+    if (g_gworld_ptr == 0) return 0;
+    __try {
+        void* level = *reinterpret_cast<void**>(
+            static_cast<std::uintptr_t>(g_gworld_ptr) + kPersistentLevel);
+        if (level == nullptr) return 0;
+        void* settings = *reinterpret_cast<void**>(
+            reinterpret_cast<std::uintptr_t>(level) + kWorldSettings);
+        return reinterpret_cast<std::uintptr_t>(settings);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static bool GameSelfPaused() {
+    const std::uintptr_t settings = WorldSettingsPtr();
+    if (settings < 0x10000) return false;
+    std::uintptr_t pauser = 0;
+    if (!ue::Reader::SafePtr(settings + 0x4C8, &pauser)) return false;
+    return pauser >= 0x10000;
+}
+
 // 只有"游戏自己停的"才算暂停：我们自己的时停（g_pause_depth>0）期间允许回放继续出伤害，
 // 这正是时停+倍攻的用法。ESC 菜单/过场时 g_pause_depth==0 而游戏暂停，此时压住回放。
 static bool ReplayHoldActive() {
     if (!GameWindowFocused()) return true;
-    if (g_world_paused != 0 && g_pause_depth == 0) return true;
+    if (GameSelfPaused() && g_pause_depth == 0) return true;
     return false;
-}
-
-static void ProbeWorldPaused() {
-    const std::uint64_t now = NowMs();
-    if (now < g_paused_probe_ms) return;
-    g_paused_probe_ms = now + 200;
-    if (g_is_paused_fn == nullptr || g_pc_inst == nullptr || g_pe_addr < 0x10000) return;
-    unsigned char value = 0;
-    __try {
-        reinterpret_cast<PE_FN>(static_cast<std::uintptr_t>(g_pe_addr))(
-            g_pc_inst, g_is_paused_fn, &value);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        value = 0;
-    }
-    g_world_paused = value != 0 ? 1 : 0;
 }
 
 void ReplayTick() {
@@ -6208,9 +6214,11 @@ void ReplayTick() {
         static std::uint64_t next_hold_log = 0;
         if (now >= next_hold_log) {
             next_hold_log = now + 3000;
-            char b[144];
-            std::snprintf(b, sizeof(b), "replay: hold paused=%d depth=%d focus=%d",
-                          g_world_paused, g_pause_depth, GameWindowFocused() ? 1 : 0);
+            char b[176];
+            std::snprintf(b, sizeof(b), "replay: hold selfPaused=%d depth=%d focus=%d ws=0x%llX",
+                          GameSelfPaused() ? 1 : 0, g_pause_depth,
+                          GameWindowFocused() ? 1 : 0,
+                          (unsigned long long)WorldSettingsPtr());
             PushLog(b);
         }
         return;
