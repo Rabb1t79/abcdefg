@@ -40,6 +40,7 @@ constexpr UINT WM_APP_LOG = WM_APP + 1;
 constexpr UINT WM_APP_REGION = WM_APP + 2;
 constexpr UINT WM_APP_FINISHED = WM_APP + 3;
 constexpr UINT WM_APP_TRAIN_STATS = WM_APP + 4;
+constexpr UINT WM_APP_NEXT_REGION = WM_APP + 5;
 constexpr int ID_WINDOW = 1001;
 constexpr int ID_REFRESH = 1002;
 constexpr int ID_SELECT = 1003;
@@ -59,6 +60,9 @@ constexpr int ID_EPSILON = 1016;
 constexpr int ID_TEMPERATURE = 1017;
 constexpr int ID_RESET_MODEL = 1018;
 constexpr int ID_TRAIN_STATS = 1019;
+constexpr int ID_SELECT_NEXT = 1020;
+constexpr int ID_NEXT_COUNT = 1021;
+constexpr int ID_LOOKAHEAD = 1022;
 constexpr int HOTKEY_STOP = 1;
 
 struct Cell { int x{}, y{}; };
@@ -72,6 +76,7 @@ static int g_virtualLeft{}, g_virtualTop{};
 static POINT g_selectStart{};
 static POINT g_selectCurrent{};
 static bool g_selectDragging{};
+static bool g_selectNextRegion{};
 
 std::wstring Format(const wchar_t* fmt, ...) {
     wchar_t buffer[1024]{};

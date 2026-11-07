@@ -49,6 +49,7 @@ struct Move { int rotation{}, x{}; double score{-1e30}; };
 struct ActionCandidate {
     Move move{};
     Features features{};
+    Board nextBoard{};
     int linesCleared{};
 };
 struct TrainingExperience {
@@ -58,6 +59,7 @@ struct PolicyDecision {
     Move move{};
     TrainingExperience experience{};
     int predictedLines{};
+    int searchedNextPieces{};
 };
 
 Features ExtractFeatures(const Board& board, int linesCleared) {

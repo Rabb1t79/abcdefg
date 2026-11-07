@@ -24,16 +24,16 @@ int ColorDistance(const Rgb& a, const Rgb& b) {
 
 // Tetris Online palette sampled from the user's screenshot. The palette also lets us
 // recover a tetromino when its spawn cell is clipped above the visible playfield.
-char PieceFromPalette(const Rgb& c) {
+char PieceFromPalette(const Rgb& c, int maximumDistance = 125) {
     struct PaletteEntry { char piece; Rgb color; };
     static constexpr PaletteEntry palette[] = {
-        {'S',{190,248,150}}, // green
-        {'J',{79,114,243}},  // blue
-        {'I',{71,169,227}},  // cyan
-        {'T',{183,64,222}},  // purple
-        {'O',{232,201,6}},   // yellow
-        {'L',{236,167,36}},  // orange
-        {'Z',{253,111,111}}  // red
+        {'S',{142,219,35}},  // Tetris Online green
+        {'J',{79,114,243}},   // blue
+        {'I',{117,223,255}},  // cyan
+        {'T',{192,91,225}},   // purple
+        {'O',{235,204,6}},    // yellow
+        {'L',{255,174,0}},    // orange
+        {'Z',{253,116,116}}   // red
     };
     int best = (std::numeric_limits<int>::max)();
     char result = 0;
@@ -41,7 +41,7 @@ char PieceFromPalette(const Rgb& c) {
         int d = ColorDistance(c, p.color);
         if (d < best) { best = d; result = p.piece; }
     }
-    return best <= 125 ? result : 0;
+    return best <= maximumDistance ? result : 0;
 }
 
 bool InferTopClippedPiece(const std::vector<Cell>& visible, char piece,
@@ -188,6 +188,52 @@ VisionResult Analyze(const CapturedImage& image, int threshold, int spawnRows = 
             result.active.centerX = centerX;
             result.active.centerY = centerY;
         }
+    }
+    return result;
+}
+
+
+struct NextQueueResult { std::vector<char> pieces; std::vector<int> confidence; };
+bool ReadNextQueue(const Rect& rect, int slotCount, NextQueueResult& out, std::wstring& error) {
+    out = {};
+    if (slotCount < 1 || slotCount > 10 || rect.width < 30 || rect.height < slotCount * 26) {
+        error = L"NEXT 区域尺寸或预览块数量无效。请只框选 NEXT 竖列中的预览卡片。";
+        return false;
+    }
+    CapturedImage image;
+    if (!CaptureScreenRect(rect, image, error)) return false;
+    constexpr int paletteCount = 7;
+    const double pitch = static_cast<double>(image.height) / slotCount;
+    static constexpr char names[] = {'S','J','I','T','O','L','Z'};
+    for (int slot = 0; slot < slotCount; ++slot) {
+        const int y0 = (std::max)(0, static_cast<int>(slot * pitch + pitch * 0.12));
+        const int y1 = (std::min)(image.height, static_cast<int>((slot + 1) * pitch - pitch * 0.12));
+        const int x0 = (std::max)(0, static_cast<int>(image.width * 0.06));
+        const int x1 = (std::min)(image.width, static_cast<int>(image.width * 0.94));
+        std::array<int, paletteCount> counts{};
+        for (int py = y0; py < y1; py += 2) for (int px = x0; px < x1; px += 2) {
+            const Pixel& pixel = image.pixels[static_cast<size_t>(py) * image.width + px];
+            const char piece = PieceFromPalette({pixel.r, pixel.g, pixel.b}, 60);
+            for (int i = 0; i < paletteCount; ++i) if (names[i] == piece) { ++counts[i]; break; }
+        }
+        const int bestIndex = static_cast<int>(std::distance(counts.begin(), std::max_element(counts.begin(), counts.end())));
+        const int best = counts[bestIndex];
+        int second = 0;
+        for (int i = 0; i < paletteCount; ++i) if (i != bestIndex) second = (std::max)(second, counts[i]);
+        if (best < 10 || (second > 0 && best < static_cast<int>(second * 1.05))) {
+            error = Format(L"NEXT 第 %d 格无法可靠识别（颜色样本 %d）。请调整框选区域或预览块数量。", slot + 1, best);
+            return false;
+        }
+        out.pieces.push_back(names[bestIndex]);
+        out.confidence.push_back(best);
+    }
+    return true;
+}
+std::wstring FormatNextQueue(const std::vector<char>& pieces) {
+    std::wstring result;
+    for (char piece : pieces) {
+        if (!result.empty()) result += L" → ";
+        result += static_cast<wchar_t>(piece);
     }
     return result;
 }

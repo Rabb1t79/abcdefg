@@ -44,6 +44,7 @@ std::vector<ActionCandidate> EnumerateActions(const Board& board, char piece) {
             candidate.move.x = x;
             candidate.linesCleared = lines;
             candidate.features = ExtractFeatures(next, lines);
+            candidate.nextBoard = next;
             candidates.push_back(std::move(candidate));
         }
     }

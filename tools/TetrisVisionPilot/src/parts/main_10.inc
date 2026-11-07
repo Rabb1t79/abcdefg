@@ -1,3 +1,19 @@
+    if (s->nextRect.width > 0) {
+        const int count = static_cast<int>(ReadDoubleEdit(s->nextCountEdit,6,1,10));
+        NextQueueResult queue; std::wstring queueError;
+        if (ReadNextQueue(s->nextRect,count,queue,queueError)) {
+            s->previewNextPieces=queue.pieces; s->hasNextPreview=true;
+            SetWindowTextW(s->nextStatusLabel,(L"NEXT识别： "+FormatNextQueue(queue.pieces)).c_str());
+            AppendLog(s,L"NEXT 队列识别成功："+FormatNextQueue(queue.pieces));
+        } else {
+            s->hasNextPreview=false; s->previewNextPieces.clear();
+            SetWindowTextW(s->nextStatusLabel,L"NEXT识别：失败");
+            AppendLog(s,L"NEXT 识别失败："+queueError);
+        }
+    } else {
+        s->hasNextPreview=false; s->previewNextPieces.clear();
+        SetWindowTextW(s->nextStatusLabel,L"NEXT识别：尚未框选");
+    }
 }
 
 void StartBot(AppState* s) {
@@ -14,14 +30,17 @@ void StartBot(AppState* s) {
     if(!target||!IsWindow(target)){MessageBoxW(s->hwnd,L"请从窗口列表中选择正在运行的游戏。",L"尚未选择游戏窗口",MB_ICONWARNING);return;}
     TestRecognition(s);
     if(!s->hasPreview || !s->previewData.hasActive){MessageBoxW(s->hwnd,L"尚未识别到当前方块。请调整棋盘框选范围或颜色阈值，再测试一次。",L"识别未通过",MB_ICONWARNING);return;}
+    if(!s->hasNextPreview){MessageBoxW(s->hwnd,L"NEXT 队列识别未通过。请重新框选 NEXT 预览列、检查预览块数量，然后再次测试。",L"NEXT 识别未通过",MB_ICONWARNING);return;}
     if(MessageBoxW(s->hwnd,L"确认棋盘框选和识别结果正确，并允许程序向游戏窗口发送 ← / → / ↑ / Space？\n\n运行中按 F8 或点击“停止”可紧急停止。",L"确认自动控制",MB_OKCANCEL|MB_ICONWARNING)!=IDOK)return;
     s->stop.store(false);s->running.store(true);
     EnableWindow(s->startButton,FALSE);EnableWindow(s->stopButton,TRUE);SetWindowTextW(s->statusLabel,L"状态：运行中（F8 紧急停止）");
-    Rect rect=s->boardRect;int threshold=ReadThreshold(s);
+    Rect rect=s->boardRect, nextRect=s->nextRect;int threshold=ReadThreshold(s);
+    const int previewCount=static_cast<int>(ReadDoubleEdit(s->nextCountEdit,6,1,10));
+    const int lookaheadDepth=static_cast<int>(ReadDoubleEdit(s->lookaheadEdit,4,1,6));
     const double epsilon=ReadDoubleEdit(s->epsilonEdit,15.0,0.0,60.0)/100.0;
     const double temperature=ReadDoubleEdit(s->temperatureEdit,0.80,0.05,5.0);
     SaveConfig(s);
-    try { s->worker=std::thread(BotThread,s,target,rect,threshold,epsilon,temperature); }
+    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature); }
     catch(...) { s->running.store(false);EnableWindow(s->startButton,TRUE);EnableWindow(s->stopButton,FALSE);SetWindowTextW(s->statusLabel,L"状态：启动失败");MessageBoxW(s->hwnd,L"无法创建自动控制线程。",L"启动失败",MB_ICONERROR); }
 }
 
@@ -39,14 +58,21 @@ void CreateUi(AppState* s) {
     s->combo=make(0,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_VSCROLL|WS_TABSTOP,105,54,550,240,ID_WINDOW);
     make(0,L"BUTTON",L"刷新窗口",BS_PUSHBUTTON,665,53,105,28,ID_REFRESH);
     make(0,L"BUTTON",L"框选棋盘区域",BS_PUSHBUTTON,780,53,150,28,ID_SELECT);
-    s->regionLabel=make(0,L"STATIC",L"棋盘区域：尚未选择",SS_LEFT,20,95,1000,24,ID_REGION);
+    s->regionLabel=make(0,L"STATIC",L"棋盘区域：尚未选择",SS_LEFT,20,95,360,24,ID_REGION);
+    make(0,L"BUTTON",L"框选 NEXT 区域",BS_PUSHBUTTON,390,92,125,28,ID_SELECT_NEXT);
+    s->nextRegionLabel=make(0,L"STATIC",L"NEXT区域：尚未选择",SS_LEFT,530,95,500,24,0);
     make(0,L"STATIC",L"颜色差阈值：",SS_LEFT,20,130,90,24,0);
     s->thresholdEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"48",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,110,126,55,26,ID_THRESHOLD);
-    make(0,L"STATIC",L"（建议 35–70；背景与方块颜色越接近，阈值越需要调低）",SS_LEFT,175,130,480,24,0);
+    make(0,L"STATIC",L"（背景阈值）",SS_LEFT,175,130,100,24,0);
+    make(0,L"STATIC",L"NEXT块数：",SS_LEFT,580,130,65,24,0);
+    s->nextCountEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"6",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,650,126,38,26,ID_NEXT_COUNT);
+    make(0,L"STATIC",L"前瞻NEXT：",SS_LEFT,715,130,65,24,0);
+    s->lookaheadEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"4",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,785,126,38,26,ID_LOOKAHEAD);
+    s->nextStatusLabel=make(0,L"STATIC",L"NEXT识别：尚未测试",SS_LEFT,600,176,430,24,0);
     make(0,L"BUTTON",L"测试识别",BS_PUSHBUTTON,20,170,115,34,ID_TEST);
     s->startButton=make(0,L"BUTTON",L"开始自动落块",BS_PUSHBUTTON,145,170,145,34,ID_START);
     s->stopButton=make(0,L"BUTTON",L"停止",BS_PUSHBUTTON,300,170,90,34,ID_STOP);EnableWindow(s->stopButton,FALSE);
-    s->statusLabel=make(0,L"STATIC",L"状态：就绪",SS_LEFT,410,176,400,24,ID_STATUS);
+    s->statusLabel=make(0,L"STATIC",L"状态：就绪",SS_LEFT,410,176,175,24,ID_STATUS);
     make(0,L"STATIC",L"按键：← 左移　→ 右移　↑ 顺时针旋转　Space 硬降　｜　F8 紧急停止",SS_LEFT,20,215,760,24,ID_HELP);
 
     // Training controls: reward comes from the real end-of-game score entered by the user.
@@ -63,16 +89,16 @@ void CreateUi(AppState* s) {
     s->temperatureEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0.80",ES_AUTOHSCROLL,350,318,55,26,ID_TEMPERATURE);
     make(0,L"STATIC",L"学习率控制每次更新幅度；探索率控制尝试非当前最优动作的概率；温度控制策略随机性。",SS_LEFT,425,322,625,24,0);
     s->trainingStatsLabel=make(0,L"STATIC",L"模型状态：正在加载……",SS_LEFT,20,354,1030,55,ID_TRAIN_STATS);
-    make(0,L"STATIC",L"算法说明：Softmax + ε 探索 + REINFORCE。每局实际分数作为回报，和历史平均分比较后强化/削弱本局动作偏好。",SS_LEFT,20,410,1040,24,0);
+    make(0,L"STATIC",L"算法说明：Softmax + ε 探索 + REINFORCE；当前落点会模拟 NEXT 队列，并用有限宽度 Beam Search 规划多步路径。",SS_LEFT,20,410,1040,24,0);
 
     make(0,L"STATIC",L"运行日志",SS_LEFT,20,443,500,22,0);
     s->logEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"",ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL|WS_VSCROLL|WS_HSCROLL,20,468,760,410,ID_LOG);
     make(0,L"STATIC",L"棋盘预览（绿：当前方块；蓝：已占用格）",SS_LEFT,805,443,260,22,0);
     s->preview=CreateWindowExW(WS_EX_CLIENTEDGE,L"TetrisPreview",L"",WS_CHILD|WS_VISIBLE,805,468,245,410,s->hwnd,reinterpret_cast<HMENU>(ID_PREVIEW),g_instance,nullptr);
     SetWindowLongPtrW(s->preview,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(s));
-    AppendLog(s,L"程序已就绪。请选择游戏窗口、框选棋盘，再测试识别。");
+    AppendLog(s,L"程序已就绪。请选择游戏窗口，分别框选棋盘和 NEXT 预览列，再测试识别。");
     AppendLog(s,L"训练说明：每次落块产生一个动作样本；整局结束后在“本局最终分数”中录入实际成绩并提交。");
-    AppendLog(s,L"算法不是大型神经网络，而是可解释的线性策略模型；界面显示的 8 个权重会根据成绩逐局调整并保存在本地。");
+    AppendLog(s,L"算法是可解释的线性策略模型；8 个权重会影响多步搜索评分，并根据成绩逐局调整。");
 }
 
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -81,13 +107,14 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if(!s)return DefWindowProcW(hwnd,msg,wp,lp);
     switch(msg){
     case WM_CREATE:
-        CreateUi(s);LoadConfig(s);UpdateRegionLabel(s);s->trainer.Load(s->modelPath);UpdateTrainingStats(s);RefreshWindows(s);
+        CreateUi(s);LoadConfig(s);UpdateRegionLabel(s);UpdateNextRegionLabel(s);s->trainer.Load(s->modelPath);UpdateTrainingStats(s);RefreshWindows(s);
         if(!RegisterHotKey(hwnd,HOTKEY_STOP,MOD_NOREPEAT,VK_F8)) AppendLog(s,L"提示：F8 全局热键注册失败；请使用界面停止按钮，并避免切换窗口。");
         return 0;
     case WM_COMMAND:
         switch(LOWORD(wp)){
         case ID_REFRESH:RefreshWindows(s);return 0;
-        case ID_SELECT:StartSelector(s);return 0;
+        case ID_SELECT:StartSelector(s,false);return 0;
+        case ID_SELECT_NEXT:StartSelector(s,true);return 0;
         case ID_TEST:TestRecognition(s);return 0;
         case ID_START:StartBot(s);return 0;
         case ID_STOP:StopBot(s);return 0;
@@ -97,4 +124,5 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_HOTKEY:if(wp==HOTKEY_STOP)StopBot(s);return 0;
     case WM_APP_LOG:{std::unique_ptr<std::wstring> m(reinterpret_cast<std::wstring*>(lp));if(m)AppendLog(s,*m);return 0;}
     case WM_APP_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->boardRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateRegionLabel(s);SaveConfig(s);AppendLog(s,L"棋盘区域已保存。请确认框选区域正好覆盖 10 列 × 20 行格子内部。");}return 0;}
+    case WM_APP_NEXT_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->nextRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateNextRegionLabel(s);SaveConfig(s);AppendLog(s,L"NEXT 区域已保存。请只包含预览卡片列，不要包含 NEXT 标题。");}return 0;}
     case WM_APP_FINISHED:

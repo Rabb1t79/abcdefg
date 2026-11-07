@@ -48,7 +48,10 @@ LRESULT CALLBACK SelectorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_selectCurrent={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};g_selectDragging=false;ReleaseCapture();
             RECT* r=new RECT{}; r->left=g_virtualLeft+(std::min)(g_selectStart.x,g_selectCurrent.x); r->top=g_virtualTop+(std::min)(g_selectStart.y,g_selectCurrent.y);
             r->right=g_virtualLeft+(std::max)(g_selectStart.x,g_selectCurrent.x); r->bottom=g_virtualTop+(std::max)(g_selectStart.y,g_selectCurrent.y);
-            if(r->right-r->left>=80 && r->bottom-r->top>=160) PostMessageW(g_mainWindow,WM_APP_REGION,0,reinterpret_cast<LPARAM>(r)); else delete r;
+            const UINT message=g_selectNextRegion?WM_APP_NEXT_REGION:WM_APP_REGION;
+            const int minWidth=g_selectNextRegion?30:80;
+            const int minHeight=g_selectNextRegion?80:160;
+            if(r->right-r->left>=minWidth && r->bottom-r->top>=minHeight) PostMessageW(g_mainWindow,message,0,reinterpret_cast<LPARAM>(r)); else delete r;
             DestroyWindow(hwnd);
         } return 0;
     case WM_KEYDOWN: if(wp==VK_ESCAPE){DestroyWindow(hwnd);return 0;} break;
@@ -56,7 +59,8 @@ LRESULT CALLBACK SelectorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd,msg,wp,lp);
 }
 
-void StartSelector(AppState* s) {
+void StartSelector(AppState* s, bool nextRegion) {
+    g_selectNextRegion=nextRegion;
     g_virtualLeft=GetSystemMetrics(SM_XVIRTUALSCREEN);g_virtualTop=GetSystemMetrics(SM_YVIRTUALSCREEN);
     int width=GetSystemMetrics(SM_CXVIRTUALSCREEN),height=GetSystemMetrics(SM_CYVIRTUALSCREEN);
     g_mainWindow=s->hwnd;

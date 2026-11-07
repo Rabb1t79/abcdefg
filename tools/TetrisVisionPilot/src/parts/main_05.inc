@@ -87,14 +87,85 @@ private:
     double lastAdvantage_{};
 };
 
-bool ChoosePolicyAction(const Board& board, char piece, PolicyTrainer& trainer,
-                        double epsilon, double temperature, std::mt19937& rng,
-                        PolicyDecision& decision) {
-    std::vector<ActionCandidate> candidates = EnumerateActions(board, piece);
-    if (candidates.empty()) return false;
+double DotFeatures(const std::array<double, FEATURE_COUNT>& weights, const Features& features) {
+    double score = 0.0;
+    for (size_t i = 0; i < FEATURE_COUNT; ++i) score += weights[i] * features.value[i];
+    return score;
+}
+Features AddDiscounted(const Features& base, const Features& extra, double discount) {
+    Features value = base;
+    for (size_t i = 0; i < FEATURE_COUNT; ++i) value.value[i] += extra.value[i] * discount;
+    return value;
+}
+struct SearchNode { Board board{}; Features trajectory{}; double score{}; };
+
+bool ChoosePolicyAction(const Board& board, char piece, const std::vector<char>& nextQueue,
+                        int lookaheadDepth, PolicyTrainer& trainer, double epsilon,
+                        double temperature, std::mt19937& rng, PolicyDecision& decision) {
+    std::vector<ActionCandidate> roots = EnumerateActions(board, piece);
+    if (roots.empty()) return false;
     const auto weights = trainer.GetWeights();
     temperature = (std::max)(0.05, temperature);
     epsilon = (std::max)(0.0, (std::min)(0.60, epsilon));
+    lookaheadDepth = (std::max)(0, (std::min)(lookaheadDepth, static_cast<int>(nextQueue.size())));
+    constexpr size_t kBeamWidthPerRoot = 5;
+    constexpr double kDiscount = 0.82;
 
-    std::vector<double> logits(candidates.size());
+    for (auto& root : roots) {
+        Features initial = root.features;
+        std::vector<SearchNode> beam{{root.nextBoard, initial, DotFeatures(weights, initial)}};
+        for (int depth = 0; depth < lookaheadDepth; ++depth) {
+            std::vector<SearchNode> expanded;
+            for (const auto& node : beam) {
+                const auto options = EnumerateActions(node.board, nextQueue[depth]);
+                for (const auto& option : options) {
+                    Features trajectory = AddDiscounted(node.trajectory, option.features, std::pow(kDiscount, depth + 1));
+                    expanded.push_back({option.nextBoard, trajectory, DotFeatures(weights, trajectory)});
+                }
+            }
+            if (expanded.empty()) break;
+            std::sort(expanded.begin(), expanded.end(), [](const SearchNode& a, const SearchNode& b) { return a.score > b.score; });
+            if (expanded.size() > kBeamWidthPerRoot) expanded.resize(kBeamWidthPerRoot);
+            beam = std::move(expanded);
+        }
+        if (!beam.empty()) {
+            const auto best = std::max_element(beam.begin(), beam.end(),
+                [](const SearchNode& a, const SearchNode& b) { return a.score < b.score; });
+            root.features = best->trajectory;
+            root.move.score = best->score / temperature;
+        } else root.move.score = DotFeatures(weights, root.features) / temperature;
+    }
+
+    std::vector<double> logits(roots.size());
     double maxLogit = -std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < roots.size(); ++i) { logits[i] = roots[i].move.score; maxLogit = (std::max)(maxLogit, logits[i]); }
+    std::vector<double> probabilities(roots.size());
+    double total = 0.0;
+    for (size_t i = 0; i < roots.size(); ++i) { probabilities[i] = std::exp((std::max)(-60.0, logits[i] - maxLogit)); total += probabilities[i]; }
+    if (total <= 0.0) return false;
+    for (double& p : probabilities) p /= total;
+
+    std::array<double, FEATURE_COUNT> expected{};
+    for (size_t i = 0; i < roots.size(); ++i)
+        for (size_t j = 0; j < FEATURE_COUNT; ++j) expected[j] += probabilities[i] * roots[i].features.value[j];
+
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    size_t chosen = 0;
+    if (unit(rng) < epsilon) {
+        std::uniform_int_distribution<size_t> pick(0, roots.size() - 1);
+        chosen = pick(rng);
+    } else {
+        std::discrete_distribution<size_t> pick(probabilities.begin(), probabilities.end());
+        chosen = pick(rng);
+    }
+    const double actionProbability = (1.0 - epsilon) * probabilities[chosen] + epsilon / static_cast<double>(roots.size());
+    const double scale = ((1.0 - epsilon) * probabilities[chosen] / (std::max)(1e-12, actionProbability)) / temperature;
+    for (size_t j = 0; j < FEATURE_COUNT; ++j)
+        decision.experience.gradient[j] = scale * (roots[chosen].features.value[j] - expected[j]);
+    decision.move = roots[chosen].move;
+    decision.move.score = logits[chosen];
+    decision.predictedLines = roots[chosen].linesCleared;
+    decision.searchedNextPieces = lookaheadDepth;
+    return true;
+}
+

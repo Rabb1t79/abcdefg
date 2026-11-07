@@ -1,44 +1,3 @@
-    for (size_t i = 0; i < candidates.size(); ++i) {
-        double value = 0.0;
-        for (size_t j = 0; j < FEATURE_COUNT; ++j) value += weights[j] * candidates[i].features.value[j];
-        logits[i] = value / temperature;
-        maxLogit = (std::max)(maxLogit, logits[i]);
-    }
-    std::vector<double> softmax(candidates.size());
-    double sum = 0.0;
-    for (size_t i = 0; i < candidates.size(); ++i) {
-        softmax[i] = std::exp((std::max)(-60.0, logits[i] - maxLogit));
-        sum += softmax[i];
-    }
-    if (sum <= 0.0) return false;
-    for (double& p : softmax) p /= sum;
-
-    std::array<double, FEATURE_COUNT> expected{};
-    for (size_t i = 0; i < candidates.size(); ++i)
-        for (size_t j = 0; j < FEATURE_COUNT; ++j)
-            expected[j] += softmax[i] * candidates[i].features.value[j];
-
-    std::uniform_real_distribution<double> unit(0.0, 1.0);
-    size_t chosen = 0;
-    if (unit(rng) < epsilon) {
-        std::uniform_int_distribution<size_t> pick(0, candidates.size() - 1);
-        chosen = pick(rng);
-    } else {
-        std::discrete_distribution<size_t> pick(softmax.begin(), softmax.end());
-        chosen = pick(rng);
-    }
-
-    const double actionProbability = (1.0 - epsilon) * softmax[chosen] + epsilon / static_cast<double>(candidates.size());
-    const double gradientScale = ((1.0 - epsilon) * softmax[chosen] / (std::max)(1e-12, actionProbability)) / temperature;
-    for (size_t j = 0; j < FEATURE_COUNT; ++j) {
-        decision.experience.gradient[j] = gradientScale * (candidates[chosen].features.value[j] - expected[j]);
-    }
-    decision.move = candidates[chosen].move;
-    decision.move.score = logits[chosen];
-    decision.predictedLines = candidates[chosen].linesCleared;
-    return true;
-}
-
 void SleepCheck(const std::atomic<bool>& stop, int milliseconds) {
     int elapsed=0;
     while(elapsed<milliseconds && !stop.load()) { int part=(std::min)(15,milliseconds-elapsed); Sleep(part); elapsed+=part; }
@@ -62,9 +21,12 @@ bool TapKey(HWND target, WORD vk, int holdMs, std::wstring& error) {
 }
 
 struct AppState {
-    HWND hwnd{}, combo{}, regionLabel{}, thresholdEdit{}, logEdit{}, preview{}, startButton{}, stopButton{}, statusLabel{};
+    HWND hwnd{}, combo{}, regionLabel{}, nextRegionLabel{}, nextStatusLabel{}, nextCountEdit{}, lookaheadEdit{};
+    HWND thresholdEdit{}, logEdit{}, preview{}, startButton{}, stopButton{}, statusLabel{};
     HWND scoreEdit{}, learningRateEdit{}, epsilonEdit{}, temperatureEdit{}, trainingStatsLabel{};
-    Rect boardRect{};
+    Rect boardRect{}, nextRect{};
+    std::vector<char> previewNextPieces;
+    bool hasNextPreview{};
     PolicyTrainer trainer;
     std::atomic<bool> stop{false};
     std::atomic<bool> running{false};
@@ -93,7 +55,8 @@ double ReadDoubleEdit(HWND edit, double fallback, double minimum, double maximum
 
 void Log(AppState* s, const std::wstring& msg) { PostLog(s->hwnd,msg); }
 
-void BotThread(AppState* s, HWND target, Rect rect, int threshold, double epsilon, double temperature) {
+void BotThread(AppState* s, HWND target, Rect rect, Rect nextRect, int threshold,
+               int previewCount, int lookaheadDepth, double epsilon, double temperature) {
     auto log=[&](const std::wstring& m){Log(s,m);};
     try {
         if(!IsWindow(target)) throw std::runtime_error("所选游戏窗口已关闭。");
