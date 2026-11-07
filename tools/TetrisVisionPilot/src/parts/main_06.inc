@@ -24,6 +24,7 @@ struct AppState {
     HWND hwnd{}, combo{}, regionLabel{}, nextRegionLabel{}, nextStatusLabel{}, nextCountEdit{}, lookaheadEdit{};
     HWND thresholdEdit{}, logEdit{}, preview{}, startButton{}, stopButton{}, statusLabel{};
     HWND scoreEdit{}, learningRateEdit{}, epsilonEdit{}, temperatureEdit{}, trainingStatsLabel{};
+    HWND keyHoldEdit{}, keyGapEdit{}, dropWaitEdit{};
     Rect boardRect{}, nextRect{};
     std::vector<char> previewNextPieces;
     bool hasNextPreview{};
@@ -56,7 +57,8 @@ double ReadDoubleEdit(HWND edit, double fallback, double minimum, double maximum
 void Log(AppState* s, const std::wstring& msg) { PostLog(s->hwnd,msg); }
 
 void BotThread(AppState* s, HWND target, Rect rect, Rect nextRect, int threshold,
-               int previewCount, int lookaheadDepth, double epsilon, double temperature) {
+               int previewCount, int lookaheadDepth, double epsilon, double temperature,
+               int keyHoldMs, int keyGapMs, int dropWaitMs) {
     auto log=[&](const std::wstring& m){Log(s,m);};
     try {
         if(!IsWindow(target)) throw std::runtime_error("所选游戏窗口已关闭。");

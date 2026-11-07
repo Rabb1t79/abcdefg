@@ -63,6 +63,9 @@ constexpr int ID_TRAIN_STATS = 1019;
 constexpr int ID_SELECT_NEXT = 1020;
 constexpr int ID_NEXT_COUNT = 1021;
 constexpr int ID_LOOKAHEAD = 1022;
+constexpr int ID_KEY_HOLD = 1023;
+constexpr int ID_KEY_GAP = 1024;
+constexpr int ID_DROP_WAIT = 1025;
 constexpr int HOTKEY_STOP = 1;
 
 struct Cell { int x{}, y{}; };

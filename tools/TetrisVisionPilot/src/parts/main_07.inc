@@ -39,8 +39,8 @@
                 piece.name,check.activeStableSamples,FormatNextQueueConfidence(queue).c_str(),decision.searchedNextPieces,
                 move.rotation,move.x,move.score));
             for(int i=0;i<rotateSteps && !s->stop.load();++i) {
-                std::wstring err; if(!TapKey(target,VK_UP,42,err)) throw std::runtime_error("旋转按键失败或焦点丢失。");
-                SleepCheck(s->stop,42);
+                std::wstring err; if(!TapKey(target,VK_UP,keyHoldMs,err)) throw std::runtime_error("旋转按键失败或焦点丢失。");
+                SleepCheck(s->stop,keyGapMs);
             }
             if(s->stop.load())break;
             int currentX=piece.minX;
@@ -57,16 +57,16 @@
             int delta=move.x-currentX;
             WORD moveKey=delta>0?VK_RIGHT:VK_LEFT;
             for(int i=0;i<std::abs(delta) && !s->stop.load();++i) {
-                std::wstring err; if(!TapKey(target,moveKey,34,err)) throw std::runtime_error("移动按键失败或焦点丢失。");
-                SleepCheck(s->stop,24);
+                std::wstring err; if(!TapKey(target,moveKey,keyHoldMs,err)) throw std::runtime_error("移动按键失败或焦点丢失。");
+                SleepCheck(s->stop,keyGapMs);
             }
             if(s->stop.load())break;
-            std::wstring err; if(!TapKey(target,VK_SPACE,45,err)) throw std::runtime_error("硬降按键失败或焦点丢失。");
+            std::wstring err; if(!TapKey(target,VK_SPACE,keyHoldMs,err)) throw std::runtime_error("硬降按键失败或焦点丢失。");
             s->trainer.AddExperience(decision.experience);
             log(Format(L"已执行硬降；训练样本 +1（本局累计 %llu），预测本次消行 %d。",
                 static_cast<unsigned long long>(s->trainer.Snapshot().pendingActions),decision.predictedLines));
             PostMessageW(s->hwnd,WM_APP_TRAIN_STATS,0,0);
-            SleepCheck(s->stop,300);
+            SleepCheck(s->stop,dropWaitMs);
         }
     } catch(const std::exception& e) {
         int n=MultiByteToWideChar(CP_UTF8,0,e.what(),-1,nullptr,0);
@@ -89,6 +89,9 @@ void SaveConfig(AppState* s) {
     wchar_t value[64]{};
     GetWindowTextW(s->nextCountEdit,value,_countof(value)); WritePrivateProfileStringW(L"Next",L"Count",value,s->configPath.c_str());
     GetWindowTextW(s->lookaheadEdit,value,_countof(value)); WritePrivateProfileStringW(L"Next",L"Lookahead",value,s->configPath.c_str());
+    if (s->keyHoldEdit) { GetWindowTextW(s->keyHoldEdit,value,_countof(value)); WritePrivateProfileStringW(L"Input",L"KeyHoldMs",value,s->configPath.c_str()); }
+    if (s->keyGapEdit) { GetWindowTextW(s->keyGapEdit,value,_countof(value)); WritePrivateProfileStringW(L"Input",L"KeyGapMs",value,s->configPath.c_str()); }
+    if (s->dropWaitEdit) { GetWindowTextW(s->dropWaitEdit,value,_countof(value)); WritePrivateProfileStringW(L"Input",L"DropWaitMs",value,s->configPath.c_str()); }
     if (s->learningRateEdit) { GetWindowTextW(s->learningRateEdit,value,_countof(value)); WritePrivateProfileStringW(L"Training",L"LearningRate",value,s->configPath.c_str()); }
     if (s->epsilonEdit) { GetWindowTextW(s->epsilonEdit,value,_countof(value)); WritePrivateProfileStringW(L"Training",L"ExplorationRate",value,s->configPath.c_str()); }
     if (s->temperatureEdit) { GetWindowTextW(s->temperatureEdit,value,_countof(value)); WritePrivateProfileStringW(L"Training",L"Temperature",value,s->configPath.c_str()); }
@@ -106,6 +109,9 @@ void LoadConfig(AppState* s) {
     wchar_t value[64]{};
     GetPrivateProfileStringW(L"Next",L"Count",L"6",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->nextCountEdit,value);
     GetPrivateProfileStringW(L"Next",L"Lookahead",L"4",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->lookaheadEdit,value);
+    GetPrivateProfileStringW(L"Input",L"KeyHoldMs",L"26",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->keyHoldEdit,value);
+    GetPrivateProfileStringW(L"Input",L"KeyGapMs",L"12",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->keyGapEdit,value);
+    GetPrivateProfileStringW(L"Input",L"DropWaitMs",L"190",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->dropWaitEdit,value);
     GetPrivateProfileStringW(L"Training",L"LearningRate",L"0.08",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->learningRateEdit,value);
     GetPrivateProfileStringW(L"Training",L"ExplorationRate",L"15",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->epsilonEdit,value);
     GetPrivateProfileStringW(L"Training",L"Temperature",L"0.80",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->temperatureEdit,value);

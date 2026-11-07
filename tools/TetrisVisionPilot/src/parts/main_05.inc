@@ -2,6 +2,7 @@
                 weights_[i] += learningRate * advantage * meanGradient[i] * 2.0;
                 weights_[i] = (std::max)(-20.0, (std::min)(20.0, weights_[i]));
             }
+            }
         }
         advantageOut = advantage;
 
@@ -14,8 +15,11 @@
         if (baselineEpisode) {
             message = Format(L"首局基准已建立：%d 分；收集样本 %llu。下一局起会按成绩优势更新策略权重。",
                 score, static_cast<unsigned long long>(samplesOut));
+        } else if (advantage > 0.0) {
+            message = Format(L"成绩已记录：%d 分；样本 %llu；正向优势值 +%.3f；策略权重已向本局有效方向更新。",
+                score, static_cast<unsigned long long>(samplesOut), advantage);
         } else {
-            message = Format(L"成绩已记录：%d 分；样本 %llu；优势值 %+.3f；模型权重已更新。",
+            message = Format(L"成绩已记录：%d 分；样本 %llu；成绩差值 %.3f。本局保留为诊断记录，模型权重保持不变；没有执行负向惩罚更新。",
                 score, static_cast<unsigned long long>(samplesOut), advantage);
         }
         return true;

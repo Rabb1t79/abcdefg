@@ -93,6 +93,9 @@ public:
             const double rawAdvantage = (static_cast<double>(score) - baseline) / scale;
             advantage = (std::max)(-2.0, (std::min)(2.0, rawAdvantage));
 
+            // Gentle training mode: below-baseline episodes are diagnostic data only.
+            // Never apply a negative-gradient update to the policy weights.
+            if (advantage > 0.0) {
             std::array<double, FEATURE_COUNT> meanGradient{};
             for (const auto& e : pending_) {
                 for (size_t i = 0; i < FEATURE_COUNT; ++i) meanGradient[i] += e.gradient[i];

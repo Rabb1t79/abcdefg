@@ -40,8 +40,11 @@ void StartBot(AppState* s) {
     const int lookaheadDepth=static_cast<int>(ReadDoubleEdit(s->lookaheadEdit,4,1,6));
     const double epsilon=ReadDoubleEdit(s->epsilonEdit,15.0,0.0,60.0)/100.0;
     const double temperature=ReadDoubleEdit(s->temperatureEdit,0.80,0.05,5.0);
+    const int keyHoldMs=static_cast<int>(ReadDoubleEdit(s->keyHoldEdit,26,8,80));
+    const int keyGapMs=static_cast<int>(ReadDoubleEdit(s->keyGapEdit,12,0,80));
+    const int dropWaitMs=static_cast<int>(ReadDoubleEdit(s->dropWaitEdit,190,80,1000));
     SaveConfig(s);
-    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature); }
+    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature,keyHoldMs,keyGapMs,dropWaitMs); }
     catch(...) { s->running.store(false);EnableWindow(s->startButton,TRUE);EnableWindow(s->stopButton,FALSE);SetWindowTextW(s->statusLabel,L"状态：启动失败");MessageBoxW(s->hwnd,L"无法创建自动控制线程。",L"启动失败",MB_ICONERROR); }
 }
 
@@ -69,6 +72,12 @@ void CreateUi(AppState* s) {
     s->nextCountEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"6",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,650,126,38,26,ID_NEXT_COUNT);
     make(0,L"STATIC",L"前瞻NEXT：",SS_LEFT,715,130,65,24,0);
     s->lookaheadEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"4",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,785,126,38,26,ID_LOOKAHEAD);
+    make(0,L"STATIC",L"按住",SS_LEFT,835,130,35,24,0);
+    s->keyHoldEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"26",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,870,126,38,26,ID_KEY_HOLD);
+    make(0,L"STATIC",L"间隔",SS_LEFT,914,130,35,24,0);
+    s->keyGapEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"12",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,948,126,38,26,ID_KEY_GAP);
+    make(0,L"STATIC",L"落稳",SS_LEFT,992,130,35,24,0);
+    s->dropWaitEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"190",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,1027,126,48,26,ID_DROP_WAIT);
     s->nextStatusLabel=make(0,L"STATIC",L"NEXT识别：尚未测试",SS_LEFT,600,176,430,24,0);
     make(0,L"BUTTON",L"测试识别",BS_PUSHBUTTON,20,170,115,34,ID_TEST);
     s->startButton=make(0,L"BUTTON",L"开始自动落块",BS_PUSHBUTTON,145,170,145,34,ID_START);
@@ -77,7 +86,7 @@ void CreateUi(AppState* s) {
     make(0,L"STATIC",L"按键：← 左移　→ 右移　↑ 顺时针旋转　Space 硬降　｜　F8 紧急停止",SS_LEFT,20,215,760,24,ID_HELP);
 
     // Training controls: reward comes from the real end-of-game score entered by the user.
-    make(0,L"STATIC",L"在线强化学习（每局结束后录入实际分数，模型再更新）",SS_LEFT,20,252,800,22,0);
+    make(0,L"STATIC",L"成绩反馈学习（高于基准时正向强化；低分只记录原因，不反向惩罚权重）",SS_LEFT,20,252,900,22,0);
     make(0,L"STATIC",L"本局最终分数：",SS_LEFT,20,284,100,24,0);
     s->scoreEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,120,280,90,27,ID_SCORE);
     make(0,L"BUTTON",L"提交成绩并学习",BS_PUSHBUTTON,225,278,145,32,ID_SUBMIT_SCORE);
@@ -99,7 +108,9 @@ void CreateUi(AppState* s) {
     SetWindowLongPtrW(s->preview,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(s));
     AppendLog(s,L"程序已就绪。请选择游戏窗口，分别框选棋盘和 NEXT 预览列，再测试识别。");
     AppendLog(s,L"训练说明：每次落块产生一个动作样本；整局结束后在“本局最终分数”中录入实际成绩并提交。");
-    AppendLog(s,L"算法是可解释的线性策略模型；8 个权重会影响多步搜索评分，并根据成绩逐局调整。");
+    AppendLog(s,L"算法是可解释的线性策略模型；8 个权重会影响多步搜索评分。");
+    AppendLog(s,L"温和训练模式：成绩高于基准时做正向更新；低于基准时仅保存诊断记录，不执行负向权重更新。");
+    AppendLog(s,L"输入节奏可在 NEXT 参数右侧调整：按住/间隔/落稳（毫秒）。请从默认值开始逐步加快。");
 }
 
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
