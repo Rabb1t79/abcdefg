@@ -1821,23 +1821,6 @@ struct Ue5NteAdapter::State {
             "cameraManager.fov"});
     }
 
-    [[nodiscard]] bool NteDamageChainProfileAvailable() const noexcept {
-        return framework_hook_ready && resolution.FeatureAvailable("nte.damage-chain");
-    }
-
-    AnomalyStatusV1 DamageChainAddress(const bool gate, std::uintptr_t* address) noexcept {
-        if (address == nullptr) {
-            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "address is required");
-        }
-        const char* const id = gate ? "nte.DamageChain.Gate" : "nte.DamageChain.Apply";
-        const auto* const symbol = resolution.FindSymbol(id);
-        if (symbol == nullptr || !symbol->Available()) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "damage-chain symbol is unavailable");
-        }
-        *address = symbol->address;
-        return Status(ANOMALY_STATUS_V1_OK);
-    }
-
     [[nodiscard]] bool NteVehicleProfileAvailable() const noexcept {
         return static_cast<bool>(process_event_invoker) && framework_hook_ready &&
             resolution.FeatureAvailable(kNteVehicleFeature) &&
@@ -2478,9 +2461,6 @@ struct Ue5NteAdapter::State {
         }
         if (id == ANOMALY_NTE_VEHICLE_SERVICE_V1_ID) {
             return framework_hook_ready && NteVehicleProfileAvailable();
-        }
-        if (id == ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID) {
-            return framework_hook_ready && NteDamageChainProfileAvailable();
         }
         if (id == ANOMALY_NTE_PICKUP_SERVICE_V1_ID) {
             return framework_hook_ready && SemanticFeatureAvailable("nte.pickup");
@@ -16741,9 +16721,6 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleRevokeFineSpeedAuthorizationThunk,
             VehicleCustomizationSnapshotThunk, VehicleCustomizationOptionThunk,
             VehicleRepairCurrentDurabilityThunk, VehicleSetSpeedTargetThunk};
-        damage_chain_service = {
-            sizeof(AnomalyNteDamageChainServiceV1), ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
-            this, DamageChainApplyAddressThunk, DamageChainGateAddressThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -16815,7 +16792,6 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
     AnomalyNteMapLandmarksServiceV1 map_landmarks_service{};
     AnomalyNteNavigationServiceV1 navigation_service{};
     AnomalyNteVehicleServiceV1 vehicle_service{};
-    AnomalyNteDamageChainServiceV1 damage_chain_service{};
     AnomalyNtePickupServiceV1 pickup_service{};
     AnomalyNteUiButtonsServiceV1 ui_buttons_service{};
     AnomalyNteEntitiesServiceV1 entities_service{};
@@ -17228,20 +17204,6 @@ private:
         void* user, const AnomalyNteVehicleSummonRequestV1* request) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleSummon(request) : StoppedStatus();
-    }
-
-    static AnomalyStatusV1 ANOMALY_CALL DamageChainApplyAddressThunk(
-        void* user, std::uintptr_t* address) noexcept {
-        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? static_cast<State*>(lease.User())->DamageChainAddress(false, address)
-                     : StoppedStatus();
-    }
-
-    static AnomalyStatusV1 ANOMALY_CALL DamageChainGateAddressThunk(
-        void* user, std::uintptr_t* address) noexcept {
-        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? static_cast<State*>(lease.User())->DamageChainAddress(true, address)
-                     : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL PickupRequestNearbyThunk(
@@ -18505,13 +18467,6 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             ANOMALY_NTE_VEHICLE_SERVICE_V1_ID,
             ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION,
             &endpoint->vehicle_service, {}, semantic_lifetime)) {
-        return false;
-    }
-    if (framework_hook_ready && NteDamageChainProfileAvailable() &&
-        !PublishIfMissing(
-            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID,
-            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
-            &endpoint->damage_chain_service, {}, semantic_lifetime)) {
         return false;
     }
     if (framework_hook_ready && SemanticFeatureAvailable("nte.entities") &&
