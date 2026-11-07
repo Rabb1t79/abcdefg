@@ -73,7 +73,10 @@ bool InferTopClippedPiece(const std::vector<Cell>& visible, char piece,
             std::sort(visibleExpected.begin(), visibleExpected.end(), [](const Cell& a, const Cell& b) {
                 return a.y == b.y ? a.x < b.x : a.y < b.y;
             });
-            if (visibleExpected == observed) {
+            const bool sameVisibleCells = visibleExpected.size() == observed.size() &&
+                std::equal(visibleExpected.begin(), visibleExpected.end(), observed.begin(),
+                    [](const Cell& a, const Cell& b) { return a.x == b.x && a.y == b.y; });
+            if (sameVisibleCells) {
                 ++matches;
                 rotationOut = rotation;
                 fullCellsOut = std::move(full);
