@@ -27,7 +27,11 @@ LRESULT CALLBACK SelectorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         PAINTSTRUCT ps{}; HDC dc=BeginPaint(hwnd,&ps); RECT rc{}; GetClientRect(hwnd,&rc);
         HBRUSH black=CreateSolidBrush(RGB(0,0,0)); FillRect(dc,&rc,black); DeleteObject(black);
         SetBkMode(dc,TRANSPARENT); SetTextColor(dc,RGB(255,255,255));
-        RECT hint{24,20,rc.right-24,58}; DrawTextW(dc,L"拖动鼠标框选 10 列 × 20 行棋盘内部区域；松开鼠标确认，按 Esc 取消。",-1,&hint,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+        const wchar_t* hintText = g_selectNextRegion
+            ? L"框选 NEXT 预览卡片区域：包含从上到下的全部预览方块，不要包含 NEXT 标题、箭头或外侧灰色边框；松开鼠标确认，按 Esc 取消。"
+            : L"框选 10 列 × 20 行棋盘内部区域；不要包含 NEXT、HOLD 或棋盘外框；松开鼠标确认，按 Esc 取消。";
+        RECT hint{24,20,rc.right-24,72};
+        DrawTextW(dc,hintText,-1,&hint,DT_LEFT|DT_VCENTER|DT_WORDBREAK);
         if(g_selectDragging) {
             RECT r{(std::min)(g_selectStart.x,g_selectCurrent.x),(std::min)(g_selectStart.y,g_selectCurrent.y),
                    (std::max)(g_selectStart.x,g_selectCurrent.x),(std::max)(g_selectStart.y,g_selectCurrent.y)};
@@ -64,12 +68,16 @@ void StartSelector(AppState* s, bool nextRegion) {
     g_virtualLeft=GetSystemMetrics(SM_XVIRTUALSCREEN);g_virtualTop=GetSystemMetrics(SM_YVIRTUALSCREEN);
     int width=GetSystemMetrics(SM_CXVIRTUALSCREEN),height=GetSystemMetrics(SM_CYVIRTUALSCREEN);
     g_mainWindow=s->hwnd;
-    HWND overlay=CreateWindowExW(WS_EX_TOPMOST|WS_EX_LAYERED|WS_EX_TOOLWINDOW,L"TetrisBoardSelector",L"选择棋盘区域",WS_POPUP,
+    const wchar_t* windowTitle = nextRegion ? L"选择 NEXT 预览区域" : L"选择棋盘区域";
+    HWND overlay=CreateWindowExW(WS_EX_TOPMOST|WS_EX_LAYERED|WS_EX_TOOLWINDOW,L"TetrisBoardSelector",windowTitle,WS_POPUP,
         g_virtualLeft,g_virtualTop,width,height,nullptr,nullptr,g_instance,nullptr);
     if(!overlay){AppendLog(s,L"无法打开棋盘框选界面。");return;}
     SetLayeredWindowAttributes(overlay,0,105,LWA_ALPHA);
     ShowWindow(overlay,SW_SHOW);SetForegroundWindow(overlay);
-    AppendLog(s,L"请拖动鼠标框选完整棋盘；按 Esc 可取消。");
+    if (nextRegion)
+        AppendLog(s,L"请框选 NEXT 预览卡片列：从最上方到最下方的全部预览方块；不要包含 NEXT 标题、箭头或灰色外框。");
+    else
+        AppendLog(s,L"请框选完整的 10×20 棋盘内部区域；不要包含 NEXT、HOLD 或棋盘外框。");
 }
 
 BOOL CALLBACK EnumWindowProc(HWND hwnd, LPARAM param) {

@@ -13,6 +13,7 @@
     } else {
         s->hasNextPreview=false; s->previewNextPieces.clear();
         SetWindowTextW(s->nextStatusLabel,L"NEXT识别：尚未框选");
+        AppendLog(s,L"NEXT 尚未选择：请点击“框选 NEXT 区域”，只框住右侧预览卡片列。");
     }
 }
 
