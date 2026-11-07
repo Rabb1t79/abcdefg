@@ -5,9 +5,9 @@
         DWORD noPieceSince=GetTickCount();
         std::mt19937 rng(static_cast<unsigned int>(GetTickCount() ^ GetCurrentThreadId()));
         while(!s->stop.load()) {
-            CapturedImage image; std::wstring capError;
-            if(!CaptureScreenRect(rect,image,capError)) throw std::runtime_error("屏幕截图失败：请确认游戏窗口可见且棋盘区域有效。");
-            VisionResult vision=Analyze(image,threshold);
+            std::wstring capError;
+            VisionResult vision=AnalyzeStable(rect,threshold,capError);
+            if(!capError.empty()) throw std::runtime_error("屏幕截图失败："+std::string("请确认游戏窗口可见且棋盘区域有效。"));
             if(!vision.hasActive) {
                 if(GetTickCount()-noPieceSince>8000) { log(L"连续 8 秒未识别到出生区方块，已停止。请检查棋盘框选范围和识别阈值。"); break; }
                 SleepCheck(s->stop,120); continue;
@@ -15,9 +15,8 @@
             noPieceSince=GetTickCount();
             Candidate piece=vision.active;
             SleepCheck(s->stop,85); if(s->stop.load())break;
-            CapturedImage verifyImage;
-            if(!CaptureScreenRect(rect,verifyImage,capError)) throw std::runtime_error("复核截图失败。");
-            VisionResult check=Analyze(verifyImage,threshold);
+            VisionResult check=AnalyzeStable(rect,threshold,capError);
+            if(!capError.empty()) throw std::runtime_error("复核截图失败。");
             if(!check.hasActive || check.active.name!=piece.name || check.active.rotation!=piece.rotation || check.active.minX!=piece.minX) continue;
             piece=check.active;
             Board board=BoardWithoutActive(check);
@@ -36,8 +35,8 @@
             Move move=decision.move;
             const auto& pieceRotations=g_rotations[piece.name];
             int rotateSteps=(move.rotation-piece.rotation+static_cast<int>(pieceRotations.size()))%static_cast<int>(pieceRotations.size());
-            log(Format(L"当前 %c 型；NEXT=[%s]；前瞻 %d 块；目标旋转 %d、列 %d，路径评分 %.2f。",
-                piece.name,FormatNextQueue(queue.pieces).c_str(),decision.searchedNextPieces,
+            log(Format(L"当前 %c 型（稳定采样 %d/3）；NEXT=[%s]；前瞻 %d 块；目标旋转 %d、列 %d，路径评分 %.2f。",
+                piece.name,check.activeStableSamples,FormatNextQueueConfidence(queue).c_str(),decision.searchedNextPieces,
                 move.rotation,move.x,move.score));
             for(int i=0;i<rotateSteps && !s->stop.load();++i) {
                 std::wstring err; if(!TapKey(target,VK_UP,42,err)) throw std::runtime_error("旋转按键失败或焦点丢失。");

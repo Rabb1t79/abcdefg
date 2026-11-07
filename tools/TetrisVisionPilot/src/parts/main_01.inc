@@ -60,6 +60,7 @@ struct VisionResult {
     bool hasActive{};
     Rgb background{};
     int occupiedCount{};
+    int activeStableSamples{};
 };
 
 struct CapturedImage {

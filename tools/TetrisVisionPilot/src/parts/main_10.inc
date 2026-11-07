@@ -3,8 +3,8 @@
         NextQueueResult queue; std::wstring queueError;
         if (ReadNextQueue(s->nextRect,count,queue,queueError)) {
             s->previewNextPieces=queue.pieces; s->hasNextPreview=true;
-            SetWindowTextW(s->nextStatusLabel,(L"NEXT识别： "+FormatNextQueue(queue.pieces)).c_str());
-            AppendLog(s,L"NEXT 队列识别成功："+FormatNextQueue(queue.pieces));
+            SetWindowTextW(s->nextStatusLabel,(L"NEXT识别： "+FormatNextQueueConfidence(queue)).c_str());
+            AppendLog(s,L"NEXT 队列识别成功："+FormatNextQueueConfidence(queue));
         } else {
             s->hasNextPreview=false; s->previewNextPieces.clear();
             SetWindowTextW(s->nextStatusLabel,L"NEXT识别：失败");

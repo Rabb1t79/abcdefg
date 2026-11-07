@@ -110,8 +110,9 @@ void TestRecognition(AppState* s) {
             s->boardRect.width,s->boardRect.height).c_str(),L"棋盘区域尺寸不正确",MB_ICONWARNING);
         return;
     }
-    CapturedImage image;std::wstring error;
-    if(!CaptureScreenRect(s->boardRect,image,error)){MessageBoxW(s->hwnd,error.c_str(),L"截图失败",MB_ICONERROR);AppendLog(s,error);return;}
-    VisionResult result=Analyze(image,ReadThreshold(s));s->previewData=result;s->hasPreview=true;InvalidateRect(s->preview,nullptr,TRUE);
-    if(result.hasActive)AppendLog(s,Format(L"识别测试：占用格 %d；当前方块 %c 型，旋转 %d，位置列 %d、行 %d。",result.occupiedCount,result.active.name,result.active.rotation,result.active.minX,result.active.minY));
-    else AppendLog(s,Format(L"识别测试：占用格 %d；没有识别到出生区四格方块。请检查框选范围和识别阈值。",result.occupiedCount));
+    std::wstring error;
+    VisionResult result=AnalyzeStable(s->boardRect,ReadThreshold(s),error);
+    if(!error.empty()){MessageBoxW(s->hwnd,error.c_str(),L"截图失败",MB_ICONERROR);AppendLog(s,error);return;}
+    s->previewData=result;s->hasPreview=true;InvalidateRect(s->preview,nullptr,TRUE);
+    if(result.hasActive)AppendLog(s,Format(L"识别测试：占用格 %d；当前方块 %c 型，旋转 %d，位置列 %d、行 %d；稳定采样 %d/3。",result.occupiedCount,result.active.name,result.active.rotation,result.active.minX,result.active.minY,result.activeStableSamples));
+    else AppendLog(s,Format(L"识别测试：占用格 %d；当前方块未稳定识别（三帧一致数 %d/3）。请稍等方块落稳后再测试，或检查棋盘区域和颜色阈值。",result.occupiedCount,result.activeStableSamples));

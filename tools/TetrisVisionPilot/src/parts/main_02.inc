@@ -193,6 +193,54 @@ VisionResult Analyze(const CapturedImage& image, int threshold, int spawnRows = 
 }
 
 
+VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error) {
+    constexpr int kSamples = 3;
+    constexpr int kSampleIntervalMs = 28;
+    std::array<VisionResult, kSamples> samples{};
+    for (int i = 0; i < kSamples; ++i) {
+        CapturedImage image;
+        if (!CaptureScreenRect(rect, image, error)) return {};
+        samples[static_cast<size_t>(i)] = Analyze(image, threshold);
+        if (i + 1 < kSamples) Sleep(kSampleIntervalMs);
+    }
+
+    // Falling changes minY every frame; keep identity stable by type/rotation/column.
+    int bestCount = 0;
+    int latestMatchingIndex = -1;
+    for (int i = 0; i < kSamples; ++i) {
+        if (!samples[static_cast<size_t>(i)].hasActive) continue;
+        const Candidate& candidate = samples[static_cast<size_t>(i)].active;
+        int count = 0;
+        int latest = i;
+        for (int j = 0; j < kSamples; ++j) {
+            const auto& other = samples[static_cast<size_t>(j)];
+            if (!other.hasActive) continue;
+            if (other.active.name == candidate.name &&
+                other.active.rotation == candidate.rotation &&
+                other.active.minX == candidate.minX) {
+                ++count;
+                latest = (std::max)(latest, j);
+            }
+        }
+        if (count > bestCount) {
+            bestCount = count;
+            latestMatchingIndex = latest;
+        }
+    }
+
+    if (bestCount >= 2 && latestMatchingIndex >= 0) {
+        VisionResult result = samples[static_cast<size_t>(latestMatchingIndex)];
+        result.activeStableSamples = bestCount;
+        return result;
+    }
+
+    // Keep the latest occupancy map for the preview, but suppress unstable piece identity.
+    VisionResult result = samples.back();
+    result.hasActive = false;
+    result.activeStableSamples = bestCount;
+    return result;
+}
+
 char PieceFromPreviewColor(const Rgb& color) {
     const double r = color.r / 255.0;
     const double g = color.g / 255.0;
@@ -345,7 +393,7 @@ bool ReadNextQueue(const Rect& rect, int slotCount, NextQueueResult& out, std::w
             return false;
         }
         out.pieces.push_back(band.piece);
-        out.confidence.push_back(band.best);
+        out.confidence.push_back(band.total > 0 ? (100 * band.best / band.total) : 0);
     }
     return true;
 }
@@ -355,6 +403,16 @@ std::wstring FormatNextQueue(const std::vector<char>& pieces) {
     for (char piece : pieces) {
         if (!result.empty()) result += L" → ";
         result += static_cast<wchar_t>(piece);
+    }
+    return result;
+}
+
+std::wstring FormatNextQueueConfidence(const NextQueueResult& queue) {
+    std::wstring result;
+    for (size_t i = 0; i < queue.pieces.size(); ++i) {
+        if (!result.empty()) result += L" → ";
+        const int confidence = i < queue.confidence.size() ? queue.confidence[i] : 0;
+        result += Format(L"%c(%d%%)", queue.pieces[i], confidence);
     }
     return result;
 }
