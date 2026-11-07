@@ -193,42 +193,163 @@ VisionResult Analyze(const CapturedImage& image, int threshold, int spawnRows = 
 }
 
 
-struct NextQueueResult { std::vector<char> pieces; std::vector<int> confidence; };
+char PieceFromPreviewColor(const Rgb& color) {
+    const double r = color.r / 255.0;
+    const double g = color.g / 255.0;
+    const double b = color.b / 255.0;
+    const double maximum = (std::max)({r, g, b});
+    const double minimum = (std::min)({r, g, b});
+    const double delta = maximum - minimum;
+    if (maximum < 0.22 || delta < 0.10) return 0;
+    const double saturation = maximum <= 0.0 ? 0.0 : delta / maximum;
+    if (saturation < 0.28) return 0;
+
+    double hue = 0.0;
+    if (delta > 0.0) {
+        if (maximum == r) hue = 60.0 * std::fmod((g - b) / delta, 6.0);
+        else if (maximum == g) hue = 60.0 * ((b - r) / delta + 2.0);
+        else hue = 60.0 * ((r - g) / delta + 4.0);
+    }
+    if (hue < 0.0) hue += 360.0;
+
+    // Tetris Online palette families; saturation/value filtering removes the
+    // grey card frames, arrows, shadows and most specular white highlights.
+    if (hue < 15.0 || hue >= 345.0) return 'Z';
+    if (hue >= 20.0 && hue < 43.0) return 'L';
+    if (hue >= 43.0 && hue < 75.0) return 'O';
+    if (hue >= 75.0 && hue < 160.0) return 'S';
+    if (hue >= 160.0 && hue < 205.0) return 'I';
+    if (hue >= 205.0 && hue < 260.0) return 'J';
+    if (hue >= 260.0 && hue < 330.0) return 'T';
+    return 0;
+}
+
+struct NextQueueResult {
+    std::vector<char> pieces;
+    std::vector<int> confidence;
+};
+
+struct PreviewBand {
+    int top{};
+    int bottom{};
+    int total{};
+    int best{};
+    int second{};
+    char piece{};
+};
+
 bool ReadNextQueue(const Rect& rect, int slotCount, NextQueueResult& out, std::wstring& error) {
     out = {};
-    if (slotCount < 1 || slotCount > 10 || rect.width < 30 || rect.height < slotCount * 26) {
-        error = L"NEXT 区域尺寸或预览块数量无效。请只框选 NEXT 竖列中的预览卡片。";
+    if (slotCount < 1 || slotCount > 10 || rect.width < 30 || rect.height < slotCount * 18) {
+        error = L"NEXT 区域尺寸或预览块数量无效。请只框选 NEXT 预览卡片列。";
         return false;
     }
+
     CapturedImage image;
     if (!CaptureScreenRect(rect, image, error)) return false;
-    constexpr int paletteCount = 7;
-    const double pitch = static_cast<double>(image.height) / slotCount;
-    static constexpr char names[] = {'S','J','I','T','O','L','Z'};
-    for (int slot = 0; slot < slotCount; ++slot) {
-        const int y0 = (std::max)(0, static_cast<int>(slot * pitch + pitch * 0.12));
-        const int y1 = (std::min)(image.height, static_cast<int>((slot + 1) * pitch - pitch * 0.12));
-        const int x0 = (std::max)(0, static_cast<int>(image.width * 0.06));
-        const int x1 = (std::min)(image.width, static_cast<int>(image.width * 0.94));
-        std::array<int, paletteCount> counts{};
-        for (int py = y0; py < y1; py += 2) for (int px = x0; px < x1; px += 2) {
-            const Pixel& pixel = image.pixels[static_cast<size_t>(py) * image.width + px];
-            const char piece = PieceFromPalette({pixel.r, pixel.g, pixel.b}, 60);
-            for (int i = 0; i < paletteCount; ++i) if (names[i] == piece) { ++counts[i]; break; }
+
+    const int x0 = (std::max)(0, static_cast<int>(image.width * 0.06));
+    const int x1 = (std::min)(image.width, static_cast<int>(image.width * 0.94));
+    if (x1 - x0 < 20 || image.height < slotCount * 18) {
+        error = L"NEXT 选择区域太窄或太矮。请把六个预览卡片完整框入。";
+        return false;
+    }
+
+    // Detect actual colored-piece rows first. This adapts to card gaps and
+    // different tetromino heights (the I piece is only one block tall).
+    std::vector<int> rowCounts(static_cast<size_t>(image.height), 0);
+    for (int y = 0; y < image.height; y += 2) {
+        int count = 0;
+        for (int x = x0; x < x1; x += 2) {
+            const Pixel& px = image.pixels[static_cast<size_t>(y) * image.width + x];
+            if (PieceFromPreviewColor({px.r, px.g, px.b})) ++count;
         }
-        const int bestIndex = static_cast<int>(std::distance(counts.begin(), std::max_element(counts.begin(), counts.end())));
-        const int best = counts[bestIndex];
-        int second = 0;
-        for (int i = 0; i < paletteCount; ++i) if (i != bestIndex) second = (std::max)(second, counts[i]);
-        if (best < 10 || (second > 0 && best < static_cast<int>(second * 1.05))) {
-            error = Format(L"NEXT 第 %d 格无法可靠识别（颜色样本 %d）。请调整框选区域或预览块数量。", slot + 1, best);
+        rowCounts[static_cast<size_t>(y)] = count;
+    }
+
+    std::vector<PreviewBand> bands;
+    int activeStart = -1;
+    int lastActive = -1;
+    for (int y = 0; y < image.height; y += 2) {
+        const bool active = rowCounts[static_cast<size_t>(y)] >= 2;
+        if (active) {
+            if (activeStart < 0) activeStart = y;
+            lastActive = y;
+        } else if (activeStart >= 0 && y - lastActive > 10) {
+            PreviewBand band;
+            band.top = activeStart;
+            band.bottom = lastActive;
+            bands.push_back(band);
+            activeStart = -1;
+            lastActive = -1;
+        }
+    }
+    if (activeStart >= 0) {
+        PreviewBand band;
+        band.top = activeStart;
+        band.bottom = lastActive;
+        bands.push_back(band);
+    }
+
+    // Count hue classes over each band and discard one-row decorations or
+    // border artefacts before matching the expected queue length.
+    std::vector<PreviewBand> validBands;
+    for (auto band : bands) {
+        if (band.bottom - band.top + 1 < 6) continue;
+        std::array<int, 7> counts{};
+        static constexpr char names[] = {'S','J','I','T','O','L','Z'};
+        for (int y = band.top; y <= band.bottom; y += 2) {
+            for (int x = x0; x < x1; x += 2) {
+                const Pixel& px = image.pixels[static_cast<size_t>(y) * image.width + x];
+                const char piece = PieceFromPreviewColor({px.r, px.g, px.b});
+                for (int i = 0; i < 7; ++i) if (names[i] == piece) { ++counts[i]; break; }
+            }
+        }
+        const int bestIndex = static_cast<int>(std::distance(counts.begin(),
+            std::max_element(counts.begin(), counts.end())));
+        band.best = counts[bestIndex];
+        band.second = 0;
+        band.total = 0;
+        for (int i = 0; i < 7; ++i) {
+            band.total += counts[i];
+            if (i != bestIndex) band.second = (std::max)(band.second, counts[i]);
+        }
+        band.piece = names[bestIndex];
+        if (band.total >= 20 && band.best >= 12) validBands.push_back(band);
+    }
+
+    if (static_cast<int>(validBands.size()) < slotCount) {
+        error = Format(L"只检测到 %d/%d 个 NEXT 方块色带。请把预览卡片完整框入，勿包含标题或裁掉最上/最下方卡片。",
+            static_cast<int>(validBands.size()), slotCount);
+        return false;
+    }
+
+    // If the rectangle also contains a coloured decoration, retain the
+    // slotCount strongest bands, then restore their original top-to-bottom order.
+    if (static_cast<int>(validBands.size()) > slotCount) {
+        std::sort(validBands.begin(), validBands.end(), [](const PreviewBand& a, const PreviewBand& b) {
+            return a.total > b.total;
+        });
+        validBands.resize(static_cast<size_t>(slotCount));
+    }
+    std::sort(validBands.begin(), validBands.end(), [](const PreviewBand& a, const PreviewBand& b) {
+        return a.top < b.top;
+    });
+
+    for (size_t i = 0; i < validBands.size(); ++i) {
+        const auto& band = validBands[i];
+        if (band.best < static_cast<int>(band.second * 1.12)) {
+            error = Format(L"NEXT 第 %d 格颜色仍有歧义（主色 %d，次色 %d）。请缩紧框选范围。",
+                static_cast<int>(i + 1), band.best, band.second);
+            out = {};
             return false;
         }
-        out.pieces.push_back(names[bestIndex]);
-        out.confidence.push_back(best);
+        out.pieces.push_back(band.piece);
+        out.confidence.push_back(band.best);
     }
     return true;
 }
+
 std::wstring FormatNextQueue(const std::vector<char>& pieces) {
     std::wstring result;
     for (char piece : pieces) {
