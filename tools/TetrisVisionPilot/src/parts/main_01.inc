@@ -60,7 +60,10 @@ struct VisionResult {
     Rgb colors[ROWS][COLS]{};
     Candidate active{};
     std::vector<Candidate> components; // All isolated tetromino-shaped components.
+    Candidate ghost{}; // Hollow landing projection.
     bool hasActive{};
+    bool hasGhost{};
+    int ghostConfidence{};
     Rgb background{};
     int occupiedCount{};
     int activeStableSamples{};

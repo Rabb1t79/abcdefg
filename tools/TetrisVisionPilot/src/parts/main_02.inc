@@ -86,6 +86,36 @@ bool InferTopClippedPiece(const std::vector<Cell>& visible, char piece,
     return matches == 1;
 }
 
+char PieceFromGhostColor(const Rgb& color) {
+    const double r = color.r / 255.0;
+    const double g = color.g / 255.0;
+    const double b = color.b / 255.0;
+    const double maximum = (std::max)({r, g, b});
+    const double minimum = (std::min)({r, g, b});
+    const double delta = maximum - minimum;
+    if (maximum < 0.12 || delta < 0.055) return 0;
+    if (delta / maximum < 0.20) return 0;
+    double hue = 0.0;
+    if (maximum == r) hue = 60.0 * std::fmod((g - b) / delta, 6.0);
+    else if (maximum == g) hue = 60.0 * ((b - r) / delta + 2.0);
+    else hue = 60.0 * ((r - g) / delta + 4.0);
+    if (hue < 0.0) hue += 360.0;
+    if (hue < 15.0 || hue >= 345.0) return 'Z';
+    if (hue >= 20.0 && hue < 43.0) return 'L';
+    if (hue >= 43.0 && hue < 75.0) return 'O';
+    if (hue >= 75.0 && hue < 160.0) return 'S';
+    if (hue >= 160.0 && hue < 205.0) return 'I';
+    if (hue >= 205.0 && hue < 260.0) return 'J';
+    if (hue >= 260.0 && hue < 330.0) return 'T';
+    return 0;
+}
+
+int GhostPieceIndex(char piece) {
+    static constexpr char names[] = {'S','J','I','T','O','L','Z'};
+    for (int i = 0; i < 7; ++i) if (names[i] == piece) return i;
+    return -1;
+}
+
 VisionResult Analyze(const CapturedImage& image, int threshold, int spawnRows = 7) {
     VisionResult result{};
     const double cw = static_cast<double>(image.width) / COLS;
@@ -192,6 +222,88 @@ VisionResult Analyze(const CapturedImage& image, int threshold, int spawnRows = 
             result.hasActive = true;
             result.active = std::move(detected);
         }
+    }
+
+    // Scan the coloured inner borders of empty cells. The centre-based board
+    // mask remains untouched, so hollow landing previews never become obstacles.
+    char ghostCellPiece[ROWS][COLS]{};
+    int ghostCellStrength[ROWS][COLS]{};
+    for (int y = 0; y < ROWS; ++y) for (int x = 0; x < COLS; ++x) {
+        if (result.occupied[y][x]) continue;
+        const double left = x * cw, top = y * ch;
+        const int px0 = (std::max)(0, static_cast<int>(left + cw * 0.06));
+        const int px1 = (std::min)(image.width, static_cast<int>(left + cw * 0.94));
+        const int py0 = (std::max)(0, static_cast<int>(top + ch * 0.06));
+        const int py1 = (std::min)(image.height, static_cast<int>(top + ch * 0.94));
+        int counts[7]{};
+        for (int py = py0; py < py1; ++py) for (int px = px0; px < px1; ++px) {
+            const double rx = (px + 0.5 - left) / cw;
+            const double ry = (py + 0.5 - top) / ch;
+            if (!(rx < 0.24 || rx > 0.76 || ry < 0.24 || ry > 0.76)) continue;
+            const Pixel& pixel = image.pixels[static_cast<size_t>(py) * image.width + px];
+            const char name = PieceFromGhostColor({pixel.r, pixel.g, pixel.b});
+            const char names[] = {'S','J','I','T','O','L','Z'};
+            for (int i = 0; i < 7; ++i) if (names[i] == name) { ++counts[i]; break; }
+        }
+        int bestIndex = -1, best = 0, second = 0;
+        for (int i = 0; i < 7; ++i) {
+            if (counts[i] > best) { second = best; best = counts[i]; bestIndex = i; }
+            else second = (std::max)(second, counts[i]);
+        }
+        if (bestIndex >= 0 && best >= 5 && best >= second + 3 &&
+            (second == 0 || best >= second * 1.30)) {
+            static constexpr char names[] = {'S','J','I','T','O','L','Z'};
+            ghostCellPiece[y][x] = names[bestIndex];
+            ghostCellStrength[y][x] = best;
+        }
+    }
+
+    bool ghostVisited[ROWS][COLS]{};
+    int bestGhostStrength = 0;
+    for (int sy = 0; sy < ROWS; ++sy) for (int sx = 0; sx < COLS; ++sx) {
+        const char piece = ghostCellPiece[sy][sx];
+        if (!piece || ghostVisited[sy][sx]) continue;
+        std::vector<Cell> component;
+        std::vector<Cell> stack{{sx, sy}};
+        ghostVisited[sy][sx] = true;
+        int strength = 0;
+        const int dx[4] = {1, -1, 0, 0};
+        const int dy[4] = {0, 0, 1, -1};
+        while (!stack.empty()) {
+            const Cell cell = stack.back();
+            stack.pop_back();
+            component.push_back(cell);
+            strength += ghostCellStrength[cell.y][cell.x];
+            for (int k = 0; k < 4; ++k) {
+                const int nx = cell.x + dx[k], ny = cell.y + dy[k];
+                if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS ||
+                    ghostVisited[ny][nx] || ghostCellPiece[ny][nx] != piece) continue;
+                ghostVisited[ny][nx] = true;
+                stack.push_back({nx, ny});
+            }
+        }
+        if (component.size() != 4 || strength <= bestGhostStrength) continue;
+        const auto shape = g_shapeLookup.find(ShapeKey(component));
+        if (shape == g_shapeLookup.end() || shape->second.first != piece) continue;
+        Candidate ghost;
+        ghost.name = piece;
+        ghost.rotation = shape->second.second;
+        ghost.cells = component;
+        ghost.minX = COLS;
+        ghost.minY = ROWS;
+        double sumX = 0.0, sumY = 0.0;
+        for (const Cell& cell : component) {
+            ghost.minX = (std::min)(ghost.minX, cell.x);
+            ghost.minY = (std::min)(ghost.minY, cell.y);
+            sumX += cell.x;
+            sumY += cell.y;
+        }
+        ghost.centerX = sumX / 4.0;
+        ghost.centerY = sumY / 4.0;
+        result.ghost = std::move(ghost);
+        result.hasGhost = true;
+        result.ghostConfidence = strength;
+        bestGhostStrength = strength;
     }
     return result;
 }
