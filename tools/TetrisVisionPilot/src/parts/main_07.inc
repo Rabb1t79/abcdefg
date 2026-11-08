@@ -78,9 +78,16 @@
                 for(int attempt=0;attempt<25 && !s->stop.load();++attempt){
                     SleepCheck(s->stop,160);
                     std::string titleText; std::wstring titleError;
-                    if(ReadOcrText(ocr,gameOverRect,"GAMEOVER ",tesseract::PSM_SINGLE_LINE,titleText,titleError) && !IsGameOverText(titleText)){restarted=true;break;}
+                    const bool titleCleared = ReadOcrText(ocr,gameOverRect,"GAMEOVER ",tesseract::PSM_SINGLE_LINE,titleText,titleError) &&
+                                              !IsGameOverText(titleText);
+                    if (!titleCleared) continue;
+                    // Do not treat an OCR miss as a restart: the playfield must also
+                    // contain a newly spawned active tetromino before retry continues.
+                    std::wstring boardError;
+                    const VisionResult newGame = AnalyzeStable(rect,threshold,boardError);
+                    if (boardError.empty() && newGame.hasActive) { restarted=true; break; }
                 }
-                if(!restarted){log(L"点击 Again 后 GAME OVER 弹窗仍在；请检查窗口大小和按钮位置。");break;}
+                if(!restarted){log(L"点击 Again 后未确认新方块出现；已停止自动重试，避免在旧弹窗上重复点击。");break;}
                 log(L"已确认新一局开始，重置分数缓存。");
                 SleepCheck(s->stop,450);
                 latestScore = 0; hasLatestScore = false;
