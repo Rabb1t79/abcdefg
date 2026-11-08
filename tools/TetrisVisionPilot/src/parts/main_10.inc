@@ -143,7 +143,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if(!s)return DefWindowProcW(hwnd,msg,wp,lp);
     switch(msg){
     case WM_CREATE:
-        CreateUi(s);LoadConfig(s);UpdateRegionLabel(s);UpdateNextRegionLabel(s);UpdateAgainRegionLabel(s);s->trainer.Load(s->modelPath);UpdateTrainingStats(s);RefreshWindows(s);
+        CreateUi(s);LoadConfig(s);UpdateRegionLabel(s);UpdateNextRegionLabel(s);UpdateAgainRegionLabel(s);s->trainer.Load(s->modelPath);s->experienceMemory.Load(s->experiencePath);UpdateTrainingStats(s);RefreshWindows(s);
+        AppendLog(s,Format(L"已加载成功经验 %llu 条；只有高于本阶段基准的整局经验会成为后续决策的轻量参考。",
+            static_cast<unsigned long long>(s->experienceMemory.Size())));
         if(!RegisterHotKey(hwnd,HOTKEY_STOP,MOD_NOREPEAT,VK_F8)) AppendLog(s,L"提示：F8 全局热键注册失败；请使用界面停止按钮，并避免切换窗口。");
         return 0;
     case WM_COMMAND:
