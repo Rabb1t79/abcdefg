@@ -15,7 +15,7 @@ void UpdateTrainingStats(AppState* s) {
     if (!s->trainingStatsLabel) return;
     const TrainerSnapshot snap = s->trainer.Snapshot();
     std::wstring text = Format(
-        L"训练局数：%llu    平均分：%.0f    最高分：%d    基础示范样本：%llu 对    成功经验：%llu 条    待结算动作：%llu    最近成绩差值（仅记录）：%+.3f\r\n"
+        L"训练局数：%llu    平均分：%.0f    最高分：%d    基础示范样本：%llu 对    高分局经验：%llu 条    待结算动作：%llu    最近成绩差值（仅记录）：%+.3f\r\n"
         L"权重：高度 %.4f | 空洞 %.4f | 起伏 %.4f | 最高列 %.4f | 井 %.4f | 行边界 %.4f | 列边界 %.4f | 消行 %.4f",
         static_cast<unsigned long long>(snap.games), snap.averageScore, snap.bestScore,
         static_cast<unsigned long long>(snap.bootstrapSamples),

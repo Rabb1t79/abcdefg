@@ -99,7 +99,7 @@ private:
     double lastAdvantage_{};
 };
 
-struct SuccessExperienceRecord {
+struct AboveBaselineExperienceRecord {
     std::array<double, FEATURE_COUNT> stateFeatures{};
     char piece{};
     int rotation{};
@@ -123,7 +123,7 @@ public:
             std::string field;
             while (std::getline(row,field,',')) fields.push_back(field);
             if (fields.size()!=15 || fields[2]!="1" || fields[3].empty()) continue;
-            SuccessExperienceRecord record;
+            AboveBaselineExperienceRecord record;
             try {
                 record.piece=fields[3][0];
                 record.rotation=std::stoi(fields[4]);
@@ -161,7 +161,7 @@ public:
             output<<'\n';
             ++written;
             if(aboveBaseline) {
-                SuccessExperienceRecord record;
+                AboveBaselineExperienceRecord record;
                 record.stateFeatures=experience.stateFeatures;
                 record.piece=experience.piece;
                 record.rotation=experience.rotation;
@@ -214,7 +214,7 @@ public:
 
 private:
     mutable std::mutex mutex_;
-    std::vector<SuccessExperienceRecord> records_;
+    std::vector<AboveBaselineExperienceRecord> records_;
 };
 
 double DotFeatures(const std::array<double, FEATURE_COUNT>& weights, const Features& features) {

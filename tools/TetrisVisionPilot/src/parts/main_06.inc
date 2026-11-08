@@ -56,7 +56,7 @@ bool SaveCurrentEpisodeMemory(AppState* s, int score) {
         return false;
     }
     PostLog(s->hwnd,Format(L"经验档案追加 %llu 条：%s；可检索成功经验共 %llu 条。",
-        static_cast<unsigned long long>(written),aboveBaseline?L"高于基准，加入成功经验记忆":L"仅作结果记录，不加入成功偏好库",
+        static_cast<unsigned long long>(written),aboveBaseline?L"高于基准，加入经验检索库":L"仅作结果记录，不加入经验检索库",
         static_cast<unsigned long long>(s->experienceMemory.Size())));
     return true;
 }

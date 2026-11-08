@@ -135,7 +135,7 @@ void CreateUi(AppState* s) {
     s->preview=CreateWindowExW(WS_EX_CLIENTEDGE,L"TetrisPreview",L"",WS_CHILD|WS_VISIBLE,805,468,245,410,s->hwnd,reinterpret_cast<HMENU>(ID_PREVIEW),g_instance,nullptr);
     SetWindowLongPtrW(s->preview,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(s));
     AppendLog(s,L"程序已就绪。请选择游戏窗口，分别框选棋盘和 NEXT 预览列，再测试识别。");
-    AppendLog(s,L"训练说明：每次落块产生一个动作样本；整局结束后在“本局最终分数”中录入实际成绩并提交。");
+    AppendLog(s,L"训练说明：首次使用会载入规则生成的基础示范；每次落块记录动作样本；运行中自动缓存 SCORE，识别 GAME OVER 后自动结算（也可停止后手动提交成绩）。");
     AppendLog(s,L"算法是可解释的线性策略模型；8 个权重会影响多步搜索评分。");
     AppendLog(s,L"温和训练模式：成绩高于基准时做正向更新；低于基准时仅保存诊断记录，不执行负向权重更新。");
     AppendLog(s,L"输入节奏可在 NEXT 参数右侧调整：按住/间隔/落稳（毫秒）。请从默认值开始逐步加快。");
