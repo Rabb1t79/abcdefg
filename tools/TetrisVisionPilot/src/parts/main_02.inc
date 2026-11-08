@@ -398,6 +398,30 @@ VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error)
 
     if (bestMotionScore >= 0) {
         VisionResult result = stable;
+        if (hasStableGhost &&
+            (movingCandidate.name != stable.ghost.name ||
+             movingCandidate.rotation != stable.ghost.rotation ||
+             movingCandidate.minX != stable.ghost.minX)) {
+            // On a high stack, a settled tetromino can look like the falling one.
+            // A stable landing outline is an independent identity/column check.
+            const Candidate* matching = nullptr;
+            int matches = 0;
+            for (const Candidate& candidate : latest.components) {
+                if (candidate.name == stable.ghost.name &&
+                    candidate.rotation == stable.ghost.rotation &&
+                    candidate.minX == stable.ghost.minX &&
+                    candidate.minY <= 7) {
+                    matching = &candidate;
+                    ++matches;
+                }
+            }
+            if (matches != 1 || !matching) {
+                result.hasActive = false;
+                result.activeStableSamples = 0;
+                return result;
+            }
+            movingCandidate = *matching;
+        }
         result.active = std::move(movingCandidate);
         result.hasActive = true;
         result.activeStableSamples = movingCount;
