@@ -320,9 +320,41 @@ VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error)
         if (i + 1 < kSamples) Sleep(kSampleIntervalMs);
     }
 
+    // Confirm the ghost outline in at least two of three captured frames.
+    const auto& latest = samples.back();
+    Candidate stableGhost{};
+    int stableGhostCount = 0;
+    int stableGhostIndex = -1;
+    for (int i = 0; i < kSamples; ++i) {
+        if (!samples[static_cast<size_t>(i)].hasGhost) continue;
+        const Candidate& candidate = samples[static_cast<size_t>(i)].ghost;
+        int count = 0;
+        int latestMatch = i;
+        for (int j = 0; j < kSamples; ++j) {
+            const auto& other = samples[static_cast<size_t>(j)];
+            if (other.hasGhost &&
+                other.ghost.name == candidate.name &&
+                other.ghost.rotation == candidate.rotation &&
+                other.ghost.minX == candidate.minX &&
+                other.ghost.minY == candidate.minY) {
+                ++count;
+                latestMatch = (std::max)(latestMatch, j);
+            }
+        }
+        if (count > stableGhostCount) {
+            stableGhostCount = count;
+            stableGhostIndex = latestMatch;
+        }
+    }
+    const bool hasStableGhost = stableGhostCount >= 2 && stableGhostIndex >= 0;
+    VisionResult stable = latest;
+    stable.hasGhost = hasStableGhost;
+    stable.ghostConfidence = hasStableGhost
+        ? samples[static_cast<size_t>(stableGhostIndex)].ghostConfidence : 0;
+    if (hasStableGhost) stable.ghost = samples[static_cast<size_t>(stableGhostIndex)].ghost;
+
     // The active piece normally moves downward between samples. A settled block
     // can have exactly the same four-cell shape, so identity alone is insufficient.
-    const auto& latest = samples.back();
     int bestMotionScore = -1;
     Candidate movingCandidate{};
     int movingCount = 0;
@@ -365,7 +397,7 @@ VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error)
     }
 
     if (bestMotionScore >= 0) {
-        VisionResult result = latest;
+        VisionResult result = stable;
         result.active = std::move(movingCandidate);
         result.hasActive = true;
         result.activeStableSamples = movingCount;
@@ -376,10 +408,28 @@ VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error)
     // exactly one tetromino-shaped component exists across the latest frame.
     // On a crowded upper board, static settled pieces must never be mistaken for
     // the falling piece merely because they lie inside the old spawn-row window.
-    VisionResult result = latest;
+    VisionResult result = stable;
     result.hasActive = false;
     result.activeStableSamples = 0;
-    if (latest.components.size() == 1 && latest.hasActive &&
+    if (hasStableGhost) {
+        const Candidate* match = nullptr;
+        int matches = 0;
+        for (const Candidate& candidate : latest.components) {
+            if (candidate.name == stable.ghost.name &&
+                candidate.rotation == stable.ghost.rotation &&
+                candidate.minX == stable.ghost.minX &&
+                candidate.minY <= 7) {
+                match = &candidate;
+                ++matches;
+            }
+        }
+        if (matches == 1 && match) {
+            result.active = *match;
+            result.hasActive = true;
+            result.activeStableSamples = stableGhostCount;
+        }
+    }
+    if (!result.hasActive && latest.components.size() == 1 && latest.hasActive &&
         latest.active.minY <= 2) {
         bool sameInEarlierSamples = true;
         for (int sampleIndex = 0; sampleIndex < kSamples - 1; ++sampleIndex) {
@@ -402,6 +452,23 @@ VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error)
         }
     }
     return result;
+}
+
+bool ReadPieceColumn(const VisionResult& vision, char piece, int rotation,
+                     int& columnOut, bool& usedGhostOut) {
+    usedGhostOut = false;
+    if (vision.hasGhost && vision.ghost.name == piece &&
+        vision.ghost.rotation == rotation) {
+        columnOut = vision.ghost.minX;
+        usedGhostOut = true;
+        return true;
+    }
+    if (vision.hasActive && vision.active.name == piece &&
+        vision.active.rotation == rotation) {
+        columnOut = vision.active.minX;
+        return true;
+    }
+    return false;
 }
 
 char PieceFromPreviewColor(const Rgb& color) {

@@ -173,12 +173,14 @@
                 if(s->stop.load())break;
                 VisionResult rotated=AnalyzeStable(rect,threshold,capError);
                 if(!capError.empty()) { log(L"旋转后复核截图失败："+capError); break; }
-                if(!rotated.hasActive || rotated.active.name!=piece.name || rotated.active.rotation!=move.rotation) {
-                    log(L"旋转后实际朝向与目标不一致；取消本次落块，重新识别并规划。");
+                bool usedGhost=false;
+                if(!ReadPieceColumn(rotated,piece.name,move.rotation,currentX,usedGhost)) {
+                    log(L"旋转后无法通过活动方块或 Ghost 确认目标朝向；取消本次落块并重新规划。");
                     SleepCheck(s->stop,100);
                     continue;
                 }
-                currentX=rotated.active.minX;
+                if(usedGhost) log(Format(L"旋转复核：Ghost 确认 %c 型、旋转 %d、落点列 %d。",
+                    piece.name,move.rotation,currentX));
             }
 
             int delta=move.x-currentX;
@@ -196,13 +198,17 @@
             if(s->stop.load())break;
             VisionResult positioned=AnalyzeStable(rect,threshold,capError);
             if(!capError.empty()) { log(L"横移后位置复核截图失败："+capError); break; }
-            if(!positioned.hasActive || positioned.active.name!=piece.name || positioned.active.rotation!=move.rotation) {
-                log(L"横移后无法确认当前方块或朝向；取消本次硬降，不记录训练样本。");
+            int observedX=0;
+            bool usedGhost=false;
+            if(!ReadPieceColumn(positioned,piece.name,move.rotation,observedX,usedGhost)) {
+                log(L"横移后无法通过活动方块或 Ghost 确认当前位置；取消本次硬降，不记录训练样本。");
                 SleepCheck(s->stop,100);
                 continue;
             }
+            if(usedGhost) log(Format(L"Ghost 落点反馈：旋转 %d、落点列 %d。",
+                positioned.ghost.rotation,positioned.ghost.minX));
 
-            int correction=move.x-positioned.active.minX;
+            int correction=move.x-observedX;
             if(correction!=0) {
                 log(Format(L"横移复核发现偏差：目标列 %d，实际列 %d；尝试按实际位置纠正。",
                     move.x,positioned.active.minX));
@@ -217,19 +223,23 @@
                 if(s->stop.load())break;
                 VisionResult corrected=AnalyzeStable(rect,threshold,capError);
                 if(!capError.empty()) { log(L"位置纠正后复核截图失败："+capError); break; }
-                if(!corrected.hasActive || corrected.active.name!=piece.name ||
-                   corrected.active.rotation!=move.rotation || corrected.active.minX!=move.x) {
+                int correctedX=0;
+                bool correctedByGhost=false;
+                if(!ReadPieceColumn(corrected,piece.name,move.rotation,correctedX,correctedByGhost) ||
+                   correctedX!=move.x) {
                     log(L"位置纠正后仍未到达目标列；本次取消硬降并重新规划。");
                     SleepCheck(s->stop,100);
                     continue;
                 }
                 positioned=std::move(corrected);
+                observedX=correctedX;
+                usedGhost=correctedByGhost;
             } else {
                 // Exact match: the move pulses reached the intended column.
             }
 
-            log(Format(L"位置验证通过：实际旋转 %d、实际列 %d；准备硬降。",
-                positioned.active.rotation,positioned.active.minX));
+            log(Format(L"位置验证通过：旋转 %d、实际落点列 %d（%s）；准备硬降。",
+                move.rotation,observedX,usedGhost?L"Ghost轮廓":L"活动方块"));
             std::wstring err;
             if(!TapKey(target,VK_SPACE,keyHoldMs,err)) throw std::runtime_error("硬降按键失败或焦点丢失。");
             pendingExperience=decision.experience;
