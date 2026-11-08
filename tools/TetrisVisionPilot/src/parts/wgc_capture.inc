@@ -1,7 +1,6 @@
 // Windows Graphics Capture backend for a selected HWND.
 // The capture worker owns all WinRT/D3D objects on one MTA thread; callers only
 // copy the most recent BGRA frame under a small mutex.
-namespace {
 using winrt::Windows::Graphics::Capture::GraphicsCaptureItem;
 using winrt::Windows::Graphics::Capture::GraphicsCaptureSession;
 using winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool;
@@ -370,4 +369,3 @@ bool TryCaptureWindowRect(const Rect& rect, CapturedImage& out, std::wstring& er
     }
     return true;
 }
-} // namespace

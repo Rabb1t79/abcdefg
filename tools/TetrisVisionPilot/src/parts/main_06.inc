@@ -44,6 +44,8 @@ struct AppState {
     std::wstring trainingCsvPath;
 };
 
+HWND SelectedWindow(AppState* s);
+
 bool SaveCurrentEpisodeMemory(AppState* s, int score) {
     const TrainerSnapshot snapshot=s->trainer.Snapshot();
     const auto experiences=s->trainer.PendingExperiences();
