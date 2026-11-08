@@ -60,8 +60,8 @@ void SubmitTrainingScore(AppState* s) {
         return;
     }
     const double learningRate = ReadDoubleEdit(s->learningRateEdit, 0.08, 0.001, 0.50);
-    const double epsilon = ReadDoubleEdit(s->epsilonEdit, 15.0, 0.0, 60.0) / 100.0;
-    const double temperature = ReadDoubleEdit(s->temperatureEdit, 0.80, 0.05, 5.0);
+    const double epsilon = ReadDoubleEdit(s->epsilonEdit, 5.0, 0.0, 60.0) / 100.0;
+    const double temperature = ReadDoubleEdit(s->temperatureEdit, 0.40, 0.05, 5.0);
     double advantage = 0.0;
     size_t samples = 0;
     std::wstring message;

@@ -47,8 +47,8 @@ void StartBot(AppState* s) {
     Rect rect=s->boardRect, nextRect=s->nextRect;int threshold=ReadThreshold(s);
     const int previewCount=static_cast<int>(ReadDoubleEdit(s->nextCountEdit,6,1,10));
     const int lookaheadDepth=static_cast<int>(ReadDoubleEdit(s->lookaheadEdit,4,1,6));
-    const double epsilon=ReadDoubleEdit(s->epsilonEdit,15.0,0.0,60.0)/100.0;
-    const double temperature=ReadDoubleEdit(s->temperatureEdit,0.80,0.05,5.0);
+    const double epsilon=ReadDoubleEdit(s->epsilonEdit,5.0,0.0,60.0)/100.0;
+    const double temperature=ReadDoubleEdit(s->temperatureEdit,0.40,0.05,5.0);
     const double learningRate=ReadDoubleEdit(s->learningRateEdit,0.08,0.001,0.50);
     const int keyHoldMs=static_cast<int>(ReadDoubleEdit(s->keyHoldEdit,26,8,80));
     const int keyGapMs=static_cast<int>(ReadDoubleEdit(s->keyGapEdit,12,0,80));
@@ -110,9 +110,9 @@ void CreateUi(AppState* s) {
     make(0,L"STATIC",L"学习率：",SS_LEFT,20,322,58,24,0);
     s->learningRateEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0.08",ES_AUTOHSCROLL,82,318,55,26,ID_LEARNING_RATE);
     make(0,L"STATIC",L"探索率 %：",SS_LEFT,155,322,72,24,0);
-    s->epsilonEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"15",ES_AUTOHSCROLL,230,318,50,26,ID_EPSILON);
+    s->epsilonEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"5",ES_AUTOHSCROLL,230,318,50,26,ID_EPSILON);
     make(0,L"STATIC",L"温度：",SS_LEFT,300,322,48,24,0);
-    s->temperatureEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0.80",ES_AUTOHSCROLL,350,318,55,26,ID_TEMPERATURE);
+    s->temperatureEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0.40",ES_AUTOHSCROLL,350,318,55,26,ID_TEMPERATURE);
     make(0,L"STATIC",L"学习率控制每次更新幅度；探索率控制尝试非当前最优动作的概率；温度控制策略随机性。",SS_LEFT,425,322,625,24,0);
     s->trainingStatsLabel=make(0,L"STATIC",L"模型状态：正在加载……",SS_LEFT,20,354,1030,55,ID_TRAIN_STATS);
     make(0,L"STATIC",L"算法说明：Softmax + ε 探索 + REINFORCE；当前落点会模拟 NEXT 队列，并用有限宽度 Beam Search 规划多步路径。",SS_LEFT,20,410,1040,24,0);

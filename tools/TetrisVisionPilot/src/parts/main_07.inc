@@ -207,8 +207,8 @@ void LoadConfig(AppState* s) {
     GetPrivateProfileStringW(L"Input",L"KeyGapMs",L"12",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->keyGapEdit,value);
     GetPrivateProfileStringW(L"Input",L"DropWaitMs",L"190",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->dropWaitEdit,value);
     GetPrivateProfileStringW(L"Training",L"LearningRate",L"0.08",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->learningRateEdit,value);
-    GetPrivateProfileStringW(L"Training",L"ExplorationRate",L"15",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->epsilonEdit,value);
-    GetPrivateProfileStringW(L"Training",L"Temperature",L"0.80",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->temperatureEdit,value);
+    GetPrivateProfileStringW(L"Training",L"ExplorationRate",L"5",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->epsilonEdit,value);
+    GetPrivateProfileStringW(L"Training",L"Temperature",L"0.40",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->temperatureEdit,value);
 }
 
 void UpdateRegionLabel(AppState* s) {

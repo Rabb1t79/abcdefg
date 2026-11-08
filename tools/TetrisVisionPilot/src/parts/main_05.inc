@@ -46,20 +46,23 @@
     void Load(const std::wstring& path) {
         std::lock_guard<std::mutex> guard(mutex_);
         ResetUnlocked();
-        for (size_t i = 0; i < FEATURE_COUNT; ++i) {
-            wchar_t key[32]{}; _snwprintf_s(key, _countof(key), _TRUNCATE, L"Weight%llu", static_cast<unsigned long long>(i));
-            wchar_t value[64]{};
-            GetPrivateProfileStringW(L"PolicyModel", key, L"", value, _countof(value), path.c_str());
-            if (value[0]) weights_[i] = std::wcstod(value, nullptr);
-        }
+        const uint64_t storedBootstrapSamples=static_cast<uint64_t>(
+            GetPrivateProfileIntW(L"PolicyModel",L"BootstrapSamples",0,path.c_str()));
+        if (storedBootstrapSamples>0) {
+            for (size_t i = 0; i < FEATURE_COUNT; ++i) {
+                wchar_t key[32]{}; _snwprintf_s(key, _countof(key), _TRUNCATE, L"Weight%llu", static_cast<unsigned long long>(i));
+                wchar_t value[64]{};
+                GetPrivateProfileStringW(L"PolicyModel", key, L"", value, _countof(value), path.c_str());
+                if (value[0]) weights_[i] = std::wcstod(value, nullptr);
+            }
+            bootstrapSamples_=storedBootstrapSamples;
+        } // Legacy files deliberately keep the new bootstrap weights.
         games_ = static_cast<uint64_t>(GetPrivateProfileIntW(L"PolicyModel", L"Games", 0, path.c_str()));
         bestScore_ = GetPrivateProfileIntW(L"PolicyModel", L"BestScore", 0, path.c_str());
         wchar_t avg[64]{}; GetPrivateProfileStringW(L"PolicyModel", L"AverageScore", L"0", avg, _countof(avg), path.c_str());
         averageScore_ = std::wcstod(avg, nullptr);
         wchar_t adv[64]{}; GetPrivateProfileStringW(L"PolicyModel", L"LastAdvantage", L"0", adv, _countof(adv), path.c_str());
         lastAdvantage_ = std::wcstod(adv, nullptr);
-        const uint64_t storedBootstrapSamples=static_cast<uint64_t>(GetPrivateProfileIntW(L"PolicyModel",L"BootstrapSamples",0,path.c_str()));
-        if (storedBootstrapSamples>0) bootstrapSamples_=storedBootstrapSamples;
     }
 
     void Save(const std::wstring& path) const {

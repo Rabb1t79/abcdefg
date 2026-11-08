@@ -93,18 +93,10 @@ bool ReadOcrText(tesseract::TessBaseAPI& ocr, const Rect& rect,
 
 bool ParseScoreDigits(const std::string& text, int& scoreOut) {
     std::string digits;
-    bool endedNumber = false;
     for (unsigned char c : text) {
-        if (c >= '0' && c <= '9') {
-            if (endedNumber) return false;
-            digits.push_back(static_cast<char>(c));
-        } else if (c == ',' || c == '.' || c == ':') {
-            continue;
-        } else if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
-            if (!digits.empty()) endedNumber = true;
-        } else {
-            return false;
-        }
+        if (c >= '0' && c <= '9') digits.push_back(static_cast<char>(c));
+        else if (c == ',' || c == '.' || c == ':' || c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        else return false;
     }
     if (digits.empty() || digits.size() > 9) return false;
     try {
