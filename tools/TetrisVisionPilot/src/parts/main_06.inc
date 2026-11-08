@@ -61,8 +61,9 @@ std::string WideToUtf8(const std::wstring& value) {
     if (value.empty()) return {};
     const int required = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
     if (required <= 1) return {};
-    std::string result(static_cast<size_t>(required - 1), '\\0');
+    std::string result(static_cast<size_t>(required), '\0');
     WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), required, nullptr, nullptr);
+    result.resize(static_cast<size_t>(required - 1));
     return result;
 }
 
@@ -96,9 +97,9 @@ bool ParseScoreDigits(const std::string& text, int& scoreOut) {
         if (c >= '0' && c <= '9') {
             if (endedNumber) return false;
             digits.push_back(static_cast<char>(c));
-        } else if (c == ',' || c == '.') {
+        } else if (c == ',' || c == '.' || c == ':') {
             continue;
-        } else if (c == ' ' || c == '\\t' || c == '\\r' || c == '\\n') {
+        } else if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
             if (!digits.empty()) endedNumber = true;
         } else {
             return false;
