@@ -240,10 +240,19 @@ bool ChoosePolicyAction(const Board& board, char piece, const std::vector<char>&
     lookaheadDepth = (std::max)(0, (std::min)(lookaheadDepth, static_cast<int>(nextQueue.size())));
     constexpr size_t kBeamWidthPerRoot = 5;
     constexpr double kDiscount = 0.82;
+    constexpr double kDeadEndPenalty = 100.0;
+
+    // Exploration is useful on safe stacks, but random moves near the ceiling
+    // can turn one weak sample into an immediate top-out.
+    const double heightRatio = ExtractFeatures(board, 0).value[3];
+    const double explorationScale = (std::max)(0.0, (std::min)(1.0, (0.95 - heightRatio) / 0.20));
+    epsilon *= explorationScale;
 
     for (auto& root : roots) {
         Features initial = root.features;
         std::vector<SearchNode> beam{{root.nextBoard, initial, DotFeatures(weights, initial)}};
+        int completedDepth = 0;
+        bool deadEnd = false;
         for (int depth = 0; depth < lookaheadDepth; ++depth) {
             std::vector<SearchNode> expanded;
             for (const auto& node : beam) {
@@ -253,17 +262,26 @@ bool ChoosePolicyAction(const Board& board, char piece, const std::vector<char>&
                     expanded.push_back({option.nextBoard, trajectory, DotFeatures(weights, trajectory)});
                 }
             }
-            if (expanded.empty()) break;
+            if (expanded.empty()) {
+                deadEnd = true;
+                break;
+            }
             std::sort(expanded.begin(), expanded.end(), [](const SearchNode& a, const SearchNode& b) { return a.score > b.score; });
             if (expanded.size() > kBeamWidthPerRoot) expanded.resize(kBeamWidthPerRoot);
             beam = std::move(expanded);
+            ++completedDepth;
         }
         if (!beam.empty()) {
             const auto best = std::max_element(beam.begin(), beam.end(),
                 [](const SearchNode& a, const SearchNode& b) { return a.score < b.score; });
             root.features = best->trajectory;
-            root.move.score = best->score / temperature;
-        } else root.move.score = DotFeatures(weights, root.features) / temperature;
+            const double survivalPenalty = deadEnd
+                ? kDeadEndPenalty * static_cast<double>(lookaheadDepth - completedDepth + 1)
+                : 0.0;
+            root.move.score = (best->score - survivalPenalty) / temperature;
+        } else {
+            root.move.score = (DotFeatures(weights, root.features) - kDeadEndPenalty) / temperature;
+        }
     }
 
     std::vector<double> logits(roots.size());

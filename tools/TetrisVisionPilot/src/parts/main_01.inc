@@ -11,9 +11,11 @@ std::unordered_map<char, std::vector<std::vector<Cell>>> g_rotations;
 std::unordered_map<std::string, std::pair<char, int>> g_shapeLookup;
 
 std::vector<Cell> Rotate(const std::vector<Cell>& shape) {
+    // Screen coordinates have +Y downward. (-y, x) is clockwise and matches
+    // the application's configured VK_UP rotation direction.
     std::vector<Cell> out;
     out.reserve(shape.size());
-    for (const auto& c : shape) out.push_back({ c.y, -c.x });
+    for (const auto& c : shape) out.push_back({ -c.y, c.x });
     return Normalize(std::move(out));
 }
 
@@ -57,6 +59,7 @@ struct VisionResult {
     bool occupied[ROWS][COLS]{};
     Rgb colors[ROWS][COLS]{};
     Candidate active{};
+    std::vector<Candidate> components; // All isolated tetromino-shaped components.
     bool hasActive{};
     Rgb background{};
     int occupiedCount{};

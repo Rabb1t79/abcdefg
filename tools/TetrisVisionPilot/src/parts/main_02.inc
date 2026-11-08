@@ -174,19 +174,23 @@ VisionResult Analyze(const CapturedImage& image, int threshold, int spawnRows = 
             minY = (std::min)(minY,c.y);
             sumX += c.x; sumY += c.y;
         }
-        if (minY > spawnRows) continue;
         double centerX = sumX / 4.0, centerY = sumY / 4.0;
+        Candidate detected;
+        detected.name = pieceName;
+        detected.rotation = rotation;
+        detected.cells = fullCells;
+        detected.minX = minX;
+        detected.minY = minY;
+        detected.centerX = centerX;
+        detected.centerY = centerY;
+        result.components.push_back(detected);
+
+        if (minY > spawnRows) continue;
         double rank = minY + std::abs(centerX - 4.5) * 0.30;
         if (rank < bestRank) {
             bestRank = rank;
             result.hasActive = true;
-            result.active.name = pieceName;
-            result.active.rotation = rotation;
-            result.active.cells = std::move(fullCells);
-            result.active.minX = minX;
-            result.active.minY = minY;
-            result.active.centerX = centerX;
-            result.active.centerY = centerY;
+            result.active = std::move(detected);
         }
     }
     return result;
@@ -204,40 +208,87 @@ VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error)
         if (i + 1 < kSamples) Sleep(kSampleIntervalMs);
     }
 
-    // Falling changes minY every frame; keep identity stable by type/rotation/column.
-    int bestCount = 0;
-    int latestMatchingIndex = -1;
-    for (int i = 0; i < kSamples; ++i) {
-        if (!samples[static_cast<size_t>(i)].hasActive) continue;
-        const Candidate& candidate = samples[static_cast<size_t>(i)].active;
-        int count = 0;
-        int latest = i;
-        for (int j = 0; j < kSamples; ++j) {
-            const auto& other = samples[static_cast<size_t>(j)];
-            if (!other.hasActive) continue;
-            if (other.active.name == candidate.name &&
-                other.active.rotation == candidate.rotation &&
-                other.active.minX == candidate.minX) {
-                ++count;
-                latest = (std::max)(latest, j);
+    // The active piece normally moves downward between samples. A settled block
+    // can have exactly the same four-cell shape, so identity alone is insufficient.
+    const auto& latest = samples.back();
+    int bestMotionScore = -1;
+    Candidate movingCandidate{};
+    int movingCount = 0;
+
+    for (const Candidate& current : latest.components) {
+        int matched = 0;
+        int earliestY = current.minY;
+        bool observedEarlier = false;
+        for (int sampleIndex = 0; sampleIndex < kSamples - 1; ++sampleIndex) {
+            const auto& candidates = samples[static_cast<size_t>(sampleIndex)].components;
+            const Candidate* closest = nullptr;
+            int closestDelta = (std::numeric_limits<int>::max)();
+            for (const Candidate& previous : candidates) {
+                if (previous.name != current.name ||
+                    previous.rotation != current.rotation ||
+                    previous.minX != current.minX ||
+                    previous.minY > current.minY) continue;
+                const int delta = current.minY - previous.minY;
+                if (delta > 6) continue; // Ignore unrelated, distant same-shaped blocks.
+                if (delta < closestDelta) {
+                    closestDelta = delta;
+                    closest = &previous;
+                }
+            }
+            if (closest) {
+                ++matched;
+                earliestY = (std::min)(earliestY, closest->minY);
+                if (closest->minY < current.minY) observedEarlier = true;
             }
         }
-        if (count > bestCount) {
-            bestCount = count;
-            latestMatchingIndex = latest;
+
+        if (matched < 1 || !observedEarlier) continue;
+        const int motion = current.minY - earliestY;
+        const int score = matched * 100 + motion * 10 - std::abs(current.minX - 4);
+        if (score > bestMotionScore) {
+            bestMotionScore = score;
+            movingCandidate = current;
+            movingCount = matched + 1;
         }
     }
 
-    if (bestCount >= 2 && latestMatchingIndex >= 0) {
-        VisionResult result = samples[static_cast<size_t>(latestMatchingIndex)];
-        result.activeStableSamples = bestCount;
+    if (bestMotionScore >= 0) {
+        VisionResult result = latest;
+        result.active = std::move(movingCandidate);
+        result.hasActive = true;
+        result.activeStableSamples = movingCount;
         return result;
     }
 
-    // Keep the latest occupancy map for the preview, but suppress unstable piece identity.
-    VisionResult result = samples.back();
+    // Stationary/spawn fallback is intentionally conservative: use it only when
+    // exactly one tetromino-shaped component exists across the latest frame.
+    // On a crowded upper board, static settled pieces must never be mistaken for
+    // the falling piece merely because they lie inside the old spawn-row window.
+    VisionResult result = latest;
     result.hasActive = false;
-    result.activeStableSamples = bestCount;
+    result.activeStableSamples = 0;
+    if (latest.components.size() == 1 && latest.hasActive &&
+        latest.active.minY <= 2) {
+        bool sameInEarlierSamples = true;
+        for (int sampleIndex = 0; sampleIndex < kSamples - 1; ++sampleIndex) {
+            bool found = false;
+            for (const Candidate& candidate : samples[static_cast<size_t>(sampleIndex)].components) {
+                if (candidate.name == latest.active.name &&
+                    candidate.rotation == latest.active.rotation &&
+                    candidate.minX == latest.active.minX &&
+                    candidate.minY == latest.active.minY) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) sameInEarlierSamples = false;
+        }
+        if (sameInEarlierSamples) {
+            result.active = latest.active;
+            result.hasActive = true;
+            result.activeStableSamples = kSamples;
+        }
+    }
     return result;
 }
 

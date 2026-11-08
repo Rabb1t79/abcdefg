@@ -127,7 +127,7 @@
             }
             noPieceSince=GetTickCount();
             Candidate piece=vision.active;
-            SleepCheck(s->stop,85); if(s->stop.load())break;
+            SleepCheck(s->stop,25); if(s->stop.load())break;
             VisionResult check=AnalyzeStable(rect,threshold,capError);
             if(!capError.empty()) { log(L"复核截图失败："+capError); break; }
             if(!check.hasActive || check.active.name!=piece.name || check.active.rotation!=piece.rotation || check.active.minX!=piece.minX) continue;
@@ -169,7 +169,7 @@
             if(s->stop.load())break;
             int currentX=piece.minX;
             if(rotateSteps>0) {
-                SleepCheck(s->stop,120);
+                SleepCheck(s->stop,55);
                 if(s->stop.load())break;
                 VisionResult rotated=AnalyzeStable(rect,threshold,capError);
                 if(!capError.empty()) { log(L"旋转后复核截图失败："+capError); break; }
