@@ -86,7 +86,7 @@ void CreateUi(AppState* s) {
     s->stopButton=make(0,L"BUTTON",L"停止",BS_PUSHBUTTON,300,170,90,34,ID_STOP);EnableWindow(s->stopButton,FALSE);
     s->statusLabel=make(0,L"STATIC",L"状态：就绪",SS_LEFT,410,176,175,24,ID_STATUS);
     make(0,L"STATIC",L"按键：← 左移　→ 右移　↑ 旋转　Space 硬降　｜　F8 紧急停止",SS_LEFT,20,215,700,24,ID_HELP);
-    s->autoRetryCheck=make(0,L"BUTTON",L"Game Over 后自动记录分数并点击 Again 重开",BS_AUTOCHECKBOX|WS_TABSTOP,735,212,340,27,ID_AUTO_RETRY);
+    s->autoRetryCheck=make(0,L"BUTTON",L"Game Over 后自动点击 Again 重开（分数仍会自动记录）",BS_AUTOCHECKBOX|WS_TABSTOP,735,212,340,27,ID_AUTO_RETRY);
 
     // Training controls: reward comes from the real end-of-game score entered by the user.
     make(0,L"STATIC",L"成绩反馈学习（高于基准时正向强化；低分只记录原因，不反向惩罚权重）",SS_LEFT,20,252,900,22,0);

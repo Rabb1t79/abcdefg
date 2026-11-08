@@ -57,6 +57,15 @@ double ReadDoubleEdit(HWND edit, double fallback, double minimum, double maximum
 
 void Log(AppState* s, const std::wstring& msg) { PostLog(s->hwnd,msg); }
 
+std::string WideToUtf8(const std::wstring& value) {
+    if (value.empty()) return {};
+    const int required = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (required <= 1) return {};
+    std::string result(static_cast<size_t>(required - 1), '\\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), required, nullptr, nullptr);
+    return result;
+}
+
 bool ReadOcrText(tesseract::TessBaseAPI& ocr, const Rect& rect,
                  const char* whitelist, tesseract::PageSegMode pageMode,
                  std::string& output, std::wstring& error, int* confidence = nullptr) {

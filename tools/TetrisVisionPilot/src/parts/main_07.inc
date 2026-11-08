@@ -3,8 +3,8 @@
         if(GetAncestor(GetForegroundWindow(),GA_ROOT)!=target) throw std::runtime_error("无法将游戏窗口切换到前台。请先手动点一下游戏窗口，再重新启动自动操作。");
         log(L"自动控制已启动。F8 或界面上的“停止”可紧急停止。请勿切换到其他窗口。");
         tesseract::TessBaseAPI ocr;
-        const std::string tessPath(s->tessdataPath.begin(), s->tessdataPath.end());
-        const int ocrInit = ocr.Init(tessPath.c_str(), "eng", tesseract::OEM_LSTM_ONLY);
+        const std::string tessPath = WideToUtf8(s->tessdataPath);
+        const int ocrInit = tessPath.empty() ? -1 : ocr.Init(tessPath.c_str(), "eng", tesseract::OEM_LSTM_ONLY);
         const bool ocrReady = (ocrInit == 0);
         if (!ocrReady) {
             log(L"OCR 初始化失败：请确认程序目录下 tessdata\\eng.traineddata 存在。自动读分和失败重试已停用。");
