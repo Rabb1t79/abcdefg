@@ -111,7 +111,8 @@ bool TestScoreRecognition(AppState* s) {
         return false;
     }
     SetWindowTextW(s->scoreStatusLabel, Format(L"SCORE OCR：%d（置信度 %d）", score, confidence).c_str());
-    AppendLog(s, Format(L"SCORE OCR 测试成功：%d 分；置信度 %d/100。", score, confidence));
+    AppendLog(s, Format(L"SCORE OCR 测试成功：%d 分；置信度 %d/100%s。", score, confidence,
+        zeroVerified?L"；零分已通过多模式复核":L""));
     return true;
 }
 

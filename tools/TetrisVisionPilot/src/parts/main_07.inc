@@ -92,6 +92,7 @@
                 log(L"已确认新一局开始，重置分数缓存。");
                 SleepCheck(s->stop,450);
                 latestScore = 0; hasLatestScore = false;
+                scoreResetObserved = false;
                 lastScoreRead = 0; lastGameOverRead = 0; gameOverHits = 0;
                 noPieceSince = GetTickCount();
                 continue;

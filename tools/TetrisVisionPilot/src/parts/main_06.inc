@@ -126,6 +126,61 @@ bool ParseScoreDigits(const std::string& text, int& scoreOut) {
     } catch (...) { return false; }
 }
 
+bool IsSingleZeroScoreText(const std::string& text) {
+    std::string digits;
+    for (unsigned char c : text) {
+        if (c >= '0' && c <= '9') digits.push_back(static_cast<char>(c));
+        else if (c == ',' || c == '.' || c == ':' || c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        else return false;
+    }
+    return digits == "0";
+}
+
+// A lone zero often receives very low word-level confidence from Tesseract.
+// Normal scores keep the 40/100 confidence gate. A low-confidence zero is
+// accepted only when at least two independent segmentation modes agree exactly.
+bool ReadScoreValue(tesseract::TessBaseAPI& ocr, const Rect& rect,
+                    int& scoreOut, int& confidenceOut, std::string& observedText,
+                    std::wstring& error, bool* zeroVerified = nullptr) {
+    if (zeroVerified) *zeroVerified = false;
+    std::string lineText;
+    int lineConfidence = -1;
+    if (!ReadOcrText(ocr, rect, "0123456789,:. ", tesseract::PSM_SINGLE_LINE,
+                     lineText, error, &lineConfidence)) return false;
+    observedText = lineText;
+    confidenceOut = lineConfidence;
+
+    int parsed = 0;
+    if (lineConfidence >= 40 && ParseScoreDigits(lineText, parsed)) {
+        scoreOut = parsed;
+        return true;
+    }
+
+    int zeroVotes = IsSingleZeroScoreText(lineText) ? 1 : 0;
+    int bestConfidence = lineConfidence;
+    std::string wordText, charText;
+    std::wstring fallbackError;
+    int wordConfidence = -1, charConfidence = -1;
+    if (ReadOcrText(ocr, rect, "0123456789", tesseract::PSM_SINGLE_WORD,
+                    wordText, fallbackError, &wordConfidence) &&
+        IsSingleZeroScoreText(wordText)) ++zeroVotes;
+    bestConfidence = (std::max)(bestConfidence, wordConfidence);
+    if (ReadOcrText(ocr, rect, "0123456789", tesseract::PSM_SINGLE_CHAR,
+                    charText, fallbackError, &charConfidence) &&
+        IsSingleZeroScoreText(charText)) ++zeroVotes;
+    bestConfidence = (std::max)(bestConfidence, charConfidence);
+
+    if (zeroVotes >= 2) {
+        scoreOut = 0;
+        confidenceOut = bestConfidence;
+        observedText = lineText + " | word=" + wordText + " | char=" + charText;
+        if (zeroVerified) *zeroVerified = true;
+        return true;
+    }
+    if (error.empty()) error = L"OCR 未能以足够置信度解析分数；低置信度零分的多模式复核也未达成一致。";
+    return false;
+}
+
 bool IsGameOverText(const std::string& text) {
     std::string normalized;
     for (unsigned char c : text) {
