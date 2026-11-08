@@ -30,6 +30,10 @@
 #include <vector>
 #include <cctype>
 #include <tesseract/baseapi.h>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")

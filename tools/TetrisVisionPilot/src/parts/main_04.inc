@@ -192,6 +192,11 @@ public:
         pending_.push_back(experience);
     }
 
+    std::vector<TrainingExperience> PendingExperiences() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return pending_;
+    }
+
     bool SubmitScore(int score, double learningRate, double& advantageOut, size_t& samplesOut, std::wstring& message) {
         if (score < 0 || score > 100000000) {
             message = L"分数范围无效，请输入 0 到 100000000 之间的整数。";

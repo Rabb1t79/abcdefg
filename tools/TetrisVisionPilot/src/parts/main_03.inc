@@ -54,6 +54,12 @@ struct ActionCandidate {
 };
 struct TrainingExperience {
     std::array<double, FEATURE_COUNT> gradient{};
+    std::array<double, FEATURE_COUNT> stateFeatures{};
+    char piece{};
+    int rotation{};
+    int x{};
+    std::array<char, 6> nextPieces{};
+    int nextCount{};
 };
 struct PolicyDecision {
     Move move{};

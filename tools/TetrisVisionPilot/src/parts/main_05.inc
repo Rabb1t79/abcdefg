@@ -99,6 +99,120 @@ private:
     double lastAdvantage_{};
 };
 
+struct SuccessExperienceRecord {
+    std::array<double, FEATURE_COUNT> stateFeatures{};
+    char piece{};
+    int rotation{};
+    int x{};
+    std::array<char, 6> nextPieces{};
+    int nextCount{};
+};
+
+class ExperienceMemory {
+public:
+    static constexpr size_t kMaxRetrievalRecords = 5000;
+
+    void Load(const std::wstring& path) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        records_.clear();
+        std::ifstream input{std::filesystem::path(path)};
+        std::string line;
+        while (std::getline(input,line)) {
+            std::vector<std::string> fields;
+            std::stringstream row(line);
+            std::string field;
+            while (std::getline(row,field,',')) fields.push_back(field);
+            if (fields.size()!=15 || fields[2]!="1" || fields[3].empty()) continue;
+            SuccessExperienceRecord record;
+            try {
+                record.piece=fields[3][0];
+                record.rotation=std::stoi(fields[4]);
+                record.x=std::stoi(fields[5]);
+                const std::string& next=fields[6];
+                record.nextCount=(std::min)(6,static_cast<int>(next.size()));
+                for(int i=0;i<record.nextCount;++i) record.nextPieces[i]=next[static_cast<size_t>(i)];
+                for(size_t i=0;i<FEATURE_COUNT;++i) record.stateFeatures[i]=std::stod(fields[7+i]);
+                records_.push_back(record);
+            } catch(...) { continue; }
+            if(records_.size()>kMaxRetrievalRecords) records_.erase(records_.begin());
+        }
+    }
+
+    bool AppendEpisode(const std::wstring& path, int score, double baseline,
+                       bool aboveBaseline, const std::vector<TrainingExperience>& experiences,
+                       size_t& written, std::wstring& error) {
+        written=0;
+        if(experiences.empty()) return true;
+        std::ofstream output{std::filesystem::path(path),std::ios::out|std::ios::app};
+        if(!output) { error=L"无法写入经验档案："+path; return false; }
+        std::lock_guard<std::mutex> guard(mutex_);
+        for(const auto& experience:experiences) {
+            std::string next;
+            for(int i=0;i<experience.nextCount && i<6;++i) next.push_back(experience.nextPieces[i]);
+            output<<score<<','<<std::fixed<<std::setprecision(3)<<baseline<<','
+                  <<(aboveBaseline?1:0)<<','<<experience.piece<<','
+                  <<experience.rotation<<','<<experience.x<<','<<next;
+            for(double value:experience.stateFeatures)
+                output<<','<<std::setprecision(7)<<value;
+            output<<'\n';
+            ++written;
+            if(aboveBaseline) {
+                SuccessExperienceRecord record;
+                record.stateFeatures=experience.stateFeatures;
+                record.piece=experience.piece;
+                record.rotation=experience.rotation;
+                record.x=experience.x;
+                record.nextPieces=experience.nextPieces;
+                record.nextCount=(std::min)(6,experience.nextCount);
+                records_.push_back(record);
+                if(records_.size()>kMaxRetrievalRecords) records_.erase(records_.begin());
+            }
+        }
+        output.flush();
+        if(!output) { error=L"经验档案写入未完成。"; return false; }
+        return true;
+    }
+
+    double PreferenceBonus(const Board& board, char piece,
+                           const std::vector<char>& nextQueue, const Move& move) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if(records_.empty()) return 0.0;
+        const auto current=ExtractFeatures(board,0).value;
+        double bestBonus=0.0;
+        for(const auto& record:records_) {
+            if(record.piece!=piece || record.rotation!=move.rotation || record.x!=move.x) continue;
+            double distanceSquared=0.0;
+            for(size_t i=0;i<FEATURE_COUNT;++i) {
+                const double d=current[i]-record.stateFeatures[i];
+                distanceSquared+=d*d;
+            }
+            const double distance=std::sqrt(distanceSquared/static_cast<double>(FEATURE_COUNT));
+            const double similarity=std::exp(-3.5*distance);
+            if(similarity<0.55) continue;
+            const int compared=(std::min)(2,(std::min)(record.nextCount,static_cast<int>(nextQueue.size())));
+            double queueMatch=0.5;
+            if(compared>0) {
+                int matched=0;
+                for(int i=0;i<compared;++i)
+                    if(record.nextPieces[i]==nextQueue[static_cast<size_t>(i)]) ++matched;
+                queueMatch=static_cast<double>(matched)/compared;
+                if(queueMatch==0.0) continue;
+            }
+            bestBonus=(std::max)(bestBonus,0.45*similarity*(0.75+0.25*queueMatch));
+        }
+        return bestBonus;
+    }
+
+    size_t Size() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return records_.size();
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::vector<SuccessExperienceRecord> records_;
+};
+
 double DotFeatures(const std::array<double, FEATURE_COUNT>& weights, const Features& features) {
     double score = 0.0;
     for (size_t i = 0; i < FEATURE_COUNT; ++i) score += weights[i] * features.value[i];
@@ -112,8 +226,8 @@ Features AddDiscounted(const Features& base, const Features& extra, double disco
 struct SearchNode { Board board{}; Features trajectory{}; double score{}; };
 
 bool ChoosePolicyAction(const Board& board, char piece, const std::vector<char>& nextQueue,
-                        int lookaheadDepth, PolicyTrainer& trainer, double epsilon,
-                        double temperature, std::mt19937& rng, PolicyDecision& decision) {
+                        int lookaheadDepth, PolicyTrainer& trainer, const ExperienceMemory& memory,
+                        double epsilon, double temperature, std::mt19937& rng, PolicyDecision& decision) {
     std::vector<ActionCandidate> roots = EnumerateActions(board, piece);
     if (roots.empty()) return false;
     const auto weights = trainer.GetWeights();
@@ -150,7 +264,11 @@ bool ChoosePolicyAction(const Board& board, char piece, const std::vector<char>&
 
     std::vector<double> logits(roots.size());
     double maxLogit = -std::numeric_limits<double>::infinity();
-    for (size_t i = 0; i < roots.size(); ++i) { logits[i] = roots[i].move.score; maxLogit = (std::max)(maxLogit, logits[i]); }
+    for (size_t i = 0; i < roots.size(); ++i) {
+        roots[i].move.score += memory.PreferenceBonus(board,piece,nextQueue,roots[i].move);
+        logits[i] = roots[i].move.score;
+        maxLogit = (std::max)(maxLogit, logits[i]);
+    }
     std::vector<double> probabilities(roots.size());
     double total = 0.0;
     for (size_t i = 0; i < roots.size(); ++i) { probabilities[i] = std::exp((std::max)(-60.0, logits[i] - maxLogit)); total += probabilities[i]; }
@@ -174,6 +292,13 @@ bool ChoosePolicyAction(const Board& board, char piece, const std::vector<char>&
     const double scale = ((1.0 - epsilon) * probabilities[chosen] / (std::max)(1e-12, actionProbability)) / temperature;
     for (size_t j = 0; j < FEATURE_COUNT; ++j)
         decision.experience.gradient[j] = scale * (roots[chosen].features.value[j] - expected[j]);
+    decision.experience.stateFeatures = ExtractFeatures(board,0).value;
+    decision.experience.piece = piece;
+    decision.experience.rotation = roots[chosen].move.rotation;
+    decision.experience.x = roots[chosen].move.x;
+    decision.experience.nextCount = (std::min)(6,static_cast<int>(nextQueue.size()));
+    for(int i=0;i<decision.experience.nextCount;++i)
+        decision.experience.nextPieces[i] = nextQueue[static_cast<size_t>(i)];
     decision.move = roots[chosen].move;
     decision.move.score = logits[chosen];
     decision.predictedLines = roots[chosen].linesCleared;
