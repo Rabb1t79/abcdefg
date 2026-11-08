@@ -79,7 +79,7 @@ void WgcCaptureThread(const std::shared_ptr<WgcCaptureState>& state) {
         GraphicsCaptureItem item{nullptr};
         winrt::check_hresult(interopFactory->CreateForWindow(
             state->target,
-            winrt::guid_of<ABI::Windows::Graphics::Capture::IGraphicsCaptureItem>(),
+            winrt::guid_of<GraphicsCaptureItem>(),
             winrt::put_abi(item)));
 
         const auto pixelFormat = DirectXPixelFormat::B8G8R8A8UIntNormalized;
