@@ -72,7 +72,7 @@
                     break;
                 }
                 std::wstring clickError;
-                if (!ClickAgainButton(target, clickError)) { log(L"自动重试失败："+clickError); break; }
+                if (!ClickAgainButton(target, againRect, clickError)) { log(L"自动重试失败："+clickError); break; }
                 log(L"已点击 Again，正在确认 GAME OVER 弹窗已消失。");
                 bool restarted=false;
                 for(int attempt=0;attempt<25 && !s->stop.load();++attempt){
@@ -168,6 +168,14 @@
     PostMessageW(s->hwnd,WM_APP_FINISHED,0,0);
 }
 
+void UpdateAgainRegionLabel(AppState* s) {
+    if (!s->againRegionButton) return;
+    if (s->againRect.width > 0 && s->againRect.height > 0)
+        SetWindowTextW(s->againRegionButton, Format(L"Again区域已选择（%d×%d）",s->againRect.width,s->againRect.height).c_str());
+    else
+        SetWindowTextW(s->againRegionButton,L"框选 Again 按钮");
+}
+
 void SaveConfig(AppState* s) {
     WritePrivateProfileStringW(L"Board",L"Left",Format(L"%d",s->boardRect.left).c_str(),s->configPath.c_str());
     WritePrivateProfileStringW(L"Board",L"Top",Format(L"%d",s->boardRect.top).c_str(),s->configPath.c_str());
@@ -181,6 +189,10 @@ void SaveConfig(AppState* s) {
     WritePrivateProfileStringW(L"Score",L"Top",Format(L"%d",s->scoreRect.top).c_str(),s->configPath.c_str());
     WritePrivateProfileStringW(L"Score",L"Width",Format(L"%d",s->scoreRect.width).c_str(),s->configPath.c_str());
     WritePrivateProfileStringW(L"Score",L"Height",Format(L"%d",s->scoreRect.height).c_str(),s->configPath.c_str());
+    WritePrivateProfileStringW(L"Again",L"Left",Format(L"%d",s->againRect.left).c_str(),s->configPath.c_str());
+    WritePrivateProfileStringW(L"Again",L"Top",Format(L"%d",s->againRect.top).c_str(),s->configPath.c_str());
+    WritePrivateProfileStringW(L"Again",L"Width",Format(L"%d",s->againRect.width).c_str(),s->configPath.c_str());
+    WritePrivateProfileStringW(L"Again",L"Height",Format(L"%d",s->againRect.height).c_str(),s->configPath.c_str());
     WritePrivateProfileStringW(L"Automation",L"AutoRetry",SendMessageW(s->autoRetryCheck,BM_GETCHECK,0,0)==BST_CHECKED?L"1":L"0",s->configPath.c_str());
     wchar_t value[64]{};
     GetWindowTextW(s->nextCountEdit,value,_countof(value)); WritePrivateProfileStringW(L"Next",L"Count",value,s->configPath.c_str());
@@ -206,6 +218,10 @@ void LoadConfig(AppState* s) {
     s->scoreRect.top=GetPrivateProfileIntW(L"Score",L"Top",0,s->configPath.c_str());
     s->scoreRect.width=GetPrivateProfileIntW(L"Score",L"Width",0,s->configPath.c_str());
     s->scoreRect.height=GetPrivateProfileIntW(L"Score",L"Height",0,s->configPath.c_str());
+    s->againRect.left=GetPrivateProfileIntW(L"Again",L"Left",0,s->configPath.c_str());
+    s->againRect.top=GetPrivateProfileIntW(L"Again",L"Top",0,s->configPath.c_str());
+    s->againRect.width=GetPrivateProfileIntW(L"Again",L"Width",0,s->configPath.c_str());
+    s->againRect.height=GetPrivateProfileIntW(L"Again",L"Height",0,s->configPath.c_str());
     SendMessageW(s->autoRetryCheck,BM_SETCHECK,GetPrivateProfileIntW(L"Automation",L"AutoRetry",1,s->configPath.c_str())?BST_CHECKED:BST_UNCHECKED,0);
     wchar_t value[64]{};
     GetPrivateProfileStringW(L"Next",L"Count",L"6",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->nextCountEdit,value);

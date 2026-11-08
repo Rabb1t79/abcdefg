@@ -22,12 +22,12 @@ bool TapKey(HWND target, WORD vk, int holdMs, std::wstring& error) {
 
 struct AppState {
     HWND hwnd{}, combo{}, regionLabel{}, nextRegionLabel{}, nextStatusLabel{}, nextCountEdit{}, lookaheadEdit{};
-    HWND scoreRegionLabel{}, scoreStatusLabel{};
+    HWND scoreRegionLabel{}, scoreStatusLabel{}, againRegionButton{};
     HWND thresholdEdit{}, logEdit{}, preview{}, startButton{}, stopButton{}, statusLabel{};
     HWND scoreEdit{}, learningRateEdit{}, epsilonEdit{}, temperatureEdit{}, trainingStatsLabel{};
     HWND keyHoldEdit{}, keyGapEdit{}, dropWaitEdit{}, autoRetryCheck{};
     std::wstring tessdataPath{};
-    Rect boardRect{}, nextRect{}, scoreRect{};
+    Rect boardRect{}, nextRect{}, scoreRect{}, againRect{};
     std::vector<char> previewNextPieces;
     bool hasNextPreview{};
     PolicyTrainer trainer;
@@ -128,21 +128,47 @@ Rect ClientRelativeRect(HWND target, double x, double y, double width, double he
             static_cast<int>(width * w), static_cast<int>(height * h)};
 }
 
-bool ClickAgainButton(HWND target, std::wstring& error) {
+bool IsScreenRectInsideClient(HWND target, const Rect& screenRect) {
+    if (screenRect.width <= 0 || screenRect.height <= 0) return false;
+    RECT client{};
+    if (!GetClientRect(target, &client)) return false;
+    POINT origin{0,0};
+    if (!ClientToScreen(target, &origin)) return false;
+    const RECT bounds{origin.x, origin.y,
+                      origin.x + (client.right - client.left),
+                      origin.y + (client.bottom - client.top)};
+    const RECT selected{screenRect.left, screenRect.top,
+                        screenRect.left + screenRect.width,
+                        screenRect.top + screenRect.height};
+    return selected.left >= bounds.left && selected.top >= bounds.top &&
+           selected.right <= bounds.right && selected.bottom <= bounds.bottom;
+}
+
+bool ClickAgainButton(HWND target, const Rect& buttonRect, std::wstring& error) {
     if (GetAncestor(GetForegroundWindow(), GA_ROOT) != target) {
         error = L"游戏窗口已失去前台焦点，未点击 Again。";
         return false;
     }
-    RECT client{};
-    if (!GetClientRect(target, &client)) { error = L"无法读取游戏窗口尺寸。"; return false; }
-    POINT point{static_cast<LONG>((client.right - client.left) * 0.374),
-                static_cast<LONG>((client.bottom - client.top) * 0.831)};
-    if (!ClientToScreen(target, &point)) { error = L"无法定位 Again 按钮。"; return false; }
-    if (!SetCursorPos(point.x, point.y)) { error = L"无法移动鼠标到 Again 按钮。"; return false; }
-    INPUT clicks[2]{};
-    clicks[0].type = INPUT_MOUSE; clicks[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-    clicks[1].type = INPUT_MOUSE; clicks[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
-    if (SendInput(2, clicks, sizeof(INPUT)) != 2) { error = L"点击 Again 失败。"; return false; }
+    if (!IsScreenRectInsideClient(target, buttonRect)) {
+        error = L"Again 按钮框选区域不在游戏窗口客户区内，未执行点击。请重新框选。";
+        return false;
+    }
+    const int x = buttonRect.left + buttonRect.width / 2;
+    const int y = buttonRect.top + buttonRect.height / 2;
+    if (!SetCursorPos(x, y)) { error = L"无法移动鼠标到 Again 按钮。"; return false; }
+    INPUT down{};
+    down.type = INPUT_MOUSE;
+    down.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+    if (SendInput(1, &down, sizeof(INPUT)) != 1) { error = L"Again 鼠标按下失败。"; return false; }
+    Sleep(35);
+    INPUT up{};
+    up.type = INPUT_MOUSE;
+    up.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+    if (SendInput(1, &up, sizeof(INPUT)) != 1) {
+        SendInput(1, &up, sizeof(INPUT));
+        error = L"Again 鼠标释放失败。";
+        return false;
+    }
     return true;
 }
 
@@ -150,7 +176,7 @@ void AppendTrainingCsv(AppState* s, int score, double learningRate, double epsil
 
 void BotThread(AppState* s, HWND target, Rect rect, Rect nextRect, int threshold,
                int previewCount, int lookaheadDepth, double epsilon, double temperature,
-               int keyHoldMs, int keyGapMs, int dropWaitMs, Rect scoreRect,
+               int keyHoldMs, int keyGapMs, int dropWaitMs, Rect scoreRect, Rect againRect,
                double learningRate, bool autoRetry) {
     auto log=[&](const std::wstring& m){Log(s,m);};
     try {

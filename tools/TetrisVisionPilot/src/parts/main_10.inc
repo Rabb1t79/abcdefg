@@ -35,9 +35,15 @@ void StartBot(AppState* s) {
         if (!TestScoreRecognition(s)) {
             MessageBoxW(s->hwnd,L"SCORE OCR 测试未通过。请重新框选数字区域，或取消自动重开后再运行。",L"分数识别未通过",MB_ICONWARNING); return;
         }
+        if (s->againRect.width < 70 || s->againRect.height < 22) {
+            MessageBoxW(s->hwnd,L"自动重开还需要框选 Again 按钮。请在 Game Over 画面点“框选 Again 按钮”，只框住按钮内部。",L"尚未选择 Again 按钮",MB_ICONWARNING); return;
+        }
     }
     HWND target=SelectedWindow(s);
     if(!target||!IsWindow(target)){MessageBoxW(s->hwnd,L"请从窗口列表中选择正在运行的游戏。",L"尚未选择游戏窗口",MB_ICONWARNING);return;}
+    if (autoRetry && !IsScreenRectInsideClient(target,s->againRect)) {
+        MessageBoxW(s->hwnd,L"Again 按钮区域不在所选游戏窗口内部。请重新框选，或关闭自动重开。",L"Again 区域不匹配",MB_ICONWARNING); return;
+    }
     TestRecognition(s);
     if(!s->hasPreview || !s->previewData.hasActive){MessageBoxW(s->hwnd,L"尚未识别到当前方块。请调整棋盘框选范围或颜色阈值，再测试一次。",L"识别未通过",MB_ICONWARNING);return;}
     if(!s->hasNextPreview){MessageBoxW(s->hwnd,L"NEXT 队列识别未通过。请重新框选 NEXT 预览列、检查预览块数量，然后再次测试。",L"NEXT 识别未通过",MB_ICONWARNING);return;}
@@ -54,7 +60,7 @@ void StartBot(AppState* s) {
     const int keyGapMs=static_cast<int>(ReadDoubleEdit(s->keyGapEdit,12,0,80));
     const int dropWaitMs=static_cast<int>(ReadDoubleEdit(s->dropWaitEdit,190,80,1000));
     SaveConfig(s);
-    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature,keyHoldMs,keyGapMs,dropWaitMs,s->scoreRect,learningRate,autoRetry); }
+    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature,keyHoldMs,keyGapMs,dropWaitMs,s->scoreRect,s->againRect,learningRate,autoRetry); }
     catch(...) { s->running.store(false);EnableWindow(s->startButton,TRUE);EnableWindow(s->stopButton,FALSE);SetWindowTextW(s->statusLabel,L"状态：启动失败");MessageBoxW(s->hwnd,L"无法创建自动控制线程。",L"启动失败",MB_ICONERROR); }
 }
 
@@ -97,7 +103,8 @@ void CreateUi(AppState* s) {
     s->startButton=make(0,L"BUTTON",L"开始自动落块",BS_PUSHBUTTON,145,170,145,34,ID_START);
     s->stopButton=make(0,L"BUTTON",L"停止",BS_PUSHBUTTON,300,170,90,34,ID_STOP);EnableWindow(s->stopButton,FALSE);
     s->statusLabel=make(0,L"STATIC",L"状态：就绪",SS_LEFT,410,176,175,24,ID_STATUS);
-    make(0,L"STATIC",L"按键：← 左移　→ 右移　↑ 旋转　Space 硬降　｜　F8 紧急停止",SS_LEFT,20,215,700,24,ID_HELP);
+    make(0,L"STATIC",L"按键：← 左移　→ 右移　↑ 旋转　Space 硬降　｜　F8 停止",SS_LEFT,20,215,550,24,ID_HELP);
+    s->againRegionButton=make(0,L"BUTTON",L"框选 Again 按钮",BS_PUSHBUTTON|WS_TABSTOP,580,212,145,27,ID_SELECT_AGAIN);
     s->autoRetryCheck=make(0,L"BUTTON",L"Game Over 后自动结算并点击 Again 重开",BS_AUTOCHECKBOX|WS_TABSTOP,735,212,340,27,ID_AUTO_RETRY);
     SendMessageW(s->autoRetryCheck,BM_SETCHECK,BST_CHECKED,0);
 
@@ -127,7 +134,7 @@ void CreateUi(AppState* s) {
     AppendLog(s,L"算法是可解释的线性策略模型；8 个权重会影响多步搜索评分。");
     AppendLog(s,L"温和训练模式：成绩高于基准时做正向更新；低于基准时仅保存诊断记录，不执行负向权重更新。");
     AppendLog(s,L"输入节奏可在 NEXT 参数右侧调整：按住/间隔/落稳（毫秒）。请从默认值开始逐步加快。");
-    AppendLog(s,L"自动结算使用英文 OCR：运行中读取底部 SCORE，识别 GAME OVER 后保存分数；自动点击 Again 默认关闭。");
+    AppendLog(s,L"自动结算使用英文 OCR：运行中缓存 SCORE，识别 GAME OVER 后冻结分数；勾选自动重开时会点击你框选的 Again 按钮。");
 }
 
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -136,7 +143,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if(!s)return DefWindowProcW(hwnd,msg,wp,lp);
     switch(msg){
     case WM_CREATE:
-        CreateUi(s);LoadConfig(s);UpdateRegionLabel(s);UpdateNextRegionLabel(s);s->trainer.Load(s->modelPath);UpdateTrainingStats(s);RefreshWindows(s);
+        CreateUi(s);LoadConfig(s);UpdateRegionLabel(s);UpdateNextRegionLabel(s);UpdateAgainRegionLabel(s);s->trainer.Load(s->modelPath);UpdateTrainingStats(s);RefreshWindows(s);
         if(!RegisterHotKey(hwnd,HOTKEY_STOP,MOD_NOREPEAT,VK_F8)) AppendLog(s,L"提示：F8 全局热键注册失败；请使用界面停止按钮，并避免切换窗口。");
         return 0;
     case WM_COMMAND:
@@ -145,6 +152,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_SELECT:StartSelector(s,false);return 0;
         case ID_SELECT_NEXT:StartSelector(s,true);return 0;
         case ID_SELECT_SCORE:StartSelector(s,false,true);return 0;
+        case ID_SELECT_AGAIN:StartSelector(s,false,false,true);return 0;
         case ID_TEST_SCORE:TestScoreRecognition(s);return 0;
         case ID_TEST:TestRecognition(s);return 0;
         case ID_START:StartBot(s);return 0;
@@ -157,4 +165,5 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->boardRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateRegionLabel(s);SaveConfig(s);AppendLog(s,L"棋盘区域已保存。请确认框选区域正好覆盖 10 列 × 20 行格子内部。");}return 0;}
     case WM_APP_NEXT_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->nextRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateNextRegionLabel(s);SaveConfig(s);AppendLog(s,L"NEXT 区域已保存。请只包含预览卡片列，不要包含 NEXT 标题。");}return 0;}
     case WM_APP_SCORE_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->scoreRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateNextRegionLabel(s);SaveConfig(s);AppendLog(s,L"SCORE 数字区域已保存。请点击“测试 SCORE OCR”确认数字能正确识别。");}return 0;}
+    case WM_APP_AGAIN_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->againRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateAgainRegionLabel(s);SaveConfig(s);AppendLog(s,L"Again 按钮区域已保存。请只框选按钮内部，不要包含 Stop。");}return 0;}
     case WM_APP_FINISHED:
