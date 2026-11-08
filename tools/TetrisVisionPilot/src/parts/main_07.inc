@@ -14,6 +14,9 @@
         }
         const Rect gameOverRect = ClientRelativeRect(target, 0.275, 0.08, 0.455, 0.17);
         DWORD noPieceSince=GetTickCount();
+        bool pendingActionValidation=false;
+        TrainingExperience pendingExperience{};
+        Board pendingExpectedBoard{};
         DWORD lastScoreRead=0, lastGameOverRead=0;
         int latestScore=0, gameOverHits=0;
         bool hasLatestScore=false;
@@ -64,6 +67,10 @@
 
             if (detectedGameOver) {
                 log(L"检测到 GAME OVER，正在结算本局。");
+                if (pendingActionValidation) {
+                    log(L"最后一次硬降未等到下一块棋盘验证；该动作不计入训练样本。");
+                    pendingActionValidation=false;
+                }
                 if (hasLatestScore) {
                     PostMessageW(s->hwnd, WM_APP_SCORE_RECORDED, static_cast<WPARAM>(latestScore), 0);
                     const TrainerSnapshot training = s->trainer.Snapshot();
@@ -126,6 +133,17 @@
             if(!check.hasActive || check.active.name!=piece.name || check.active.rotation!=piece.rotation || check.active.minX!=piece.minX) continue;
             piece=check.active;
             Board board=BoardWithoutActive(check);
+            if (pendingActionValidation) {
+                if (board == pendingExpectedBoard) {
+                    s->trainer.AddExperience(pendingExperience);
+                    log(Format(L"落点验证通过：实际棋盘与预测棋盘一致；训练样本 +1（本局累计 %llu）。",
+                        static_cast<unsigned long long>(s->trainer.Snapshot().pendingActions)));
+                } else {
+                    log(L"落点验证未通过：实际棋盘与预测棋盘不一致；本次动作不加入训练，避免错误归因。");
+                }
+                pendingActionValidation=false;
+                PostMessageW(s->hwnd,WM_APP_TRAIN_STATS,0,0);
+            }
 
             NextQueueResult queue;
             std::wstring queueError;
@@ -151,27 +169,74 @@
             if(s->stop.load())break;
             int currentX=piece.minX;
             if(rotateSteps>0) {
-                SleepCheck(s->stop,125); if(s->stop.load())break;
-                CapturedImage rotatedImage;
-                if(CaptureScreenRect(rect,rotatedImage,capError)) {
-                    VisionResult rotated=Analyze(rotatedImage,threshold,9);
-                    if(rotated.hasActive && rotated.active.name==piece.name && rotated.active.rotation==move.rotation &&
-                       std::abs(rotated.active.centerX-piece.centerX)<3.5) currentX=rotated.active.minX;
-                    else log(L"旋转后复核未匹配，使用旋转前列位置估算；特殊踢墙规则可能导致偏差。");
+                SleepCheck(s->stop,120);
+                if(s->stop.load())break;
+                VisionResult rotated=AnalyzeStable(rect,threshold,capError);
+                if(!capError.empty()) { log(L"旋转后复核截图失败："+capError); break; }
+                if(!rotated.hasActive || rotated.active.name!=piece.name || rotated.active.rotation!=move.rotation) {
+                    log(L"旋转后实际朝向与目标不一致；取消本次落块，重新识别并规划。");
+                    SleepCheck(s->stop,100);
+                    continue;
                 }
+                currentX=rotated.active.minX;
             }
+
             int delta=move.x-currentX;
             WORD moveKey=delta>0?VK_RIGHT:VK_LEFT;
             for(int i=0;i<std::abs(delta) && !s->stop.load();++i) {
-                std::wstring err; if(!TapKey(target,moveKey,keyHoldMs,err)) throw std::runtime_error("移动按键失败或焦点丢失。");
+                std::wstring err;
+                if(!TapKey(target,moveKey,keyHoldMs,err)) throw std::runtime_error("移动按键失败或焦点丢失。");
                 SleepCheck(s->stop,keyGapMs);
             }
             if(s->stop.load())break;
-            std::wstring err; if(!TapKey(target,VK_SPACE,keyHoldMs,err)) throw std::runtime_error("硬降按键失败或焦点丢失。");
-            s->trainer.AddExperience(decision.experience);
-            log(Format(L"已执行硬降；训练样本 +1（本局累计 %llu），预测本次消行 %d。",
-                static_cast<unsigned long long>(s->trainer.Snapshot().pendingActions),decision.predictedLines));
-            PostMessageW(s->hwnd,WM_APP_TRAIN_STATS,0,0);
+
+            // Verify the actual screen position before hard drop. A key pulse is not
+            // proof that the game advanced exactly one column.
+            SleepCheck(s->stop,45);
+            if(s->stop.load())break;
+            VisionResult positioned=AnalyzeStable(rect,threshold,capError);
+            if(!capError.empty()) { log(L"横移后位置复核截图失败："+capError); break; }
+            if(!positioned.hasActive || positioned.active.name!=piece.name || positioned.active.rotation!=move.rotation) {
+                log(L"横移后无法确认当前方块或朝向；取消本次硬降，不记录训练样本。");
+                SleepCheck(s->stop,100);
+                continue;
+            }
+
+            int correction=move.x-positioned.active.minX;
+            if(correction!=0) {
+                log(Format(L"横移复核发现偏差：目标列 %d，实际列 %d；尝试按实际位置纠正。",
+                    move.x,positioned.active.minX));
+                const WORD correctionKey=correction>0?VK_RIGHT:VK_LEFT;
+                for(int i=0;i<std::abs(correction) && !s->stop.load();++i) {
+                    std::wstring err;
+                    if(!TapKey(target,correctionKey,keyHoldMs,err)) throw std::runtime_error("位置纠正按键失败或焦点丢失。");
+                    SleepCheck(s->stop,keyGapMs);
+                }
+                if(s->stop.load())break;
+                SleepCheck(s->stop,45);
+                if(s->stop.load())break;
+                VisionResult corrected=AnalyzeStable(rect,threshold,capError);
+                if(!capError.empty()) { log(L"位置纠正后复核截图失败："+capError); break; }
+                if(!corrected.hasActive || corrected.active.name!=piece.name ||
+                   corrected.active.rotation!=move.rotation || corrected.active.minX!=move.x) {
+                    log(L"位置纠正后仍未到达目标列；本次取消硬降并重新规划。");
+                    SleepCheck(s->stop,100);
+                    continue;
+                }
+                positioned=std::move(corrected);
+            } else {
+                // Exact match: the move pulses reached the intended column.
+            }
+
+            log(Format(L"位置验证通过：实际旋转 %d、实际列 %d；准备硬降。",
+                positioned.active.rotation,positioned.active.minX));
+            std::wstring err;
+            if(!TapKey(target,VK_SPACE,keyHoldMs,err)) throw std::runtime_error("硬降按键失败或焦点丢失。");
+            pendingExperience=decision.experience;
+            pendingExpectedBoard=decision.expectedBoard;
+            pendingActionValidation=true;
+            log(Format(L"已发送硬降；等待下一块出现后核对棋盘，再决定是否记录训练样本；本次预测消行 %d。",
+                decision.predictedLines));
             SleepCheck(s->stop,dropWaitMs);
         }
     } catch(const std::exception& e) {

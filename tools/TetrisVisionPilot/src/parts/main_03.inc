@@ -64,6 +64,7 @@ struct TrainingExperience {
 struct PolicyDecision {
     Move move{};
     TrainingExperience experience{};
+    Board expectedBoard{};
     int predictedLines{};
     int searchedNextPieces{};
 };

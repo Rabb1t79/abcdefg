@@ -16,7 +16,12 @@ bool TapKey(HWND target, WORD vk, int holdMs, std::wstring& error) {
     if (SendInput(1,&input,sizeof(INPUT))!=1) { error=L"发送按键失败；请检查游戏窗口焦点和权限等级。"; return false; }
     Sleep(holdMs);
     input.ki.dwFlags |= KEYEVENTF_KEYUP;
-    SendInput(1,&input,sizeof(INPUT));
+    if (SendInput(1,&input,sizeof(INPUT)) != 1) {
+        // Make one best-effort release before returning a visible failure.
+        SendInput(1,&input,sizeof(INPUT));
+        error=L"释放按键失败；为避免输入持续按住，自动操作已停止。";
+        return false;
+    }
     return true;
 }
 

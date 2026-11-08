@@ -304,6 +304,7 @@ bool ChoosePolicyAction(const Board& board, char piece, const std::vector<char>&
     for(int i=0;i<decision.experience.nextCount;++i)
         decision.experience.nextPieces[i] = nextQueue[static_cast<size_t>(i)];
     decision.move = roots[chosen].move;
+    decision.expectedBoard = roots[chosen].nextBoard;
     decision.move.score = logits[chosen];
     decision.predictedLines = roots[chosen].linesCleared;
     decision.searchedNextPieces = lookaheadDepth;
