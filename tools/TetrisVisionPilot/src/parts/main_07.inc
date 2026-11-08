@@ -121,6 +121,20 @@
             std::wstring capError;
             VisionResult vision=AnalyzeStable(rect,threshold,capError);
             if(!capError.empty()) { log(L"屏幕截图失败："+capError); break; }
+
+            // A hard-dropped piece should fill the ghost footprint. Compare the
+            // resulting fixed board immediately; this can confirm the action
+            // before a new active piece appears at the spawn point.
+            if (pendingActionValidation &&
+                BoardWithoutActive(vision) == pendingExpectedBoard) {
+                s->trainer.AddExperience(pendingExperience);
+                pendingActionValidation=false;
+                log(Format(L"落点锁定验证通过：实际棋盘与预测棋盘一致；%s；训练样本 +1（本局累计 %llu）。",
+                    vision.hasActive?L"已排除新活动方块":L"无需等待新方块出生",
+                    static_cast<unsigned long long>(s->trainer.Snapshot().pendingActions)));
+                PostMessageW(s->hwnd,WM_APP_TRAIN_STATS,0,0);
+            }
+
             if(!vision.hasActive) {
                 if(GetTickCount()-noPieceSince>8000) { log(L"连续 8 秒未识别到出生区方块，已停止。请检查棋盘框选范围和识别阈值。"); break; }
                 SleepCheck(s->stop,120); continue;
@@ -210,8 +224,8 @@
 
             int correction=move.x-observedX;
             if(correction!=0) {
-                log(Format(L"横移复核发现偏差：目标列 %d，实际列 %d；尝试按实际位置纠正。",
-                    move.x,positioned.active.minX));
+                log(Format(L"横移复核发现偏差：目标列 %d，实际落点列 %d；尝试按反馈纠正。",
+                    move.x,observedX));
                 const WORD correctionKey=correction>0?VK_RIGHT:VK_LEFT;
                 for(int i=0;i<std::abs(correction) && !s->stop.load();++i) {
                     std::wstring err;
