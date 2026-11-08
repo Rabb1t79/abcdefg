@@ -77,6 +77,11 @@ bool CaptureScreenRect(const Rect& rect, CapturedImage& out, std::wstring& error
             rect.width, rect.height);
         return false;
     }
+    // When an HWND WGC session is active, never silently mix in desktop pixels:
+    // an occluding window would contaminate the board/OCR image.
+    if (IsWindowCaptureConfigured()) {
+        return TryCaptureWindowRect(rect, out, error);
+    }
     HDC screen = GetDC(nullptr);
     if (!screen) { error = L"无法访问桌面画面。"; return false; }
     HDC memory = CreateCompatibleDC(screen);

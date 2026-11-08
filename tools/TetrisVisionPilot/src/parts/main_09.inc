@@ -91,6 +91,13 @@ void StartSelector(AppState* s, bool nextRegion, bool scoreRegion=false, bool ag
 }
 
 bool TestScoreRecognition(AppState* s) {
+    HWND target = SelectedWindow(s);
+    std::wstring captureInitError;
+    if (target && EnsureWindowCapture(target, captureInitError)) {
+        AppendLog(s, L"捕获后端：Windows Graphics Capture（WGC）窗口捕获；遮挡窗口不会混入游戏画面。");
+    } else if (!captureInitError.empty()) {
+        AppendLog(s, L"WGC 初始化失败，将回退桌面截图（可能受遮挡影响）："+captureInitError);
+    }
     if (s->scoreRect.width < 24 || s->scoreRect.height < 10) {
         AppendLog(s, L"尚未选择 SCORE 数字区域。请只框住游戏中实际分数的数字。");
         return false;
@@ -141,6 +148,13 @@ HWND SelectedWindow(AppState* s) {
 }
 
 void TestRecognition(AppState* s) {
+    HWND target = SelectedWindow(s);
+    std::wstring captureInitError;
+    if (target && EnsureWindowCapture(target, captureInitError)) {
+        AppendLog(s, L"捕获后端：WGC 窗口捕获已就绪；采集的是所选游戏窗口，不读取桌面合成画面。");
+    } else if (!captureInitError.empty()) {
+        AppendLog(s, L"WGC 初始化失败，将回退桌面截图（可能受遮挡影响）："+captureInitError);
+    }
     if(s->boardRect.width<=0){MessageBoxW(s->hwnd,L"请先点击“框选棋盘区域”。",L"尚未选择棋盘",MB_ICONWARNING);return;}
     if(s->boardRect.width<80 || s->boardRect.height<160) {
         MessageBoxW(s->hwnd,Format(L"棋盘区域只有 %d × %d px；10×20 棋盘至少需要 80 × 160 px。请重新框选棋盘。",

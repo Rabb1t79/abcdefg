@@ -1,6 +1,7 @@
 #include "parts/main_00.inc"
 #include "parts/main_01.inc"
 #include "parts/main_02.inc"
+#include "parts/wgc_capture.inc"
 #include "parts/main_03.inc"
 #include "parts/main_04.inc"
 #include "parts/main_05.inc"

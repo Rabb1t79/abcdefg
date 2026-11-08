@@ -5,6 +5,17 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
+#include <condition_variable>
+#include <d3d11.h>
+#include <dxgi.h>
+#include <dwmapi.h>
+#include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Graphics.Capture.h>
+#include <winrt/Windows.Graphics.DirectX.h>
+#include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
+#include <windows.graphics.capture.interop.h>
+#include <windows.graphics.directx.direct3d11.interop.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -85,6 +96,12 @@ struct Cell { int x{}, y{}; };
 struct Rgb { int r{}, g{}, b{}; };
 struct Pixel { uint8_t b{}, g{}, r{}, a{}; };
 struct Rect { int left{}, top{}, width{}, height{}; };
+
+struct CapturedImage;
+bool IsWindowCaptureConfigured();
+bool TryCaptureWindowRect(const Rect& rect, CapturedImage& out, std::wstring& error);
+bool EnsureWindowCapture(HWND target, std::wstring& error);
+void StopWindowCapture();
 
 static HINSTANCE g_instance{};
 static HWND g_mainWindow{};

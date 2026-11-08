@@ -4,7 +4,7 @@
     case WM_APP_TRAIN_STATS:UpdateTrainingStats(s);return 0;
     case WM_APP_SCORE_RECORDED:SetWindowTextW(s->scoreEdit,std::to_wstring(static_cast<int>(wp)).c_str());AppendLog(s,Format(L"OCR 自动读取本局最终分数：%d。",static_cast<int>(wp)));return 0;
     case WM_GETMINMAXINFO:{auto* m=reinterpret_cast<MINMAXINFO*>(lp);m->ptMinTrackSize={1100,930};return 0;}
-    case WM_CLOSE:StopBot(s);if(s->worker.joinable())s->worker.join();s->running.store(false);s->trainer.Save(s->modelPath);DestroyWindow(hwnd);return 0;
+    case WM_CLOSE:StopBot(s);if(s->worker.joinable())s->worker.join();s->running.store(false);StopWindowCapture();s->trainer.Save(s->modelPath);DestroyWindow(hwnd);return 0;
     case WM_DESTROY:UnregisterHotKey(hwnd,HOTKEY_STOP);PostQuitMessage(0);return 0;
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
