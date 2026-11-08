@@ -59,7 +59,7 @@ void Log(AppState* s, const std::wstring& msg) { PostLog(s->hwnd,msg); }
 
 bool ReadOcrText(tesseract::TessBaseAPI& ocr, const Rect& rect,
                  const char* whitelist, tesseract::PageSegMode pageMode,
-                 std::string& output, std::wstring& error) {
+                 std::string& output, std::wstring& error, int* confidence = nullptr) {
     CapturedImage image;
     if (!CaptureScreenRect(rect, image, error)) return false;
     std::vector<unsigned char> rgb(static_cast<size_t>(image.width) * image.height * 3);
@@ -76,12 +76,25 @@ bool ReadOcrText(tesseract::TessBaseAPI& ocr, const Rect& rect,
     if (!raw) { error = L"OCR 没有返回文本。"; return false; }
     output.assign(raw);
     delete[] raw;
+    if (confidence) *confidence = ocr.MeanTextConf();
     return true;
 }
 
 bool ParseScoreDigits(const std::string& text, int& scoreOut) {
     std::string digits;
-    for (unsigned char c : text) if (c >= '0' && c <= '9') digits.push_back(static_cast<char>(c));
+    bool endedNumber = false;
+    for (unsigned char c : text) {
+        if (c >= '0' && c <= '9') {
+            if (endedNumber) return false;
+            digits.push_back(static_cast<char>(c));
+        } else if (c == ',' || c == '.') {
+            continue;
+        } else if (c == ' ' || c == '\\t' || c == '\\r' || c == '\\n') {
+            if (!digits.empty()) endedNumber = true;
+        } else {
+            return false;
+        }
+    }
     if (digits.empty() || digits.size() > 9) return false;
     try {
         const long value = std::stol(digits);

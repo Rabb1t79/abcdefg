@@ -12,8 +12,10 @@
         } else {
             log(L"英文 OCR 已就绪：运行中读取 SCORE，Game Over 时自动结算。");
         }
-        const Rect scoreRect = ClientRelativeRect(target, 0.145, 0.835, 0.425, 0.105);
-        const Rect gameOverRect = ClientRelativeRect(target, 0.275, 0.105, 0.455, 0.125);
+        // The six-digit score is at the lower-left of the game's client area in the supplied 802x602 layout.
+        // Keep this crop tight so the nearby SCORE caption and other counters cannot be concatenated.
+        const Rect scoreRect = ClientRelativeRect(target, 0.215, 0.86, 0.17, 0.10);
+        const Rect gameOverRect = ClientRelativeRect(target, 0.275, 0.08, 0.455, 0.17);
         DWORD noPieceSince=GetTickCount();
         DWORD lastScoreRead=0, lastGameOverRead=0;
         int latestScore=0, gameOverHits=0;
@@ -23,9 +25,9 @@
             const DWORD now = GetTickCount();
             if (ocrReady && (now - lastScoreRead >= 450)) {
                 lastScoreRead = now;
-                std::string scoreText; std::wstring ocrError; int parsedScore = 0;
-                if (ReadOcrText(ocr, scoreRect, "0123456789,:. ", tesseract::PSM_SINGLE_LINE, scoreText, ocrError) &&
-                    ParseScoreDigits(scoreText, parsedScore)) {
+                std::string scoreText; std::wstring ocrError; int parsedScore = 0; int scoreConfidence = 0;
+                if (ReadOcrText(ocr, scoreRect, "0123456789,:. ", tesseract::PSM_SINGLE_LINE, scoreText, ocrError, &scoreConfidence) &&
+                    scoreConfidence >= 60 && ParseScoreDigits(scoreText, parsedScore)) {
                     if (!hasLatestScore || parsedScore >= latestScore) {
                         latestScore = parsedScore;
                         hasLatestScore = true;
@@ -51,11 +53,11 @@
                         double advantage = 0.0; size_t samples = 0; std::wstring trainingMessage;
                         if (s->trainer.SubmitScore(latestScore, learningRate, advantage, samples, trainingMessage)) {
                             s->trainer.Save(s->modelPath);
-                            AppendTrainingCsv(s, latestScore, learningRate, epsilon, temperature);
                             log(trainingMessage);
                             PostMessageW(s->hwnd, WM_APP_TRAIN_STATS, 0, 0);
                         } else log(L"自动结算未执行训练："+trainingMessage);
                     } else log(L"已保存最终分数，但本局没有待结算的 AI 动作样本。");
+                    AppendTrainingCsv(s, latestScore, learningRate, epsilon, temperature);
                 } else {
                     log(L"检测到 GAME OVER，但运行期间没有读到可信分数；未猜测分数，也未自动重开。");
                     break;
