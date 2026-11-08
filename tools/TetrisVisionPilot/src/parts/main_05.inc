@@ -34,6 +34,7 @@
         std::lock_guard<std::mutex> guard(mutex_);
         TrainerSnapshot s;
         s.weights = weights_;
+        s.bootstrapSamples = bootstrapSamples_;
         s.games = games_;
         s.averageScore = averageScore_;
         s.bestScore = bestScore_;
@@ -57,6 +58,8 @@
         averageScore_ = std::wcstod(avg, nullptr);
         wchar_t adv[64]{}; GetPrivateProfileStringW(L"PolicyModel", L"LastAdvantage", L"0", adv, _countof(adv), path.c_str());
         lastAdvantage_ = std::wcstod(adv, nullptr);
+        const uint64_t storedBootstrapSamples=static_cast<uint64_t>(GetPrivateProfileIntW(L"PolicyModel",L"BootstrapSamples",0,path.c_str()));
+        if (storedBootstrapSamples>0) bootstrapSamples_=storedBootstrapSamples;
     }
 
     void Save(const std::wstring& path) const {
@@ -65,6 +68,7 @@
         WritePrivateProfileStringW(L"PolicyModel", L"BestScore", std::to_wstring(s.bestScore).c_str(), path.c_str());
         WritePrivateProfileStringW(L"PolicyModel", L"AverageScore", std::to_wstring(s.averageScore).c_str(), path.c_str());
         WritePrivateProfileStringW(L"PolicyModel", L"LastAdvantage", std::to_wstring(s.lastAdvantage).c_str(), path.c_str());
+        WritePrivateProfileStringW(L"PolicyModel", L"BootstrapSamples", std::to_wstring(s.bootstrapSamples).c_str(), path.c_str());
         for (size_t i = 0; i < FEATURE_COUNT; ++i) {
             wchar_t key[32]{}; _snwprintf_s(key, _countof(key), _TRUNCATE, L"Weight%llu", static_cast<unsigned long long>(i));
             WritePrivateProfileStringW(L"PolicyModel", key, std::to_wstring(s.weights[i]).c_str(), path.c_str());
@@ -73,8 +77,8 @@
 
 private:
     void ResetUnlocked() {
-        // 初始权重是可解释的启发式先验；训练会基于实际整局得分改变它们。
-        weights_ = {{-1.4, -6.0, -1.1, -1.5, -0.3, -0.4, -0.3, 6.5}};
+        // Seed the policy from a small rule-generated demonstration corpus before live play.
+        weights_ = PretrainFromBootstrap(bootstrapSamples_);
         games_ = 0;
         averageScore_ = 0.0;
         bestScore_ = 0;
@@ -84,6 +88,7 @@ private:
 
     mutable std::mutex mutex_;
     std::array<double, FEATURE_COUNT> weights_{};
+    uint64_t bootstrapSamples_{};
     std::vector<TrainingExperience> pending_;
     uint64_t games_{};
     double averageScore_{};

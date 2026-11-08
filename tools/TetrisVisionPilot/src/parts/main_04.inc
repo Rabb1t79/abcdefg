@@ -51,8 +51,126 @@ std::vector<ActionCandidate> EnumerateActions(const Board& board, char piece) {
     return candidates;
 }
 
+struct BootstrapPreference {
+    std::array<double, FEATURE_COUNT> preferred{};
+    std::array<double, FEATURE_COUNT> alternative{};
+};
+
+constexpr std::array<double, FEATURE_COUNT> kRuleTeacherWeights =
+    {{-1.4, -6.0, -1.1, -1.5, -0.3, -0.4, -0.3, 6.5}};
+
+double FeatureDot(const std::array<double, FEATURE_COUNT>& weights,
+                  const std::array<double, FEATURE_COUNT>& values) {
+    double total = 0.0;
+    for (size_t i=0;i<FEATURE_COUNT;++i) total += weights[i] * values[i];
+    return total;
+}
+
+// Compact synthetic curriculum: empty/flat boards, ramps, wells, uneven stacks,
+// almost-complete rows and buried holes. These are rule-generated examples,
+// not recordings of a real player.
+std::vector<BootstrapPreference> BuildBootstrapPreferences() {
+    const std::vector<std::array<int, COLS>> profiles = {
+        {{0,0,0,0,0,0,0,0,0,0}},
+        {{1,1,1,1,1,1,1,1,1,1}},
+        {{2,2,2,2,2,2,2,2,2,2}},
+        {{1,2,3,4,4,3,2,1,1,1}},
+        {{4,3,2,1,1,2,3,4,4,3}},
+        {{0,1,2,3,4,5,6,5,4,3}},
+        {{6,5,4,3,2,1,0,1,2,3}},
+        {{2,4,6,4,2,4,6,4,2,1}},
+        {{5,5,5,1,1,1,5,5,5,5}},
+        {{7,6,5,4,3,2,1,0,1,2}},
+        {{0,1,1,2,2,3,3,4,4,5}},
+        {{5,4,3,2,1,0,1,2,3,4}},
+        {{3,3,3,6,6,6,3,3,3,3}},
+        {{8,7,6,5,4,3,2,1,0,0}},
+        {{0,0,1,2,3,4,5,6,7,8}},
+        {{4,4,2,2,4,4,2,2,4,4}},
+        {{2,5,2,5,2,5,2,5,2,5}},
+        {{6,2,6,2,6,2,6,2,6,2}}
+    };
+    std::vector<Board> states;
+    for (size_t n=0;n<profiles.size();++n) {
+        Board board{};
+        for (int x=0;x<COLS;++x)
+            for (int y=ROWS-profiles[n][x];y<ROWS;++y)
+                if (y>=0) board[y][x]=1;
+        states.push_back(board);
+
+        // Buried-hole variant: remove one cell while preserving cells below/above it.
+        if (n % 2 == 0) {
+            Board withHole=board;
+            const int column=static_cast<int>((n*3+2)%COLS);
+            if (profiles[n][column] >= 2) {
+                withHole[ROWS-2][column]=0;
+                states.push_back(withHole);
+            }
+        }
+
+        // Near-clear variant with a single, two-cell or three-cell gap.
+        Board nearClear=board;
+        for (int x=0;x<COLS;++x) nearClear[ROWS-1][x]=1;
+        nearClear[ROWS-1][static_cast<int>((n*3+1)%COLS)]=0;
+        if (n%3==0) nearClear[ROWS-1][static_cast<int>((n*3+2)%COLS)]=0;
+        states.push_back(nearClear);
+    }
+
+    const char pieces[]={'I','O','T','S','Z','J','L'};
+    std::vector<BootstrapPreference> preferences;
+    for (const Board& state:states) for (char piece:pieces) {
+        const auto actions=EnumerateActions(state,piece);
+        if (actions.size()<2) continue;
+        size_t best=0;
+        double bestValue=FeatureDot(kRuleTeacherWeights,actions[0].features.value);
+        for (size_t i=1;i<actions.size();++i) {
+            const double value=FeatureDot(kRuleTeacherWeights,actions[i].features.value);
+            if (value>bestValue) { bestValue=value; best=i; }
+        }
+        for (size_t i=0;i<actions.size();++i) {
+            if (i==best) continue;
+            const double alternativeValue=FeatureDot(kRuleTeacherWeights,actions[i].features.value);
+            if (bestValue-alternativeValue<=1e-7) continue;
+            BootstrapPreference sample;
+            sample.preferred=actions[best].features.value;
+            sample.alternative=actions[i].features.value;
+            preferences.push_back(sample);
+        }
+    }
+    return preferences;
+}
+
+std::array<double, FEATURE_COUNT> PretrainFromBootstrap(size_t& sampleCount) {
+    const auto preferences=BuildBootstrapPreferences();
+    sampleCount=preferences.size();
+    auto weights=std::array<double, FEATURE_COUNT>{};
+    if (preferences.empty()) return kRuleTeacherWeights;
+
+    // Pairwise imitation: learn to rank the rule-teacher's better placements above
+    // weaker placements. No negative reward or punitive update is used.
+    for (int epoch=0;epoch<80;++epoch) {
+        for (const auto& sample:preferences) {
+            std::array<double, FEATURE_COUNT> delta{};
+            double norm=1e-9;
+            for (size_t i=0;i<FEATURE_COUNT;++i) {
+                delta[i]=sample.preferred[i]-sample.alternative[i];
+                norm+=delta[i]*delta[i];
+            }
+            const double target=FeatureDot(kRuleTeacherWeights,delta);
+            const double current=FeatureDot(weights,delta);
+            if (current+0.04<target) {
+                const double scale=(std::min)(0.35,0.65*(target-current)/norm);
+                for (size_t i=0;i<FEATURE_COUNT;++i) weights[i]+=scale*delta[i];
+            }
+        }
+    }
+    for (double& weight:weights) weight=(std::max)(-20.0,(std::min)(20.0,weight));
+    return weights;
+}
+
 struct TrainerSnapshot {
     std::array<double, FEATURE_COUNT> weights{};
+    uint64_t bootstrapSamples{};
     uint64_t games{};
     double averageScore{};
     int bestScore{};
