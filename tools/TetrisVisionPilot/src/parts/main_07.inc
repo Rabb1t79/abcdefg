@@ -55,6 +55,7 @@
                     PostMessageW(s->hwnd, WM_APP_SCORE_RECORDED, static_cast<WPARAM>(latestScore), 0);
                     const TrainerSnapshot training = s->trainer.Snapshot();
                     if (training.pendingActions > 0) {
+                        SaveCurrentEpisodeMemory(s,latestScore);
                         double advantage = 0.0; size_t samples = 0; std::wstring trainingMessage;
                         if (s->trainer.SubmitScore(latestScore, learningRate, advantage, samples, trainingMessage)) {
                             s->trainer.Save(s->modelPath);
@@ -120,7 +121,7 @@
                 continue;
             }
             PolicyDecision decision;
-            if(!ChoosePolicyAction(board,piece.name,queue.pieces,lookaheadDepth,s->trainer,
+            if(!ChoosePolicyAction(board,piece.name,queue.pieces,lookaheadDepth,s->trainer,s->experienceMemory,
                                   epsilon,temperature,rng,decision))
                 throw std::runtime_error("策略模型未找到合法落点。棋盘可能已堆到顶部，或识别结果不正确。");
             Move move=decision.move;

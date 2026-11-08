@@ -65,6 +65,7 @@ void SubmitTrainingScore(AppState* s) {
     double advantage = 0.0;
     size_t samples = 0;
     std::wstring message;
+    SaveCurrentEpisodeMemory(s,static_cast<int>(scoreValue));
     if (!s->trainer.SubmitScore(static_cast<int>(scoreValue), learningRate, advantage, samples, message)) {
         MessageBoxW(s->hwnd, message.c_str(), L"暂时无法训练", MB_ICONINFORMATION);
         return;

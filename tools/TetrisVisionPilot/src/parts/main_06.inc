@@ -31,6 +31,8 @@ struct AppState {
     std::vector<char> previewNextPieces;
     bool hasNextPreview{};
     PolicyTrainer trainer;
+    ExperienceMemory experienceMemory;
+    std::wstring experiencePath;
     std::atomic<bool> stop{false};
     std::atomic<bool> running{false};
     std::thread worker;
@@ -41,6 +43,23 @@ struct AppState {
     std::wstring modelPath;
     std::wstring trainingCsvPath;
 };
+
+bool SaveCurrentEpisodeMemory(AppState* s, int score) {
+    const TrainerSnapshot snapshot=s->trainer.Snapshot();
+    const auto experiences=s->trainer.PendingExperiences();
+    if(experiences.empty()) return true;
+    const bool aboveBaseline=snapshot.games>0 && static_cast<double>(score)>snapshot.averageScore;
+    size_t written=0; std::wstring error;
+    if(!s->experienceMemory.AppendEpisode(s->experiencePath,score,snapshot.averageScore,
+                                          aboveBaseline,experiences,written,error)) {
+        PostLog(s->hwnd,L"经验档案保存失败："+error);
+        return false;
+    }
+    PostLog(s->hwnd,Format(L"经验档案追加 %llu 条：%s；可检索成功经验共 %llu 条。",
+        static_cast<unsigned long long>(written),aboveBaseline?L"高于基准，加入成功经验记忆":L"仅作结果记录，不加入成功偏好库",
+        static_cast<unsigned long long>(s->experienceMemory.Size())));
+    return true;
+}
 
 int ReadThreshold(AppState* s) {
     wchar_t buf[32]{}; GetWindowTextW(s->thresholdEdit,buf,_countof(buf));
