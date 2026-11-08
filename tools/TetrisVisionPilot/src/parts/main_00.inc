@@ -6,6 +6,7 @@
 #include <windowsx.h>
 #include <commctrl.h>
 #include <condition_variable>
+#include <chrono>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <dwmapi.h>

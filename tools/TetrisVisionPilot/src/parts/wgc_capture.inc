@@ -192,8 +192,9 @@ void WgcCaptureThread(const std::shared_ptr<WgcCaptureState>& state) {
         const int needed = MultiByteToWideChar(CP_UTF8, 0, ex.what(), -1, nullptr, 0);
         std::wstring message;
         if (needed > 1) {
-            message.resize(static_cast<size_t>(needed - 1));
+            message.resize(static_cast<size_t>(needed));
             MultiByteToWideChar(CP_UTF8, 0, ex.what(), -1, message.data(), needed);
+            message.resize(static_cast<size_t>(needed - 1));
         } else {
             message = L"WGC 捕获线程发生未知错误。";
         }
@@ -210,10 +211,9 @@ std::shared_ptr<WgcCaptureState> CurrentWgcState() {
 }
 
 bool IsWindowCaptureConfigured() {
-    auto state = CurrentWgcState();
-    if (!state) return false;
-    std::lock_guard<std::mutex> lock(state->mutex);
-    return !state->failed && state->haveFrame;
+    // A configured-but-failed capture must report its WGC error. Do not silently
+    // fall back to desktop pixels, which could contain an occluding window.
+    return static_cast<bool>(CurrentWgcState());
 }
 
 bool EnsureWindowCapture(HWND target, std::wstring& error) {
