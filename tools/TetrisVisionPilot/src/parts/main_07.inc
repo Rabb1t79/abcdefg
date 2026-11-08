@@ -17,11 +17,37 @@
         DWORD lastScoreRead=0, lastGameOverRead=0;
         int latestScore=0, gameOverHits=0;
         bool hasLatestScore=false;
+        bool scoreResetObserved=false;
         std::mt19937 rng(static_cast<unsigned int>(GetTickCount() ^ GetCurrentThreadId()));
         while(!s->stop.load()) {
             const DWORD now = GetTickCount();
-            // Check GAME OVER before reading SCORE. Freeze the latest live score after
-            // a second title confirmation, before the result screen clears the counter.
+
+            // Sample SCORE before checking GAME OVER. The game may clear its score
+            // during the transition, so only non-decreasing readings may replace
+            // the last trusted snapshot from the active game.
+            if (ocrReady && scoreRect.width>=24 && scoreRect.height>=10 &&
+                (now-lastScoreRead>=120)) {
+                lastScoreRead=now;
+                std::string scoreText; std::wstring ocrError;
+                int parsedScore=0, scoreConfidence=0;
+                bool zeroVerified=false;
+                if (ReadScoreValue(ocr,scoreRect,parsedScore,scoreConfidence,scoreText,ocrError,&zeroVerified)) {
+                    const bool plausible=!hasLatestScore ||
+                        (parsedScore>=latestScore && parsedScore-latestScore<=5000);
+                    if (plausible) {
+                        const bool changed=!hasLatestScore || parsedScore!=latestScore;
+                        latestScore=parsedScore;
+                        hasLatestScore=true;
+                        if (changed) log(Format(L"SCORE 快照：%d（OCR 置信度 %d/100%s）。",
+                            latestScore,scoreConfidence,zeroVerified?L"，零分已通过多模式复核":L""));
+                    } else if (parsedScore==0 && latestScore>0 && !scoreResetObserved) {
+                        scoreResetObserved=true;
+                        log(Format(L"检测到分数显示已提前清零；保留最后可信分数 %d，不用 0 覆盖本局成绩。",latestScore));
+                    }
+                }
+            }
+
+            // Run the two-pass GAME OVER check only after this cycle's SCORE sample.
             bool detectedGameOver = false;
             if (ocrReady && (now - lastGameOverRead >= 180)) {
                 lastGameOverRead = now;
@@ -35,20 +61,7 @@
                                        IsGameOverText(confirmText);
                 }
             }
-            if (!detectedGameOver && ocrReady && scoreRect.width>=24 && scoreRect.height>=10 &&
-                (now-lastScoreRead>=120)) {
-                lastScoreRead=now;
-                std::string scoreText; std::wstring ocrError; int parsedScore=0; int scoreConfidence=0;
-                if (ReadOcrText(ocr,scoreRect,"0123456789,:. ",tesseract::PSM_SINGLE_LINE,scoreText,ocrError,&scoreConfidence) &&
-                    scoreConfidence>=40 && ParseScoreDigits(scoreText,parsedScore)) {
-                    const bool plausible=!hasLatestScore || (parsedScore>=latestScore && parsedScore-latestScore<=5000);
-                    if (plausible) {
-                        const bool changed=!hasLatestScore || parsedScore!=latestScore;
-                        latestScore=parsedScore; hasLatestScore=true;
-                        if (changed) log(Format(L"SCORE 快照：%d（OCR 置信度 %d/100）。",latestScore,scoreConfidence));
-                    }
-                }
-            }
+
             if (detectedGameOver) {
                 log(L"检测到 GAME OVER，正在结算本局。");
                 if (hasLatestScore) {

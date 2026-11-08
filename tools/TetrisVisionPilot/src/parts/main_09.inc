@@ -102,11 +102,12 @@ bool TestScoreRecognition(AppState* s) {
         return false;
     }
     std::string text; std::wstring error; int confidence = 0; int score = 0;
-    const bool captured = ReadOcrText(ocr, s->scoreRect, "0123456789,:. ", tesseract::PSM_SINGLE_LINE, text, error, &confidence);
+    bool zeroVerified = false;
+    const bool parsed = ReadScoreValue(ocr,s->scoreRect,score,confidence,text,error,&zeroVerified);
     ocr.End();
-    if (!captured) { AppendLog(s, L"SCORE OCR 截图失败："+error); return false; }
-    if (confidence < 40 || !ParseScoreDigits(text, score)) {
-        AppendLog(s, Format(L"SCORE OCR 未通过：置信度 %d/100，未能解析为单一分数。请重新框选数字。", confidence));
+    if (!parsed) {
+        AppendLog(s, Format(L"SCORE OCR 未通过：置信度 %d/100，未能可信解析分数。请重新框选数字；低置信度的 0 需要多模式复核。", confidence));
+        if (!error.empty()) AppendLog(s,L"OCR 诊断："+error);
         SetWindowTextW(s->scoreStatusLabel, L"SCORE OCR：失败");
         return false;
     }
