@@ -143,9 +143,13 @@ public:
                        size_t& written, std::wstring& error) {
         written=0;
         if(experiences.empty()) return true;
-        std::ofstream output{std::filesystem::path(path),std::ios::out|std::ios::app};
+        const std::filesystem::path archivePath(path);
+        const bool writeHeader = !std::filesystem::exists(archivePath);
+        std::ofstream output{archivePath,std::ios::out|std::ios::app};
         if(!output) { error=L"无法写入经验档案："+path; return false; }
         std::lock_guard<std::mutex> guard(mutex_);
+        if(writeHeader)
+            output<<"score,baseline,above_baseline,piece,rotation,x,next_queue,state_aggregate_height,state_holes,state_bumpiness,state_max_height,state_wells,state_row_transitions,state_col_transitions,state_lines\n";
         for(const auto& experience:experiences) {
             std::string next;
             for(int i=0;i<experience.nextCount && i<6;++i) next.push_back(experience.nextPieces[i]);

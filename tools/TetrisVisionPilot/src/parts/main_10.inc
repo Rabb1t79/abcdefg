@@ -32,17 +32,22 @@ void StartBot(AppState* s) {
         if (s->scoreRect.width < 24 || s->scoreRect.height < 10) {
             MessageBoxW(s->hwnd,L"自动结算需要先框选 SCORE 数字区域，并通过“测试 SCORE OCR”。",L"尚未设置分数区域",MB_ICONWARNING); return;
         }
-        if (!TestScoreRecognition(s)) {
-            MessageBoxW(s->hwnd,L"SCORE OCR 测试未通过。请重新框选数字区域，或取消自动重开后再运行。",L"分数识别未通过",MB_ICONWARNING); return;
-        }
         if (s->againRect.width < 70 || s->againRect.height < 22) {
             MessageBoxW(s->hwnd,L"自动重开还需要框选 Again 按钮。请在 Game Over 画面点“框选 Again 按钮”，只框住按钮内部。",L"尚未选择 Again 按钮",MB_ICONWARNING); return;
         }
     }
     HWND target=SelectedWindow(s);
     if(!target||!IsWindow(target)){MessageBoxW(s->hwnd,L"请从窗口列表中选择正在运行的游戏。",L"尚未选择游戏窗口",MB_ICONWARNING);return;}
-    if (autoRetry && !IsScreenRectInsideClient(target,s->againRect)) {
-        MessageBoxW(s->hwnd,L"Again 按钮区域不在所选游戏窗口内部。请重新框选，或关闭自动重开。",L"Again 区域不匹配",MB_ICONWARNING); return;
+    if (autoRetry) {
+        if (!IsScreenRectInsideClient(target,s->scoreRect)) {
+            MessageBoxW(s->hwnd,L"SCORE 数字区域不在所选游戏窗口内部；可能移动过游戏窗口。请重新框选 SCORE。",L"SCORE 区域不匹配",MB_ICONWARNING); return;
+        }
+        if (!IsScreenRectInsideClient(target,s->againRect)) {
+            MessageBoxW(s->hwnd,L"Again 按钮区域不在所选游戏窗口内部；可能移动过游戏窗口。请重新框选 Again。",L"Again 区域不匹配",MB_ICONWARNING); return;
+        }
+        if (!TestScoreRecognition(s)) {
+            MessageBoxW(s->hwnd,L"SCORE OCR 测试未通过。请重新框选数字区域，或关闭自动重开后再运行。",L"分数识别未通过",MB_ICONWARNING); return;
+        }
     }
     TestRecognition(s);
     if(!s->hasPreview || !s->previewData.hasActive){MessageBoxW(s->hwnd,L"尚未识别到当前方块。请调整棋盘框选范围或颜色阈值，再测试一次。",L"识别未通过",MB_ICONWARNING);return;}
