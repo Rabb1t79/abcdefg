@@ -22,11 +22,12 @@ bool TapKey(HWND target, WORD vk, int holdMs, std::wstring& error) {
 
 struct AppState {
     HWND hwnd{}, combo{}, regionLabel{}, nextRegionLabel{}, nextStatusLabel{}, nextCountEdit{}, lookaheadEdit{};
+    HWND scoreRegionLabel{}, scoreStatusLabel{};
     HWND thresholdEdit{}, logEdit{}, preview{}, startButton{}, stopButton{}, statusLabel{};
     HWND scoreEdit{}, learningRateEdit{}, epsilonEdit{}, temperatureEdit{}, trainingStatsLabel{};
     HWND keyHoldEdit{}, keyGapEdit{}, dropWaitEdit{}, autoRetryCheck{};
     std::wstring tessdataPath{};
-    Rect boardRect{}, nextRect{};
+    Rect boardRect{}, nextRect{}, scoreRect{};
     std::vector<char> previewNextPieces;
     bool hasNextPreview{};
     PolicyTrainer trainer;
@@ -143,7 +144,7 @@ bool ClickAgainButton(HWND target, std::wstring& error) {
     RECT client{};
     if (!GetClientRect(target, &client)) { error = L"无法读取游戏窗口尺寸。"; return false; }
     POINT point{static_cast<LONG>((client.right - client.left) * 0.374),
-                static_cast<LONG>((client.bottom - client.top) * 0.839)};
+                static_cast<LONG>((client.bottom - client.top) * 0.831)};
     if (!ClientToScreen(target, &point)) { error = L"无法定位 Again 按钮。"; return false; }
     if (!SetCursorPos(point.x, point.y)) { error = L"无法移动鼠标到 Again 按钮。"; return false; }
     INPUT clicks[2]{};
@@ -157,7 +158,7 @@ void AppendTrainingCsv(AppState* s, int score, double learningRate, double epsil
 
 void BotThread(AppState* s, HWND target, Rect rect, Rect nextRect, int threshold,
                int previewCount, int lookaheadDepth, double epsilon, double temperature,
-               int keyHoldMs, int keyGapMs, int dropWaitMs,
+               int keyHoldMs, int keyGapMs, int dropWaitMs, Rect scoreRect,
                double learningRate, bool autoRetry) {
     auto log=[&](const std::wstring& m){Log(s,m);};
     try {

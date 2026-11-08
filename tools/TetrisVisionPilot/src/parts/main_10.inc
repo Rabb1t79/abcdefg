@@ -19,6 +19,7 @@
 
 void StartBot(AppState* s) {
     if(s->running.load())return;
+    const bool autoRetry=SendMessageW(s->autoRetryCheck,BM_GETCHECK,0,0)==BST_CHECKED;
     if(s->worker.joinable())s->worker.join();
     const TrainerSnapshot modelState = s->trainer.Snapshot();
     if (modelState.pendingActions > 0) {
@@ -27,6 +28,14 @@ void StartBot(AppState* s) {
         if (MessageBoxW(s->hwnd, warning.c_str(), L"存在未结算训练样本", MB_YESNO | MB_ICONWARNING) != IDYES) return;
     }
     if(s->boardRect.width<=0){MessageBoxW(s->hwnd,L"请先框选棋盘区域。",L"尚未选择棋盘",MB_ICONWARNING);return;}
+    if (autoRetry) {
+        if (s->scoreRect.width < 24 || s->scoreRect.height < 10) {
+            MessageBoxW(s->hwnd,L"自动结算需要先框选 SCORE 数字区域，并通过“测试 SCORE OCR”。",L"尚未设置分数区域",MB_ICONWARNING); return;
+        }
+        if (!TestScoreRecognition(s)) {
+            MessageBoxW(s->hwnd,L"SCORE OCR 测试未通过。请重新框选数字区域，或取消自动重开后再运行。",L"分数识别未通过",MB_ICONWARNING); return;
+        }
+    }
     HWND target=SelectedWindow(s);
     if(!target||!IsWindow(target)){MessageBoxW(s->hwnd,L"请从窗口列表中选择正在运行的游戏。",L"尚未选择游戏窗口",MB_ICONWARNING);return;}
     TestRecognition(s);
@@ -41,12 +50,11 @@ void StartBot(AppState* s) {
     const double epsilon=ReadDoubleEdit(s->epsilonEdit,15.0,0.0,60.0)/100.0;
     const double temperature=ReadDoubleEdit(s->temperatureEdit,0.80,0.05,5.0);
     const double learningRate=ReadDoubleEdit(s->learningRateEdit,0.08,0.001,0.50);
-    const bool autoRetry=SendMessageW(s->autoRetryCheck,BM_GETCHECK,0,0)==BST_CHECKED;
     const int keyHoldMs=static_cast<int>(ReadDoubleEdit(s->keyHoldEdit,26,8,80));
     const int keyGapMs=static_cast<int>(ReadDoubleEdit(s->keyGapEdit,12,0,80));
     const int dropWaitMs=static_cast<int>(ReadDoubleEdit(s->dropWaitEdit,190,80,1000));
     SaveConfig(s);
-    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature,keyHoldMs,keyGapMs,dropWaitMs,learningRate,autoRetry); }
+    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature,keyHoldMs,keyGapMs,dropWaitMs,s->scoreRect,learningRate,autoRetry); }
     catch(...) { s->running.store(false);EnableWindow(s->startButton,TRUE);EnableWindow(s->stopButton,FALSE);SetWindowTextW(s->statusLabel,L"状态：启动失败");MessageBoxW(s->hwnd,L"无法创建自动控制线程。",L"启动失败",MB_ICONERROR); }
 }
 
@@ -66,7 +74,9 @@ void CreateUi(AppState* s) {
     make(0,L"BUTTON",L"框选棋盘区域",BS_PUSHBUTTON,780,53,150,28,ID_SELECT);
     s->regionLabel=make(0,L"STATIC",L"棋盘区域：尚未选择",SS_LEFT,20,95,360,24,ID_REGION);
     make(0,L"BUTTON",L"框选 NEXT 区域",BS_PUSHBUTTON,390,92,125,28,ID_SELECT_NEXT);
-    s->nextRegionLabel=make(0,L"STATIC",L"NEXT区域：尚未选择",SS_LEFT,530,95,500,24,0);
+    s->nextRegionLabel=make(0,L"STATIC",L"NEXT区域：尚未选择",SS_LEFT,530,95,235,24,0);
+    make(0,L"BUTTON",L"框选 SCORE 数字",BS_PUSHBUTTON,780,92,130,28,ID_SELECT_SCORE);
+    s->scoreRegionLabel=make(0,L"STATIC",L"SCORE区域：未选择",SS_LEFT,920,95,155,24,0);
     make(0,L"STATIC",L"颜色差阈值：",SS_LEFT,20,130,90,24,0);
     s->thresholdEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"48",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,110,126,55,26,ID_THRESHOLD);
     make(0,L"STATIC",L"（背景阈值）",SS_LEFT,175,130,100,24,0);
@@ -80,13 +90,16 @@ void CreateUi(AppState* s) {
     s->keyGapEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"12",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,948,126,38,26,ID_KEY_GAP);
     make(0,L"STATIC",L"落稳",SS_LEFT,992,130,35,24,0);
     s->dropWaitEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"190",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,1027,126,48,26,ID_DROP_WAIT);
-    s->nextStatusLabel=make(0,L"STATIC",L"NEXT识别：尚未测试",SS_LEFT,600,176,430,24,0);
+    s->nextStatusLabel=make(0,L"STATIC",L"NEXT识别：尚未测试",SS_LEFT,600,176,175,24,0);
+    make(0,L"BUTTON",L"测试 SCORE OCR",BS_PUSHBUTTON,785,170,125,32,ID_TEST_SCORE);
+    s->scoreStatusLabel=make(0,L"STATIC",L"SCORE OCR：未测试",SS_LEFT,920,176,165,24,0);
     make(0,L"BUTTON",L"测试识别",BS_PUSHBUTTON,20,170,115,34,ID_TEST);
     s->startButton=make(0,L"BUTTON",L"开始自动落块",BS_PUSHBUTTON,145,170,145,34,ID_START);
     s->stopButton=make(0,L"BUTTON",L"停止",BS_PUSHBUTTON,300,170,90,34,ID_STOP);EnableWindow(s->stopButton,FALSE);
     s->statusLabel=make(0,L"STATIC",L"状态：就绪",SS_LEFT,410,176,175,24,ID_STATUS);
     make(0,L"STATIC",L"按键：← 左移　→ 右移　↑ 旋转　Space 硬降　｜　F8 紧急停止",SS_LEFT,20,215,700,24,ID_HELP);
-    s->autoRetryCheck=make(0,L"BUTTON",L"Game Over 后自动点击 Again 重开（分数仍会自动记录）",BS_AUTOCHECKBOX|WS_TABSTOP,735,212,340,27,ID_AUTO_RETRY);
+    s->autoRetryCheck=make(0,L"BUTTON",L"Game Over 后自动结算并点击 Again 重开",BS_AUTOCHECKBOX|WS_TABSTOP,735,212,340,27,ID_AUTO_RETRY);
+    SendMessageW(s->autoRetryCheck,BM_SETCHECK,BST_CHECKED,0);
 
     // Training controls: reward comes from the real end-of-game score entered by the user.
     make(0,L"STATIC",L"成绩反馈学习（高于基准时正向强化；低分只记录原因，不反向惩罚权重）",SS_LEFT,20,252,900,22,0);
@@ -131,6 +144,8 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_REFRESH:RefreshWindows(s);return 0;
         case ID_SELECT:StartSelector(s,false);return 0;
         case ID_SELECT_NEXT:StartSelector(s,true);return 0;
+        case ID_SELECT_SCORE:StartSelector(s,false,true);return 0;
+        case ID_TEST_SCORE:TestScoreRecognition(s);return 0;
         case ID_TEST:TestRecognition(s);return 0;
         case ID_START:StartBot(s);return 0;
         case ID_STOP:StopBot(s);return 0;
@@ -141,4 +156,5 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_LOG:{std::unique_ptr<std::wstring> m(reinterpret_cast<std::wstring*>(lp));if(m)AppendLog(s,*m);return 0;}
     case WM_APP_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->boardRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateRegionLabel(s);SaveConfig(s);AppendLog(s,L"棋盘区域已保存。请确认框选区域正好覆盖 10 列 × 20 行格子内部。");}return 0;}
     case WM_APP_NEXT_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->nextRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateNextRegionLabel(s);SaveConfig(s);AppendLog(s,L"NEXT 区域已保存。请只包含预览卡片列，不要包含 NEXT 标题。");}return 0;}
+    case WM_APP_SCORE_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->scoreRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateNextRegionLabel(s);SaveConfig(s);AppendLog(s,L"SCORE 数字区域已保存。请点击“测试 SCORE OCR”确认数字能正确识别。");}return 0;}
     case WM_APP_FINISHED:

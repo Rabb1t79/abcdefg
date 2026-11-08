@@ -43,6 +43,7 @@ constexpr UINT WM_APP_REGION = WM_APP + 2;
 constexpr UINT WM_APP_FINISHED = WM_APP + 3;
 constexpr UINT WM_APP_TRAIN_STATS = WM_APP + 4;
 constexpr UINT WM_APP_NEXT_REGION = WM_APP + 5;
+constexpr UINT WM_APP_SCORE_REGION = WM_APP + 7;
 constexpr int ID_WINDOW = 1001;
 constexpr int ID_REFRESH = 1002;
 constexpr int ID_SELECT = 1003;
@@ -69,6 +70,8 @@ constexpr int ID_KEY_HOLD = 1023;
 constexpr int ID_KEY_GAP = 1024;
 constexpr int ID_DROP_WAIT = 1025;
 constexpr int ID_AUTO_RETRY = 1026;
+constexpr int ID_SELECT_SCORE = 1027;
+constexpr int ID_TEST_SCORE = 1028;
 constexpr int HOTKEY_STOP = 1;
 constexpr UINT WM_APP_SCORE_RECORDED = WM_APP + 6;
 
@@ -84,6 +87,7 @@ static POINT g_selectStart{};
 static POINT g_selectCurrent{};
 static bool g_selectDragging{};
 static bool g_selectNextRegion{};
+static bool g_selectScoreRegion{};
 
 std::wstring Format(const wchar_t* fmt, ...) {
     wchar_t buffer[1024]{};

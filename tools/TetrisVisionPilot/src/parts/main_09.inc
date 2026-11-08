@@ -27,9 +27,11 @@ LRESULT CALLBACK SelectorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         PAINTSTRUCT ps{}; HDC dc=BeginPaint(hwnd,&ps); RECT rc{}; GetClientRect(hwnd,&rc);
         HBRUSH black=CreateSolidBrush(RGB(0,0,0)); FillRect(dc,&rc,black); DeleteObject(black);
         SetBkMode(dc,TRANSPARENT); SetTextColor(dc,RGB(255,255,255));
-        const wchar_t* hintText = g_selectNextRegion
-            ? L"框选 NEXT 预览卡片区域：包含从上到下的全部预览方块，不要包含 NEXT 标题、箭头或外侧灰色边框；松开鼠标确认，按 Esc 取消。"
-            : L"框选 10 列 × 20 行棋盘内部区域；不要包含 NEXT、HOLD 或棋盘外框；松开鼠标确认，按 Esc 取消。";
+        const wchar_t* hintText = g_selectScoreRegion
+            ? L"框选游戏中实际分数的数字区域：只包含数字，不要包含 SCORE 标题或旁边计数器；松开鼠标确认，按 Esc 取消。"
+            : (g_selectNextRegion
+                ? L"框选 NEXT 预览卡片区域：包含从上到下的全部预览方块，不要包含 NEXT 标题、箭头或外侧灰色边框；松开鼠标确认，按 Esc 取消。"
+                : L"框选 10 列 × 20 行棋盘内部区域；不要包含 NEXT、HOLD 或棋盘外框；松开鼠标确认，按 Esc 取消。");
         RECT hint{24,20,rc.right-24,72};
         DrawTextW(dc,hintText,-1,&hint,DT_LEFT|DT_VCENTER|DT_WORDBREAK);
         if(g_selectDragging) {
@@ -52,9 +54,9 @@ LRESULT CALLBACK SelectorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_selectCurrent={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};g_selectDragging=false;ReleaseCapture();
             RECT* r=new RECT{}; r->left=g_virtualLeft+(std::min)(g_selectStart.x,g_selectCurrent.x); r->top=g_virtualTop+(std::min)(g_selectStart.y,g_selectCurrent.y);
             r->right=g_virtualLeft+(std::max)(g_selectStart.x,g_selectCurrent.x); r->bottom=g_virtualTop+(std::max)(g_selectStart.y,g_selectCurrent.y);
-            const UINT message=g_selectNextRegion?WM_APP_NEXT_REGION:WM_APP_REGION;
-            const int minWidth=g_selectNextRegion?30:80;
-            const int minHeight=g_selectNextRegion?80:160;
+            const UINT message=g_selectScoreRegion?WM_APP_SCORE_REGION:(g_selectNextRegion?WM_APP_NEXT_REGION:WM_APP_REGION);
+            const int minWidth=g_selectScoreRegion?24:(g_selectNextRegion?30:80);
+            const int minHeight=g_selectScoreRegion?10:(g_selectNextRegion?80:160);
             if(r->right-r->left>=minWidth && r->bottom-r->top>=minHeight) PostMessageW(g_mainWindow,message,0,reinterpret_cast<LPARAM>(r)); else delete r;
             DestroyWindow(hwnd);
         } return 0;
@@ -63,21 +65,49 @@ LRESULT CALLBACK SelectorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd,msg,wp,lp);
 }
 
-void StartSelector(AppState* s, bool nextRegion) {
+void StartSelector(AppState* s, bool nextRegion, bool scoreRegion=false) {
     g_selectNextRegion=nextRegion;
+    g_selectScoreRegion=scoreRegion;
     g_virtualLeft=GetSystemMetrics(SM_XVIRTUALSCREEN);g_virtualTop=GetSystemMetrics(SM_YVIRTUALSCREEN);
     int width=GetSystemMetrics(SM_CXVIRTUALSCREEN),height=GetSystemMetrics(SM_CYVIRTUALSCREEN);
     g_mainWindow=s->hwnd;
-    const wchar_t* windowTitle = nextRegion ? L"选择 NEXT 预览区域" : L"选择棋盘区域";
+    const wchar_t* windowTitle = scoreRegion ? L"选择 SCORE 数字区域" : (nextRegion ? L"选择 NEXT 预览区域" : L"选择棋盘区域");
     HWND overlay=CreateWindowExW(WS_EX_TOPMOST|WS_EX_LAYERED|WS_EX_TOOLWINDOW,L"TetrisBoardSelector",windowTitle,WS_POPUP,
         g_virtualLeft,g_virtualTop,width,height,nullptr,nullptr,g_instance,nullptr);
     if(!overlay){AppendLog(s,L"无法打开棋盘框选界面。");return;}
     SetLayeredWindowAttributes(overlay,0,105,LWA_ALPHA);
     ShowWindow(overlay,SW_SHOW);SetForegroundWindow(overlay);
-    if (nextRegion)
+    if (scoreRegion)
+        AppendLog(s,L"请框选游戏中实际分数的数字区域：只包含数字，不要包含 SCORE 标题或旁边计数器。");
+    else if (nextRegion)
         AppendLog(s,L"请框选 NEXT 预览卡片列：从最上方到最下方的全部预览方块；不要包含 NEXT 标题、箭头或灰色外框。");
     else
         AppendLog(s,L"请框选完整的 10×20 棋盘内部区域；不要包含 NEXT、HOLD 或棋盘外框。");
+}
+
+bool TestScoreRecognition(AppState* s) {
+    if (s->scoreRect.width < 24 || s->scoreRect.height < 10) {
+        AppendLog(s, L"尚未选择 SCORE 数字区域。请只框住游戏中实际分数的数字。");
+        return false;
+    }
+    tesseract::TessBaseAPI ocr;
+    const std::string tessPath = WideToUtf8(s->tessdataPath);
+    if (tessPath.empty() || ocr.Init(tessPath.c_str(), "eng", tesseract::OEM_LSTM_ONLY) != 0) {
+        AppendLog(s, L"OCR 初始化失败：请确认 EXE 同目录 tessdata\\eng.traineddata 存在。");
+        return false;
+    }
+    std::string text; std::wstring error; int confidence = 0; int score = 0;
+    const bool captured = ReadOcrText(ocr, s->scoreRect, "0123456789,:. ", tesseract::PSM_SINGLE_LINE, text, error, &confidence);
+    ocr.End();
+    if (!captured) { AppendLog(s, L"SCORE OCR 截图失败："+error); return false; }
+    if (confidence < 40 || !ParseScoreDigits(text, score)) {
+        AppendLog(s, Format(L"SCORE OCR 未通过：置信度 %d/100，未能解析为单一分数。请重新框选数字。", confidence));
+        SetWindowTextW(s->scoreStatusLabel, L"SCORE OCR：失败");
+        return false;
+    }
+    SetWindowTextW(s->scoreStatusLabel, Format(L"SCORE OCR：%d（置信度 %d）", score, confidence).c_str());
+    AppendLog(s, Format(L"SCORE OCR 测试成功：%d 分；置信度 %d/100。", score, confidence));
+    return true;
 }
 
 BOOL CALLBACK EnumWindowProc(HWND hwnd, LPARAM param) {

@@ -12,9 +12,6 @@
         } else {
             log(L"英文 OCR 已就绪：运行中读取 SCORE，Game Over 时自动结算。");
         }
-        // The six-digit score is at the lower-left of the game's client area in the supplied 802x602 layout.
-        // Keep this crop tight so the nearby SCORE caption and other counters cannot be concatenated.
-        const Rect scoreRect = ClientRelativeRect(target, 0.215, 0.86, 0.17, 0.10);
         const Rect gameOverRect = ClientRelativeRect(target, 0.275, 0.08, 0.455, 0.17);
         DWORD noPieceSince=GetTickCount();
         DWORD lastScoreRead=0, lastGameOverRead=0;
@@ -23,26 +20,34 @@
         std::mt19937 rng(static_cast<unsigned int>(GetTickCount() ^ GetCurrentThreadId()));
         while(!s->stop.load()) {
             const DWORD now = GetTickCount();
-            if (ocrReady && (now - lastScoreRead >= 450)) {
-                lastScoreRead = now;
-                std::string scoreText; std::wstring ocrError; int parsedScore = 0; int scoreConfidence = 0;
-                if (ReadOcrText(ocr, scoreRect, "0123456789,:. ", tesseract::PSM_SINGLE_LINE, scoreText, ocrError, &scoreConfidence) &&
-                    scoreConfidence >= 60 && ParseScoreDigits(scoreText, parsedScore)) {
-                    if (!hasLatestScore || parsedScore >= latestScore) {
-                        latestScore = parsedScore;
-                        hasLatestScore = true;
-                    }
-                }
-            }
-
+            // Check GAME OVER before reading SCORE. Freeze the latest live score after
+            // a second title confirmation, before the result screen clears the counter.
             bool detectedGameOver = false;
-            if (ocrReady && (now - lastGameOverRead >= 500)) {
+            if (ocrReady && (now - lastGameOverRead >= 180)) {
                 lastGameOverRead = now;
                 std::string titleText; std::wstring ocrError;
-                if (ReadOcrText(ocr, gameOverRect, "GAMEOVER ", tesseract::PSM_SINGLE_LINE, titleText, ocrError) &&
-                    IsGameOverText(titleText)) ++gameOverHits;
-                else gameOverHits = 0;
-                detectedGameOver = gameOverHits >= 2;
+                const bool titleHit = ReadOcrText(ocr, gameOverRect, "GAMEOVER ", tesseract::PSM_SINGLE_LINE, titleText, ocrError) &&
+                                      IsGameOverText(titleText);
+                if (titleHit) {
+                    SleepCheck(s->stop,90);
+                    std::string confirmText; std::wstring confirmError;
+                    detectedGameOver = ReadOcrText(ocr, gameOverRect, "GAMEOVER ", tesseract::PSM_SINGLE_LINE, confirmText, confirmError) &&
+                                       IsGameOverText(confirmText);
+                }
+            }
+            if (!detectedGameOver && ocrReady && scoreRect.width>=24 && scoreRect.height>=10 &&
+                (now-lastScoreRead>=120)) {
+                lastScoreRead=now;
+                std::string scoreText; std::wstring ocrError; int parsedScore=0; int scoreConfidence=0;
+                if (ReadOcrText(ocr,scoreRect,"0123456789,:. ",tesseract::PSM_SINGLE_LINE,scoreText,ocrError,&scoreConfidence) &&
+                    scoreConfidence>=40 && ParseScoreDigits(scoreText,parsedScore)) {
+                    const bool plausible=!hasLatestScore || (parsedScore>=latestScore && parsedScore-latestScore<=5000);
+                    if (plausible) {
+                        const bool changed=!hasLatestScore || parsedScore!=latestScore;
+                        latestScore=parsedScore; hasLatestScore=true;
+                        if (changed) log(Format(L"SCORE 快照：%d（OCR 置信度 %d/100）。",latestScore,scoreConfidence));
+                    }
+                }
             }
             if (detectedGameOver) {
                 log(L"检测到 GAME OVER，正在结算本局。");
@@ -68,8 +73,16 @@
                 }
                 std::wstring clickError;
                 if (!ClickAgainButton(target, clickError)) { log(L"自动重试失败："+clickError); break; }
-                log(L"已点击 Again，等待新一局出生区和分数重新出现。");
-                SleepCheck(s->stop, 1100);
+                log(L"已点击 Again，正在确认 GAME OVER 弹窗已消失。");
+                bool restarted=false;
+                for(int attempt=0;attempt<25 && !s->stop.load();++attempt){
+                    SleepCheck(s->stop,160);
+                    std::string titleText; std::wstring titleError;
+                    if(ReadOcrText(ocr,gameOverRect,"GAMEOVER ",tesseract::PSM_SINGLE_LINE,titleText,titleError) && !IsGameOverText(titleText)){restarted=true;break;}
+                }
+                if(!restarted){log(L"点击 Again 后 GAME OVER 弹窗仍在；请检查窗口大小和按钮位置。");break;}
+                log(L"已确认新一局开始，重置分数缓存。");
+                SleepCheck(s->stop,450);
                 latestScore = 0; hasLatestScore = false;
                 lastScoreRead = 0; lastGameOverRead = 0; gameOverHits = 0;
                 noPieceSince = GetTickCount();
@@ -157,6 +170,11 @@ void SaveConfig(AppState* s) {
     WritePrivateProfileStringW(L"Next",L"Top",Format(L"%d",s->nextRect.top).c_str(),s->configPath.c_str());
     WritePrivateProfileStringW(L"Next",L"Width",Format(L"%d",s->nextRect.width).c_str(),s->configPath.c_str());
     WritePrivateProfileStringW(L"Next",L"Height",Format(L"%d",s->nextRect.height).c_str(),s->configPath.c_str());
+    WritePrivateProfileStringW(L"Score",L"Left",Format(L"%d",s->scoreRect.left).c_str(),s->configPath.c_str());
+    WritePrivateProfileStringW(L"Score",L"Top",Format(L"%d",s->scoreRect.top).c_str(),s->configPath.c_str());
+    WritePrivateProfileStringW(L"Score",L"Width",Format(L"%d",s->scoreRect.width).c_str(),s->configPath.c_str());
+    WritePrivateProfileStringW(L"Score",L"Height",Format(L"%d",s->scoreRect.height).c_str(),s->configPath.c_str());
+    WritePrivateProfileStringW(L"Automation",L"AutoRetry",SendMessageW(s->autoRetryCheck,BM_GETCHECK,0,0)==BST_CHECKED?L"1":L"0",s->configPath.c_str());
     wchar_t value[64]{};
     GetWindowTextW(s->nextCountEdit,value,_countof(value)); WritePrivateProfileStringW(L"Next",L"Count",value,s->configPath.c_str());
     GetWindowTextW(s->lookaheadEdit,value,_countof(value)); WritePrivateProfileStringW(L"Next",L"Lookahead",value,s->configPath.c_str());
@@ -177,6 +195,11 @@ void LoadConfig(AppState* s) {
     s->nextRect.top=GetPrivateProfileIntW(L"Next",L"Top",0,s->configPath.c_str());
     s->nextRect.width=GetPrivateProfileIntW(L"Next",L"Width",0,s->configPath.c_str());
     s->nextRect.height=GetPrivateProfileIntW(L"Next",L"Height",0,s->configPath.c_str());
+    s->scoreRect.left=GetPrivateProfileIntW(L"Score",L"Left",0,s->configPath.c_str());
+    s->scoreRect.top=GetPrivateProfileIntW(L"Score",L"Top",0,s->configPath.c_str());
+    s->scoreRect.width=GetPrivateProfileIntW(L"Score",L"Width",0,s->configPath.c_str());
+    s->scoreRect.height=GetPrivateProfileIntW(L"Score",L"Height",0,s->configPath.c_str());
+    SendMessageW(s->autoRetryCheck,BM_SETCHECK,GetPrivateProfileIntW(L"Automation",L"AutoRetry",1,s->configPath.c_str())?BST_CHECKED:BST_UNCHECKED,0);
     wchar_t value[64]{};
     GetPrivateProfileStringW(L"Next",L"Count",L"6",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->nextCountEdit,value);
     GetPrivateProfileStringW(L"Next",L"Lookahead",L"4",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->lookaheadEdit,value);
@@ -197,6 +220,8 @@ void UpdateNextRegionLabel(AppState* s) {
     if (s->nextRect.width > 0) SetWindowTextW(s->nextRegionLabel,
         Format(L"NEXT区域：X=%d Y=%d W=%d H=%d",s->nextRect.left,s->nextRect.top,s->nextRect.width,s->nextRect.height).c_str());
     else SetWindowTextW(s->nextRegionLabel,L"NEXT区域：尚未选择");
+    if (s->scoreRect.width > 0) SetWindowTextW(s->scoreRegionLabel,Format(L"SCORE区域：%d×%d",s->scoreRect.width,s->scoreRect.height).c_str());
+    else SetWindowTextW(s->scoreRegionLabel,L"SCORE区域：未选择");
 }
 
 void AppendLog(AppState* s, const std::wstring& message) {
