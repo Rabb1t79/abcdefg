@@ -139,7 +139,7 @@ void CreateUi(AppState* s) {
     AppendLog(s,L"算法是可解释的线性策略模型；8 个权重会影响多步搜索评分。");
     AppendLog(s,L"温和训练模式：成绩高于基准时做正向更新；低于基准时仅保存诊断记录，不执行负向权重更新。");
     AppendLog(s,L"输入节奏可在 NEXT 参数右侧调整：按住/间隔/落稳（毫秒）。请从默认值开始逐步加快。");
-    AppendLog(s,L"自动结算使用英文 OCR：运行中缓存 SCORE，识别 GAME OVER 后冻结分数；勾选自动重开时会点击你框选的 Again 按钮。");
+    AppendLog(s,L"自动结算：SCORE 优先使用游戏原生数字模板，匹配不确定时回退 OCR；GAME OVER 使用 OCR 检测。识别后冻结分数，勾选自动重开时会点击你框选的 Again 按钮。");
 }
 
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
