@@ -1,3 +1,5 @@
+#include "score_sprite_templates.inc"
+
 void SleepCheck(const std::atomic<bool>& stop, int milliseconds) {
     int elapsed=0;
     while(elapsed<milliseconds && !stop.load()) { int part=(std::min)(15,milliseconds-elapsed); Sleep(part); elapsed+=part; }
@@ -133,6 +135,239 @@ bool ParseScoreDigits(const std::string& text, int& scoreOut) {
     } catch (...) { return false; }
 }
 
+
+struct ScoreSpriteBlob {
+    int left{}, top{}, width{}, height{};
+    std::vector<int> pixels;
+};
+
+bool MatchScoreSpriteBlob(const std::vector<std::uint8_t>& candidate,
+                          int width, int height, int& digitOut,
+                          double& confidenceOut) {
+    if (width < 3 || height < 6 ||
+        candidate.size() != static_cast<std::size_t>(width) * height) return false;
+
+    double bestScore = -1.0;
+    double secondScore = -1.0;
+    int bestDigit = -1;
+
+    for (int digit = 0; digit < 10; ++digit) {
+        int minX = 20, minY = 26, maxX = -1, maxY = -1, templateCount = 0;
+        for (int y = 0; y < 26; ++y) {
+            const std::uint32_t row = kScoreSpriteGlyphRows[digit][y];
+            for (int x = 0; x < 20; ++x) {
+                if ((row & (1u << x)) == 0) continue;
+                minX = (std::min)(minX, x);
+                minY = (std::min)(minY, y);
+                maxX = (std::max)(maxX, x);
+                maxY = (std::max)(maxY, y);
+                ++templateCount;
+            }
+        }
+        if (maxX < minX || maxY < minY || templateCount == 0) continue;
+
+        const int templateWidth = maxX - minX + 1;
+        const int templateHeight = maxY - minY + 1;
+        const double scaleX = static_cast<double>(width) / templateWidth;
+        const double scaleY = static_cast<double>(height) / templateHeight;
+        const double largerScale = (std::max)(scaleX, scaleY);
+        if (largerScale < 0.45 || largerScale > 3.0 ||
+            std::abs(scaleX - scaleY) / largerScale > 0.34) continue;
+
+        std::vector<std::uint8_t> scaled(static_cast<std::size_t>(width) * height, 0);
+        int scaledCount = 0;
+        for (int y = 0; y < height; ++y) {
+            const int sourceY = minY + (std::min)(templateHeight - 1,
+                (y * templateHeight) / height);
+            for (int x = 0; x < width; ++x) {
+                const int sourceX = minX + (std::min)(templateWidth - 1,
+                    (x * templateWidth) / width);
+                if ((kScoreSpriteGlyphRows[digit][sourceY] & (1u << sourceX)) != 0) {
+                    scaled[static_cast<std::size_t>(y) * width + x] = 1;
+                    ++scaledCount;
+                }
+            }
+        }
+        if (scaledCount == 0) continue;
+
+        int matchedTemplate = 0;
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                if (!scaled[static_cast<std::size_t>(y) * width + x]) continue;
+                bool nearCandidate = false;
+                for (int dy = -1; dy <= 1 && !nearCandidate; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int nx = x + dx, ny = y + dy;
+                        if (nx >= 0 && nx < width && ny >= 0 && ny < height &&
+                            candidate[static_cast<std::size_t>(ny) * width + nx]) {
+                            nearCandidate = true;
+                            break;
+                        }
+                    }
+                }
+                if (nearCandidate) ++matchedTemplate;
+            }
+        }
+
+        int candidateCount = 0, matchedCandidate = 0;
+        for (std::uint8_t value : candidate) if (value) ++candidateCount;
+        if (candidateCount == 0) continue;
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                if (!candidate[static_cast<std::size_t>(y) * width + x]) continue;
+                bool nearTemplate = false;
+                for (int dy = -1; dy <= 1 && !nearTemplate; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int nx = x + dx, ny = y + dy;
+                        if (nx >= 0 && nx < width && ny >= 0 && ny < height &&
+                            scaled[static_cast<std::size_t>(ny) * width + nx]) {
+                            nearTemplate = true;
+                            break;
+                        }
+                    }
+                }
+                if (nearTemplate) ++matchedCandidate;
+            }
+        }
+
+        const double recall = static_cast<double>(matchedTemplate) / scaledCount;
+        const double precision = static_cast<double>(matchedCandidate) / candidateCount;
+        const double score = (recall + precision) * 0.5;
+        if (score > bestScore) {
+            secondScore = bestScore;
+            bestScore = score;
+            bestDigit = digit;
+        } else if (score > secondScore) {
+            secondScore = score;
+        }
+    }
+
+    const double margin = bestScore - (secondScore < 0.0 ? 0.0 : secondScore);
+    if (bestDigit < 0 || bestScore < 0.76 || margin < 0.014) return false;
+    digitOut = bestDigit;
+    confidenceOut = bestScore;
+    return true;
+}
+
+bool ReadScoreSpriteValue(const Rect& rect, int& scoreOut, int& confidenceOut,
+                          std::string& observedText, bool* zeroVerified = nullptr) {
+    if (zeroVerified) *zeroVerified = false;
+    if (rect.width < 24 || rect.height < 10 ||
+        rect.width > 1600 || rect.height > 240) return false;
+
+    CapturedImage image;
+    std::wstring captureError;
+    if (!CaptureScreenRect(rect, image, captureError) ||
+        image.width <= 0 || image.height <= 0 ||
+        image.pixels.size() != static_cast<std::size_t>(image.width) * image.height) {
+        return false;
+    }
+
+    double bestAverage = -1.0;
+    std::string bestDigits;
+    const int thresholds[] = {145, 165, 185, 205};
+
+    for (const int threshold : thresholds) {
+        const int width = image.width, height = image.height;
+        const std::size_t pixelCount = static_cast<std::size_t>(width) * height;
+        std::vector<std::uint8_t> bright(pixelCount, 0);
+        for (std::size_t i = 0; i < pixelCount; ++i) {
+            const Pixel& p = image.pixels[i];
+            const int maximum = (std::max)({static_cast<int>(p.r), static_cast<int>(p.g), static_cast<int>(p.b)});
+            const int minimum = (std::min)({static_cast<int>(p.r), static_cast<int>(p.g), static_cast<int>(p.b)});
+            const int luminance = (299 * p.r + 587 * p.g + 114 * p.b) / 1000;
+            if (luminance >= threshold && maximum - minimum <= 85) bright[i] = 1;
+        }
+
+        std::vector<std::uint8_t> visited(pixelCount, 0);
+        std::vector<ScoreSpriteBlob> blobs;
+        int maximumBlobHeight = 0;
+        for (std::size_t start = 0; start < pixelCount; ++start) {
+            if (!bright[start] || visited[start]) continue;
+            ScoreSpriteBlob blob;
+            blob.left = width;
+            blob.top = height;
+            int right = -1, bottom = -1;
+            std::vector<int> stack;
+            stack.push_back(static_cast<int>(start));
+            visited[start] = 1;
+            while (!stack.empty()) {
+                const int index = stack.back();
+                stack.pop_back();
+                const int x = index % width, y = index / width;
+                blob.pixels.push_back(index);
+                blob.left = (std::min)(blob.left, x);
+                blob.top = (std::min)(blob.top, y);
+                right = (std::max)(right, x);
+                bottom = (std::max)(bottom, y);
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (dx == 0 && dy == 0) continue;
+                        const int nx = x + dx, ny = y + dy;
+                        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+                        const int next = ny * width + nx;
+                        if (bright[static_cast<std::size_t>(next)] && !visited[static_cast<std::size_t>(next)]) {
+                            visited[static_cast<std::size_t>(next)] = 1;
+                            stack.push_back(next);
+                        }
+                    }
+                }
+            }
+            blob.width = right - blob.left + 1;
+            blob.height = bottom - blob.top + 1;
+            maximumBlobHeight = (std::max)(maximumBlobHeight, blob.height);
+            blobs.push_back(std::move(blob));
+        }
+
+        blobs.erase(std::remove_if(blobs.begin(), blobs.end(),
+            [maximumBlobHeight](const ScoreSpriteBlob& blob) {
+                return blob.height < (std::max)(6, maximumBlobHeight * 55 / 100) ||
+                       blob.pixels.size() < static_cast<std::size_t>((std::max)(8, maximumBlobHeight * 2));
+            }), blobs.end());
+        if (blobs.empty() || blobs.size() > 9) continue;
+
+        std::sort(blobs.begin(), blobs.end(),
+            [](const ScoreSpriteBlob& a, const ScoreSpriteBlob& b) { return a.left < b.left; });
+
+        std::string digits;
+        double totalConfidence = 0.0;
+        bool allMatched = true;
+        for (const ScoreSpriteBlob& blob : blobs) {
+            std::vector<std::uint8_t> crop(static_cast<std::size_t>(blob.width) * blob.height, 0);
+            for (int index : blob.pixels) {
+                const int x = index % width - blob.left;
+                const int y = index / width - blob.top;
+                crop[static_cast<std::size_t>(y) * blob.width + x] = 1;
+            }
+            int digit = -1;
+            double matchConfidence = 0.0;
+            if (!MatchScoreSpriteBlob(crop, blob.width, blob.height, digit, matchConfidence)) {
+                allMatched = false;
+                break;
+            }
+            digits.push_back(static_cast<char>('0' + digit));
+            totalConfidence += matchConfidence;
+        }
+        if (!allMatched || digits.empty()) continue;
+        const double average = totalConfidence / digits.size();
+        if (average > bestAverage) {
+            bestAverage = average;
+            bestDigits = std::move(digits);
+        }
+    }
+
+    if (bestDigits.empty() || bestAverage < 0.80) return false;
+    int parsed = 0;
+    if (!ParseScoreDigits(bestDigits, parsed)) return false;
+
+    scoreOut = parsed;
+    confidenceOut = static_cast<int>(std::lround(bestAverage * 100.0));
+    observedText = "sprite-template:" + bestDigits;
+    if (zeroVerified) *zeroVerified = bestDigits == "0";
+    return true;
+}
+
+
 bool IsSingleZeroScoreText(const std::string& text) {
     std::string digits;
     for (unsigned char c : text) {
@@ -148,8 +383,14 @@ bool IsSingleZeroScoreText(const std::string& text) {
 // accepted only when at least two independent segmentation modes agree exactly.
 bool ReadScoreValue(tesseract::TessBaseAPI& ocr, const Rect& rect,
                     int& scoreOut, int& confidenceOut, std::string& observedText,
-                    std::wstring& error, bool* zeroVerified = nullptr) {
+                    std::wstring& error, bool* zeroVerified = nullptr,
+                    bool allowOcrFallback = true) {
     if (zeroVerified) *zeroVerified = false;
+    if (ReadScoreSpriteValue(rect, scoreOut, confidenceOut, observedText, zeroVerified)) return true;
+    if (!allowOcrFallback) {
+        error = L"原生数字模板未能可靠匹配，且 Tesseract OCR 不可用。";
+        return false;
+    }
     std::string lineText;
     int lineConfidence = -1;
     if (!ReadOcrText(ocr, rect, "0123456789,:. ", tesseract::PSM_SINGLE_LINE,

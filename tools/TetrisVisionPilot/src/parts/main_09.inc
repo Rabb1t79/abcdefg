@@ -104,23 +104,22 @@ bool TestScoreRecognition(AppState* s) {
     }
     tesseract::TessBaseAPI ocr;
     const std::string tessPath = WideToUtf8(s->tessdataPath);
-    if (tessPath.empty() || ocr.Init(tessPath.c_str(), "eng", tesseract::OEM_LSTM_ONLY) != 0) {
-        AppendLog(s, L"OCR 初始化失败：请确认 EXE 同目录 tessdata\\eng.traineddata 存在。");
-        return false;
-    }
+    const bool ocrReady = !tessPath.empty() && ocr.Init(tessPath.c_str(), "eng", tesseract::OEM_LSTM_ONLY) == 0;
     std::string text; std::wstring error; int confidence = 0; int score = 0;
     bool zeroVerified = false;
-    const bool parsed = ReadScoreValue(ocr,s->scoreRect,score,confidence,text,error,&zeroVerified);
-    ocr.End();
+    const bool parsed = ReadScoreValue(ocr,s->scoreRect,score,confidence,text,error,&zeroVerified,ocrReady);
+    if (ocrReady) ocr.End();
+    const bool spriteMatch = text.rfind("sprite-template:", 0) == 0;
     if (!parsed) {
-        AppendLog(s, Format(L"SCORE OCR 未通过：置信度 %d/100，未能可信解析分数。请重新框选数字；低置信度的 0 需要多模式复核。", confidence));
-        if (!error.empty()) AppendLog(s,L"OCR 诊断："+error);
-        SetWindowTextW(s->scoreStatusLabel, L"SCORE OCR：失败");
+        AppendLog(s, Format(L"SCORE 识别未通过：置信度 %d/100，数字模板和 OCR 都未能可信解析。请只框选数字区域。", confidence));
+        if (!error.empty()) AppendLog(s,L"诊断："+error);
+        SetWindowTextW(s->scoreStatusLabel, L"SCORE 识别：失败");
         return false;
     }
-    SetWindowTextW(s->scoreStatusLabel, Format(L"SCORE OCR：%d（置信度 %d）", score, confidence).c_str());
-    AppendLog(s, Format(L"SCORE OCR 测试成功：%d 分；置信度 %d/100%s。", score, confidence,
-        zeroVerified?L"；零分已通过多模式复核":L""));
+    const wchar_t* method = spriteMatch ? L"原生模板" : L"OCR 回退";
+    SetWindowTextW(s->scoreStatusLabel, Format(L"SCORE 识别：%d（%s，%d）", score, method, confidence).c_str());
+    AppendLog(s, Format(L"SCORE 识别测试成功：%d 分；来源：%s；置信度 %d/100%s。", score, method, confidence,
+        zeroVerified ? (spriteMatch ? L"；零分由模板确认" : L"；零分已通过多模式复核") : L""));
     return true;
 }
 

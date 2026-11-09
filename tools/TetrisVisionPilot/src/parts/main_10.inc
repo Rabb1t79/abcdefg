@@ -30,7 +30,7 @@ void StartBot(AppState* s) {
     if(s->boardRect.width<=0){MessageBoxW(s->hwnd,L"请先框选棋盘区域。",L"尚未选择棋盘",MB_ICONWARNING);return;}
     if (autoRetry) {
         if (s->scoreRect.width < 24 || s->scoreRect.height < 10) {
-            MessageBoxW(s->hwnd,L"自动结算需要先框选 SCORE 数字区域，并通过“测试 SCORE OCR”。",L"尚未设置分数区域",MB_ICONWARNING); return;
+            MessageBoxW(s->hwnd,L"自动结算需要先框选 SCORE 数字区域，并通过“测试 SCORE 识别”。",L"尚未设置分数区域",MB_ICONWARNING); return;
         }
         if (s->againRect.width < 70 || s->againRect.height < 22) {
             MessageBoxW(s->hwnd,L"自动重开还需要框选 Again 按钮。请在 Game Over 画面点“框选 Again 按钮”，只框住按钮内部。",L"尚未选择 Again 按钮",MB_ICONWARNING); return;
@@ -46,7 +46,7 @@ void StartBot(AppState* s) {
             MessageBoxW(s->hwnd,L"Again 按钮区域不在所选游戏窗口内部；可能移动过游戏窗口。请重新框选 Again。",L"Again 区域不匹配",MB_ICONWARNING); return;
         }
         if (!TestScoreRecognition(s)) {
-            MessageBoxW(s->hwnd,L"SCORE OCR 测试未通过。请重新框选数字区域，或关闭自动重开后再运行。",L"分数识别未通过",MB_ICONWARNING); return;
+            MessageBoxW(s->hwnd,L"SCORE 识别测试未通过。请重新框选数字区域，或关闭自动重开后再运行。",L"分数识别未通过",MB_ICONWARNING); return;
         }
     }
     TestRecognition(s);
@@ -102,8 +102,8 @@ void CreateUi(AppState* s) {
     make(0,L"STATIC",L"落稳",SS_LEFT,992,130,35,24,0);
     s->dropWaitEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"190",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,1027,126,48,26,ID_DROP_WAIT);
     s->nextStatusLabel=make(0,L"STATIC",L"NEXT识别：尚未测试",SS_LEFT,600,176,175,24,0);
-    make(0,L"BUTTON",L"测试 SCORE OCR",BS_PUSHBUTTON,785,170,125,32,ID_TEST_SCORE);
-    s->scoreStatusLabel=make(0,L"STATIC",L"SCORE OCR：未测试",SS_LEFT,920,176,165,24,0);
+    make(0,L"BUTTON",L"测试 SCORE 识别",BS_PUSHBUTTON,785,170,125,32,ID_TEST_SCORE);
+    s->scoreStatusLabel=make(0,L"STATIC",L"SCORE 识别：未测试",SS_LEFT,920,176,165,24,0);
     make(0,L"BUTTON",L"测试识别",BS_PUSHBUTTON,20,170,115,34,ID_TEST);
     s->startButton=make(0,L"BUTTON",L"开始自动落块",BS_PUSHBUTTON,145,170,145,34,ID_START);
     s->stopButton=make(0,L"BUTTON",L"停止",BS_PUSHBUTTON,300,170,90,34,ID_STOP);EnableWindow(s->stopButton,FALSE);
@@ -171,6 +171,6 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_LOG:{std::unique_ptr<std::wstring> m(reinterpret_cast<std::wstring*>(lp));if(m)AppendLog(s,*m);return 0;}
     case WM_APP_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->boardRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateRegionLabel(s);SaveConfig(s);AppendLog(s,L"棋盘区域已保存。请确认框选区域正好覆盖 10 列 × 20 行格子内部。");}return 0;}
     case WM_APP_NEXT_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->nextRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateNextRegionLabel(s);SaveConfig(s);AppendLog(s,L"NEXT 区域已保存。请只包含预览卡片列，不要包含 NEXT 标题。");}return 0;}
-    case WM_APP_SCORE_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->scoreRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateNextRegionLabel(s);SaveConfig(s);AppendLog(s,L"SCORE 数字区域已保存。请点击“测试 SCORE OCR”确认数字能正确识别。");}return 0;}
+    case WM_APP_SCORE_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->scoreRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateNextRegionLabel(s);SaveConfig(s);AppendLog(s,L"SCORE 数字区域已保存。请点击“测试 SCORE 识别”确认数字能正确识别。");}return 0;}
     case WM_APP_AGAIN_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->againRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateAgainRegionLabel(s);SaveConfig(s);AppendLog(s,L"Again 按钮区域已保存。请只框选按钮内部，不要包含 Stop。");}return 0;}
     case WM_APP_FINISHED:

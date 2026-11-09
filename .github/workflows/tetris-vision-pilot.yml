@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/tetris-vision-pilot-20261108
+      - feat/tetris-score-sprite-recognition-20261110
     paths:
       - "tools/TetrisVisionPilot/**"
       - ".github/workflows/tetris-vision-pilot.yml"

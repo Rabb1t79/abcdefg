@@ -7,10 +7,10 @@
         const int ocrInit = tessPath.empty() ? -1 : ocr.Init(tessPath.c_str(), "eng", tesseract::OEM_LSTM_ONLY);
         const bool ocrReady = (ocrInit == 0);
         if (!ocrReady) {
-            log(L"OCR 初始化失败：请确认程序目录下 tessdata\\eng.traineddata 存在。自动读分和失败重试已停用。");
+            log(L"OCR 初始化失败：原生数字模板仍可读取 SCORE；GAME OVER 文字检测与自动重试已停用。");
             autoRetry = false;
         } else {
-            log(L"英文 OCR 已就绪：运行中读取 SCORE，Game Over 时自动结算。");
+            log(L"SCORE 优先使用游戏原生数字模板，无法可靠匹配时回退 OCR；GAME OVER 使用 OCR 检测。");
         }
         const Rect gameOverRect = ClientRelativeRect(target, 0.275, 0.08, 0.455, 0.17);
         DWORD noPieceSince=GetTickCount();
@@ -28,21 +28,28 @@
             // Sample SCORE before checking GAME OVER. The game may clear its score
             // during the transition, so only non-decreasing readings may replace
             // the last trusted snapshot from the active game.
-            if (ocrReady && scoreRect.width>=24 && scoreRect.height>=10 &&
+            if (scoreRect.width>=24 && scoreRect.height>=10 &&
                 (now-lastScoreRead>=120)) {
                 lastScoreRead=now;
                 std::string scoreText; std::wstring ocrError;
                 int parsedScore=0, scoreConfidence=0;
                 bool zeroVerified=false;
-                if (ReadScoreValue(ocr,scoreRect,parsedScore,scoreConfidence,scoreText,ocrError,&zeroVerified)) {
+                if (ReadScoreValue(ocr,scoreRect,parsedScore,scoreConfidence,scoreText,ocrError,&zeroVerified,ocrReady)) {
                     const bool plausible=!hasLatestScore ||
                         (parsedScore>=latestScore && parsedScore-latestScore<=5000);
                     if (plausible) {
                         const bool changed=!hasLatestScore || parsedScore!=latestScore;
                         latestScore=parsedScore;
                         hasLatestScore=true;
-                        if (changed) log(Format(L"SCORE 快照：%d（OCR 置信度 %d/100%s）。",
-                            latestScore,scoreConfidence,zeroVerified?L"，零分已通过多模式复核":L""));
+                        if (changed) {
+                            const bool spriteMatch = scoreText.rfind("sprite-template:", 0) == 0;
+                            const wchar_t* method = spriteMatch ? L"原生数字模板" : L"OCR";
+                            const wchar_t* zeroNote = zeroVerified
+                                ? (spriteMatch ? L"，零分由数字模板确认" : L"，零分已通过多模式复核")
+                                : L"";
+                            log(Format(L"SCORE 快照：%d（%s 置信度 %d/100%s）。",
+                                latestScore, method, scoreConfidence, zeroNote));
+                        }
                     } else if (parsedScore==0 && latestScore>0 && !scoreResetObserved) {
                         scoreResetObserved=true;
                         log(Format(L"检测到分数显示已提前清零；保留最后可信分数 %d，不用 0 覆盖本局成绩。",latestScore));

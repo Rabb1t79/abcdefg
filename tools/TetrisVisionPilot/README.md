@@ -1,6 +1,6 @@
 # Tetris Vision Pilot — C++ + 在线策略学习
 
-Windows 原生 Win32 桌面工具：通过 Windows Graphics Capture（WGC）捕获指定游戏窗口，再对其中的 10×20 棋盘做网格颜色分析，识别当前四格方块，枚举候选落点，并用可训练策略选择动作。不依赖 Python 或 OpenCV；SCORE OCR 使用静态链接的 Tesseract，并随包附带英文模型数据。
+Windows 原生 Win32 桌面工具：通过 Windows Graphics Capture（WGC）捕获指定游戏窗口，再对其中的 10×20 棋盘做网格颜色分析，识别当前四格方块，枚举候选落点，并用可训练策略选择动作。不依赖 Python 或 OpenCV；SCORE 优先使用从用户提供的 Tetris Online `num_anm_02.IPL/.SPR` 还原的原生数字模板，匹配不可靠时回退到静态链接的 Tesseract OCR。Tesseract 英文模型随包附带。
 
 ## 捕获兼容性
 
@@ -16,7 +16,7 @@ Windows 原生 Win32 桌面工具：通过 Windows Graphics Capture（WGC）捕�
 - 模拟旋转、左右移动和 Space 硬降；UI 可调整按键保持、连续按键间隔和硬降后等待时间。
 - F8 全局停止；游戏窗口失去前台焦点时中止输入。
 - 读取 NEXT 列中的预览方块；每个当前落点继续模拟后续方块，使用有限宽度 Beam Search 搜索多步路径。
-- 每次落块保存基于整条候选路径的策略梯度样本；以 120ms 间隔持续采集 SCORE，先更新分数快照再检测 GAME OVER；结算界面出现前若分数已清零，会保留最后可信分数，并可自动点击 Again 重开。低置信度的单字符 0 需经多种 OCR 分割模式一致确认。
+- 每次落块保存基于整条候选路径的策略梯度样本；以 120ms 间隔持续采集 SCORE，先匹配游戏原生 0–9 数字图像模板，无法可靠分割或匹配时才回退到 Tesseract；随后检测 GAME OVER。结算界面出现前若分数已清零，会保留最后可信分数，并可自动点击 Again 重开。
 - 模型、参数、日志、CSV 训练记录和追加式经验档案保存在 EXE 同目录。
 
 ## 策略模型与基础示范
@@ -51,7 +51,7 @@ Windows 原生 Win32 桌面工具：通过 Windows Graphics Capture（WGC）捕�
 
 ## 当前限制
 
-- 当前方块与 NEXT 使用颜色分割与格子连通分析；SCORE 与 GAME OVER 使用 Tesseract 英文 OCR。SCORE 数字区域需在 UI 单独框选并通过测试。WGC 输出为目标窗口的图像帧，窗口最小化时不可捕获；WGC 不可用时才回退到桌面 BitBlt。OCR 仍需在实际游戏窗口大小、缩放和主题下实测。
+- 当前方块与 NEXT 使用颜色分割与格子连通分析；SCORE 优先使用从游戏 `num_anm_02` 资源解码的原生数字模板，低置信度时回退 Tesseract；GAME OVER 文本仍使用 Tesseract。SCORE 数字区域需在 UI 单独框选并通过测试。模板匹配阈值和实际窗口缩放仍需用户在游戏内验证。WGC 输出为目标窗口的图像帧，窗口最小化时不可捕获；WGC 不可用时才回退到桌面 BitBlt。
 - 假设标准 10×20 棋盘、颜色对比明显、Up 顺时针旋转、Space 硬降。
 - 多步规划使用有限宽度 Beam Search：每个当前落点保留最多 5 条后续路径，并按特征权重打分；它是近似搜索，不是穷举所有未来组合。
 - 当前尚未实现 HOLD 自动使用、各游戏完整 SRS 踢墙、垃圾行或特殊模式。
