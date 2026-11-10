@@ -31,7 +31,7 @@
         int latestScore=0, gameOverHits=0;
         bool hasLatestScore=false;
         bool scoreResetObserved=false;
-        int leftKeyHoldMs=keyHoldMs, rightKeyHoldMs=keyHoldMs;
+        int leftTapMs=tapMs, rightTapMs=tapMs;
         bool calibrationPending=true;
         std::mt19937 rng(static_cast<unsigned int>(GetTickCount() ^ GetCurrentThreadId()));
         while(!s->stop.load()) {
@@ -132,7 +132,7 @@
                 SleepCheck(s->stop,450);
                 latestScore = 0; hasLatestScore = false;
                 scoreResetObserved = false;
-                leftKeyHoldMs=keyHoldMs; rightKeyHoldMs=keyHoldMs; calibrationPending=true;
+                leftTapMs=tapMs; rightTapMs=tapMs; calibrationPending=true;
                 lastScoreRead = 0; lastGameOverRead = 0; gameOverHits = 0;
                 noPieceSince = GetTickCount();
                 continue;
@@ -171,18 +171,18 @@
                 InputCalibrationResult calibration{};
                 std::wstring calibrationSummary;
                 const CalibrationOutcome outcome=CalibrateOpeningInput(
-                    s->stop,target,rect,threshold,check,board,keyHoldMs,
+                    s->stop,target,rect,threshold,check,board,tapMs,keyGapMs,
                     calibration,calibrationSummary);
                 if (outcome==CalibrationOutcome::Unsafe) {
                     log(L"开局输入校准无法安全复位："+calibrationSummary+L" 自动操作已停止，未硬降。");
                     break;
                 }
-                leftKeyHoldMs=calibration.leftHoldMs;
-                rightKeyHoldMs=calibration.rightHoldMs;
-                WritePrivateProfileStringW(L"InputCalibration",L"LeftHoldMs",
-                    Format(L"%d",leftKeyHoldMs).c_str(),s->configPath.c_str());
-                WritePrivateProfileStringW(L"InputCalibration",L"RightHoldMs",
-                    Format(L"%d",rightKeyHoldMs).c_str(),s->configPath.c_str());
+                leftTapMs=calibration.leftTapMs;
+                rightTapMs=calibration.rightTapMs;
+                WritePrivateProfileStringW(L"InputCalibration",L"LeftTapMs",
+                    Format(L"%d",leftTapMs).c_str(),s->configPath.c_str());
+                WritePrivateProfileStringW(L"InputCalibration",L"RightTapMs",
+                    Format(L"%d",rightTapMs).c_str(),s->configPath.c_str());
                 if (!calibrationSummary.empty()) log(L"开局输入校准："+calibrationSummary);
                 calibrationPending=false;
                 if (s->stop.load()) break;
@@ -254,7 +254,7 @@
                 std::wstring kickMessage;
                 const WallKickAttemptOutcome kickOutcome=TryEmpiricalWallKick(
                     s->stop,target,rect,threshold,board,piece,move.rotation,move.x,
-                    keyHoldMs,leftKeyHoldMs,rightKeyHoldMs,keyGapMs,
+                    tapMs,leftTapMs,rightTapMs,keyGapMs,
                     kickLearner,kickedX,kickMessage);
                 if (kickOutcome==WallKickAttemptOutcome::Unsafe) {
                     log(L"Wall Kick 尝试未能安全完成："+kickMessage+L" 自动操作已停止，未硬降。");
@@ -271,7 +271,7 @@
             }
             if (!rotatedWithWallKick) {
                 for(int i=0;i<rotateSteps && !s->stop.load();++i) {
-                    std::wstring err; if(!TapKey(target,VK_UP,keyHoldMs,err)) throw std::runtime_error("旋转按键失败或焦点丢失。");
+                    std::wstring err; if(!TapKey(target,VK_UP,tapMs,err)) throw std::runtime_error("旋转按键失败或焦点丢失。");
                     SleepCheck(s->stop,keyGapMs);
                 }
                 if(s->stop.load())break;
@@ -295,7 +295,7 @@
             WORD moveKey=delta>0?VK_RIGHT:VK_LEFT;
             for(int i=0;i<std::abs(delta) && !s->stop.load();++i) {
                 std::wstring err;
-                if(!TapKey(target,moveKey,moveKey==VK_RIGHT?rightKeyHoldMs:leftKeyHoldMs,err)) throw std::runtime_error("移动按键失败或焦点丢失。");
+                if(!TapKey(target,moveKey,moveKey==VK_RIGHT?rightTapMs:leftTapMs,err)) throw std::runtime_error("移动按键失败或焦点丢失。");
                 SleepCheck(s->stop,keyGapMs);
             }
             if(s->stop.load())break;
@@ -323,7 +323,7 @@
                 const WORD correctionKey=correction>0?VK_RIGHT:VK_LEFT;
                 for(int i=0;i<std::abs(correction) && !s->stop.load();++i) {
                     std::wstring err;
-                    if(!TapKey(target,correctionKey,correctionKey==VK_RIGHT?rightKeyHoldMs:leftKeyHoldMs,err)) throw std::runtime_error("位置纠正按键失败或焦点丢失。");
+                    if(!TapKey(target,correctionKey,correctionKey==VK_RIGHT?rightTapMs:leftTapMs,err)) throw std::runtime_error("位置纠正按键失败或焦点丢失。");
                     SleepCheck(s->stop,keyGapMs);
                 }
                 if(s->stop.load())break;
@@ -349,7 +349,7 @@
             log(Format(L"位置验证通过：旋转 %d、实际落点列 %d（%s）；准备硬降。",
                 move.rotation,observedX,usedGhost?L"Ghost轮廓":L"活动方块"));
             std::wstring err;
-            if(!TapKey(target,VK_SPACE,keyHoldMs,err)) throw std::runtime_error("硬降按键失败或焦点丢失。");
+            if(!TapKey(target,VK_SPACE,tapMs,err)) throw std::runtime_error("硬降按键失败或焦点丢失。");
             if (trainableAction) {
                 pendingExperience=decision.experience;
                 pendingExpectedBoard=decision.expectedBoard;
