@@ -93,17 +93,33 @@ bool ResolveCaptureRect(const Rect& source, Rect& resolved, std::wstring& error)
     }
     const int clientWidth = client.right - client.left;
     const int clientHeight = client.bottom - client.top;
-    if (source.left < 0 || source.top < 0 ||
-        source.left + source.width > clientWidth ||
-        source.top + source.height > clientHeight) {
-        error = Format(L"窗口相对区域超出客户区：区域(%d,%d %d×%d)，客户区(%d×%d)。",
-            source.left, source.top, source.width, source.height, clientWidth, clientHeight);
+    if (clientWidth <= 0 || clientHeight <= 0) {
+        error = L"目标游戏窗口客户区尺寸无效。";
         return false;
     }
-    resolved.left = origin.x + source.left;
-    resolved.top = origin.y + source.top;
-    resolved.width = source.width;
-    resolved.height = source.height;
+
+    // Keep the regions attached to the client area and scale them if the user
+    // resizes the game window after the original recognition setup.
+    const double scaleX = source.referenceClientWidth > 0
+        ? static_cast<double>(clientWidth) / source.referenceClientWidth : 1.0;
+    const double scaleY = source.referenceClientHeight > 0
+        ? static_cast<double>(clientHeight) / source.referenceClientHeight : 1.0;
+    const int relativeLeft = static_cast<int>(std::lround(source.left * scaleX));
+    const int relativeTop = static_cast<int>(std::lround(source.top * scaleY));
+    const int relativeWidth = static_cast<int>(std::lround(source.width * scaleX));
+    const int relativeHeight = static_cast<int>(std::lround(source.height * scaleY));
+
+    if (relativeLeft < 0 || relativeTop < 0 ||
+        relativeLeft + relativeWidth > clientWidth ||
+        relativeTop + relativeHeight > clientHeight) {
+        error = Format(L"窗口相对区域超出客户区：区域(%d,%d %d×%d)，客户区(%d×%d)。",
+            relativeLeft, relativeTop, relativeWidth, relativeHeight, clientWidth, clientHeight);
+        return false;
+    }
+    resolved.left = origin.x + relativeLeft;
+    resolved.top = origin.y + relativeTop;
+    resolved.width = relativeWidth;
+    resolved.height = relativeHeight;
     return true;
 }
 
