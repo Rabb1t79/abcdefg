@@ -97,7 +97,7 @@ constexpr UINT WM_APP_SCORE_RECORDED = WM_APP + 6;
 struct Cell { int x{}, y{}; };
 struct Rgb { int r{}, g{}, b{}; };
 struct Pixel { uint8_t b{}, g{}, r{}, a{}; };
-struct Rect { int left{}, top{}, width{}, height{}; bool clientRelative{}; };
+struct Rect { int left{}, top{}, width{}, height{}; bool clientRelative{}; int referenceClientWidth{}, referenceClientHeight{}; };
 
 struct CapturedImage;
 bool IsWindowCaptureConfigured();
