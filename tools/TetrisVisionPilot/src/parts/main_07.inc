@@ -221,7 +221,8 @@
                 if (!ChooseExhaustiveAction(board,piece.name,piece.rotation,piece.minX,queue.pieces,exhaustive))
                     throw std::runtime_error("穷举搜索未找到合法落点。棋盘可能已堆到顶部，或识别结果不正确。");
                 move = exhaustive.move;
-                decision.move = exhaustive.move;
+                move.score = 0.0; // The exhaustive objective is lexicographic, not a learned score.
+                decision.move = move;
                 decision.expectedBoard = exhaustive.expectedBoard;
                 decision.predictedLines = exhaustive.predictedLines;
                 decision.searchedNextPieces = exhaustive.searchedNextPieces;
