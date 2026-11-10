@@ -97,7 +97,7 @@ constexpr UINT WM_APP_SCORE_RECORDED = WM_APP + 6;
 struct Cell { int x{}, y{}; };
 struct Rgb { int r{}, g{}, b{}; };
 struct Pixel { uint8_t b{}, g{}, r{}, a{}; };
-struct Rect { int left{}, top{}, width{}, height{}; };
+struct Rect { int left{}, top{}, width{}, height{}; bool clientRelative{}; };
 
 struct CapturedImage;
 bool IsWindowCaptureConfigured();
@@ -107,6 +107,7 @@ void StopWindowCapture();
 
 static HINSTANCE g_instance{};
 static HWND g_mainWindow{};
+static HWND g_captureTarget{};
 static int g_virtualLeft{}, g_virtualTop{};
 static POINT g_selectStart{};
 static POINT g_selectCurrent{};
