@@ -149,8 +149,32 @@ VisionResult Analyze(const CapturedImage& image, int threshold, int spawnRows = 
         }
     }
     result.background = {Median(baseR), Median(baseG), Median(baseB)};
+
+    // Estimate per-frame background noise from cells that share the dominant
+    // background bucket. The user's threshold remains a sensitivity control,
+    // but it can no longer fall below the measured noise floor.
+    std::vector<int> backgroundNoise;
+    backgroundNoise.reserve(baseR.size());
     for (int y = 0; y < ROWS; ++y) for (int x = 0; x < COLS; ++x) {
-        result.occupied[y][x] = ColorDistance(result.colors[y][x], result.background) > threshold;
+        if (bucketIds[y][x] == commonBucket) {
+            backgroundNoise.push_back(ColorDistance(result.colors[y][x], result.background));
+        }
+    }
+    int noiseP90 = 0;
+    if (!backgroundNoise.empty()) {
+        std::sort(backgroundNoise.begin(), backgroundNoise.end());
+        const size_t p90 = (std::min)(backgroundNoise.size() - 1,
+            (backgroundNoise.size() * 9) / 10);
+        noiseP90 = backgroundNoise[p90];
+    }
+    const int noiseFloor = (std::max)(14, noiseP90 * 2 + 8);
+    const int effectiveThreshold = (std::max)(noiseFloor,
+        (std::max)(10, (std::min)(160, threshold)));
+    result.usedThreshold = effectiveThreshold;
+
+    for (int y = 0; y < ROWS; ++y) for (int x = 0; x < COLS; ++x) {
+        result.occupied[y][x] =
+            ColorDistance(result.colors[y][x], result.background) > effectiveThreshold;
         if (result.occupied[y][x]) ++result.occupiedCount;
     }
 
@@ -362,33 +386,44 @@ VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error)
     for (const Candidate& current : latest.components) {
         int matched = 0;
         int earliestY = current.minY;
-        bool observedEarlier = false;
+        int horizontalMotion = 0;
+        bool observedMotion = false;
         for (int sampleIndex = 0; sampleIndex < kSamples - 1; ++sampleIndex) {
             const auto& candidates = samples[static_cast<size_t>(sampleIndex)].components;
             const Candidate* closest = nullptr;
-            int closestDelta = (std::numeric_limits<int>::max)();
+            int closestDistance = (std::numeric_limits<int>::max)();
+            int closestDx = 0;
+            int closestDy = 0;
             for (const Candidate& previous : candidates) {
                 if (previous.name != current.name ||
-                    previous.rotation != current.rotation ||
-                    previous.minX != current.minX ||
-                    previous.minY > current.minY) continue;
-                const int delta = current.minY - previous.minY;
-                if (delta > 6) continue; // Ignore unrelated, distant same-shaped blocks.
-                if (delta < closestDelta) {
-                    closestDelta = delta;
+                    previous.rotation != current.rotation) continue;
+
+                // A moving piece changes X during a horizontal tap sequence.
+                // Requiring exact minX made the tracker reject the very movement
+                // it was supposed to verify. Match a small local trajectory instead.
+                const int dx = std::abs(current.minX - previous.minX);
+                const int dy = current.minY - previous.minY;
+                if (dx > 4 || dy < 0 || dy > 8) continue;
+                const int distance = dx * 2 + dy;
+                if (distance < closestDistance) {
+                    closestDistance = distance;
                     closest = &previous;
+                    closestDx = dx;
+                    closestDy = dy;
                 }
             }
             if (closest) {
                 ++matched;
                 earliestY = (std::min)(earliestY, closest->minY);
-                if (closest->minY < current.minY) observedEarlier = true;
+                horizontalMotion = (std::max)(horizontalMotion, closestDx);
+                if (closestDx > 0 || closestDy > 0) observedMotion = true;
             }
         }
 
-        if (matched < 1 || !observedEarlier) continue;
-        const int motion = current.minY - earliestY;
-        const int score = matched * 100 + motion * 10 - std::abs(current.minX - 4);
+        if (matched < 1 || !observedMotion) continue;
+        const int verticalMotion = current.minY - earliestY;
+        const int motionScore = verticalMotion * 10 + horizontalMotion * 24;
+        const int score = matched * 100 + motionScore - std::abs(current.minX - 4);
         if (score > bestMotionScore) {
             bestMotionScore = score;
             movingCandidate = current;
