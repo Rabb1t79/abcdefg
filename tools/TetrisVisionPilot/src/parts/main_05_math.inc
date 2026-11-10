@@ -77,6 +77,7 @@ void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
                       size_t depth, int placed, int totalLines,
                       const Move& firstMove, const Board& firstBoard, int firstLines,
                       int rotationTaps, int horizontalTaps,
+                      int initialRotation, int initialX,
                       ExhaustiveSearchState& best, std::uint64_t& nodes) {
     if (depth >= sequence.size()) {
         ExhaustiveEvaluation evaluation = EvaluateExhaustiveBoard(board, placed, totalLines);
@@ -116,9 +117,16 @@ void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
 
     for (const ActionCandidate& action : actions) {
         if (depth == 0) {
+            const auto rotations = g_rotations.find(sequence[depth]);
+            const int rotationCount = rotations == g_rotations.end()
+                ? 1 : static_cast<int>(rotations->second.size());
+            const int rootRotationTaps = rotationCount > 0
+                ? (action.move.rotation - initialRotation + rotationCount) % rotationCount : 0;
+            const int rootHorizontalTaps = std::abs(action.move.x - initialX);
             ExhaustiveSearch(action.nextBoard, sequence, depth + 1, placed + 1,
                 totalLines + action.linesCleared, action.move, action.nextBoard,
-                action.linesCleared, rotationTaps, horizontalTaps, best, nodes);
+                action.linesCleared, rootRotationTaps, rootHorizontalTaps,
+                initialRotation, initialX, best, nodes);
         } else {
             ExhaustiveSearch(action.nextBoard, sequence, depth + 1, placed + 1,
                 totalLines + action.linesCleared, firstMove, firstBoard, firstLines,
@@ -144,7 +152,7 @@ bool ChooseExhaustiveAction(const Board& board, char piece, int currentRotation,
     // Search all legal placements for each visible piece; no beam width,
     // Softmax, epsilon exploration, experience memory, or policy weights.
     ExhaustiveSearch(board, sequence, 0, 0, 0, Move{}, Board{}, 0,
-                     0, 0, best, nodes);
+                     0, 0, currentRotation, currentX, best, nodes);
     const ULONGLONG elapsed = GetTickCount64() - started;
     if (!best.valid) return false;
 
