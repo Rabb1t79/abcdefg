@@ -5,6 +5,7 @@
 #include "parts/main_03.inc"
 #include "parts/main_04.inc"
 #include "parts/main_05.inc"
+#include "parts/main_05_math.inc"
 #include "parts/main_06.inc"
 #include "parts/main_07.inc"
 #include "parts/main_08.inc"
