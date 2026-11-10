@@ -409,8 +409,8 @@ void SaveConfig(AppState* s) {
     wchar_t value[64]{};
     GetWindowTextW(s->nextCountEdit,value,_countof(value)); WritePrivateProfileStringW(L"Next",L"Count",value,s->configPath.c_str());
     GetWindowTextW(s->lookaheadEdit,value,_countof(value)); WritePrivateProfileStringW(L"Next",L"Lookahead",value,s->configPath.c_str());
-    if (s->keyHoldEdit) { GetWindowTextW(s->keyHoldEdit,value,_countof(value)); WritePrivateProfileStringW(L"Input",L"KeyHoldMs",value,s->configPath.c_str()); }
-    if (s->keyGapEdit) { GetWindowTextW(s->keyGapEdit,value,_countof(value)); WritePrivateProfileStringW(L"Input",L"KeyGapMs",value,s->configPath.c_str()); }
+    if (s->keyHoldEdit) { GetWindowTextW(s->keyHoldEdit,value,_countof(value)); WritePrivateProfileStringW(L"Input",L"TapMs",value,s->configPath.c_str()); }
+    if (s->keyGapEdit) { GetWindowTextW(s->keyGapEdit,value,_countof(value)); WritePrivateProfileStringW(L"Input",L"TapGapMs",value,s->configPath.c_str()); }
     if (s->dropWaitEdit) { GetWindowTextW(s->dropWaitEdit,value,_countof(value)); WritePrivateProfileStringW(L"Input",L"DropWaitMs",value,s->configPath.c_str()); }
     if (s->learningRateEdit) { GetWindowTextW(s->learningRateEdit,value,_countof(value)); WritePrivateProfileStringW(L"Training",L"LearningRate",value,s->configPath.c_str()); }
     if (s->epsilonEdit) { GetWindowTextW(s->epsilonEdit,value,_countof(value)); WritePrivateProfileStringW(L"Training",L"ExplorationRate",value,s->configPath.c_str()); }
@@ -448,8 +448,14 @@ void LoadConfig(AppState* s) {
     wchar_t value[64]{};
     GetPrivateProfileStringW(L"Next",L"Count",L"6",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->nextCountEdit,value);
     GetPrivateProfileStringW(L"Next",L"Lookahead",L"4",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->lookaheadEdit,value);
-    GetPrivateProfileStringW(L"Input",L"KeyHoldMs",L"26",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->keyHoldEdit,value);
-    GetPrivateProfileStringW(L"Input",L"KeyGapMs",L"12",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->keyGapEdit,value);
+    int tapMs=GetPrivateProfileIntW(L"Input",L"TapMs",-1,s->configPath.c_str());
+    if (tapMs < 0) tapMs=GetPrivateProfileIntW(L"Input",L"KeyHoldMs",8,s->configPath.c_str());
+    if (tapMs < 4 || tapMs > 10) tapMs=8; // migrate old long-hold settings to a safe discrete tap
+    SetWindowTextW(s->keyHoldEdit,Format(L"%d",tapMs).c_str());
+    int tapGapMs=GetPrivateProfileIntW(L"Input",L"TapGapMs",-1,s->configPath.c_str());
+    if (tapGapMs < 0) tapGapMs=GetPrivateProfileIntW(L"Input",L"KeyGapMs",8,s->configPath.c_str());
+    if (tapGapMs < 0 || tapGapMs > 12) tapGapMs=8;
+    SetWindowTextW(s->keyGapEdit,Format(L"%d",tapGapMs).c_str());
     GetPrivateProfileStringW(L"Input",L"DropWaitMs",L"190",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->dropWaitEdit,value);
     GetPrivateProfileStringW(L"Training",L"LearningRate",L"0.08",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->learningRateEdit,value);
     GetPrivateProfileStringW(L"Training",L"ExplorationRate",L"5",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->epsilonEdit,value);
