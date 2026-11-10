@@ -2,12 +2,16 @@
         Sleep(250);
         if(GetAncestor(GetForegroundWindow(),GA_ROOT)!=target) throw std::runtime_error("无法将游戏窗口切换到前台。请先手动点一下游戏窗口，再重新启动自动操作。");
         log(mathMode ? L"纯数学穷举模式已启动：不更新策略权重或写入训练样本。" : L"模拟智能学习模式已启动。F8 或界面上的“停止”可紧急停止。请勿切换到其他窗口。");
-        std::wstring kickPath=s->configPath;
-        const size_t configSlash=kickPath.find_last_of(L"\\/");
-        kickPath=(configSlash==std::wstring::npos?L".\\":kickPath.substr(0,configSlash+1))+L"TetrisVisionPilot-kick-wall.csv";
         KickWallLearner kickLearner;
-        kickLearner.Load(kickPath);
-        log(Format(L"已载入 Wall Kick 实测档案：%llu 条观测。",static_cast<unsigned long long>(kickLearner.Attempts())));
+        if (!mathMode) {
+            std::wstring kickPath=s->configPath;
+            const size_t configSlash=kickPath.find_last_of(L"\\/");
+            kickPath=(configSlash==std::wstring::npos?L".\\":kickPath.substr(0,configSlash+1))+L"TetrisVisionPilot-kick-wall.csv";
+            kickLearner.Load(kickPath);
+            log(Format(L"已载入 Wall Kick 实测档案：%llu 条观测。",static_cast<unsigned long long>(kickLearner.Attempts())));
+        } else {
+            log(L"穷举模式不读取 Wall Kick 实测档案；只比较几何落点。");
+        }
         tesseract::TessBaseAPI ocr;
         const std::string tessPath = WideToUtf8(s->tessdataPath);
         const int ocrInit = tessPath.empty() ? -1 : ocr.Init(tessPath.c_str(), "eng", tesseract::OEM_LSTM_ONLY);
