@@ -21,6 +21,8 @@
         int latestScore=0, gameOverHits=0;
         bool hasLatestScore=false;
         bool scoreResetObserved=false;
+        int leftKeyHoldMs=keyHoldMs, rightKeyHoldMs=keyHoldMs;
+        bool calibrationPending=true;
         std::mt19937 rng(static_cast<unsigned int>(GetTickCount() ^ GetCurrentThreadId()));
         while(!s->stop.load()) {
             const DWORD now = GetTickCount();
@@ -120,6 +122,7 @@
                 SleepCheck(s->stop,450);
                 latestScore = 0; hasLatestScore = false;
                 scoreResetObserved = false;
+                leftKeyHoldMs=keyHoldMs; rightKeyHoldMs=keyHoldMs; calibrationPending=true;
                 lastScoreRead = 0; lastGameOverRead = 0; gameOverHits = 0;
                 noPieceSince = GetTickCount();
                 continue;
@@ -154,6 +157,37 @@
             if(!check.hasActive || check.active.name!=piece.name || check.active.rotation!=piece.rotation || check.active.minX!=piece.minX) continue;
             piece=check.active;
             Board board=BoardWithoutActive(check);
+            if (calibrationPending) {
+                InputCalibrationResult calibration{};
+                std::wstring calibrationSummary;
+                const CalibrationOutcome outcome=CalibrateOpeningInput(
+                    s->stop,target,rect,threshold,check,board,keyHoldMs,
+                    calibration,calibrationSummary);
+                if (outcome==CalibrationOutcome::Unsafe) {
+                    log(L"开局输入校准无法安全复位："+calibrationSummary+L" 自动操作已停止，未硬降。");
+                    break;
+                }
+                leftKeyHoldMs=calibration.leftHoldMs;
+                rightKeyHoldMs=calibration.rightHoldMs;
+                WritePrivateProfileStringW(L"InputCalibration",L"LeftHoldMs",
+                    Format(L"%d",leftKeyHoldMs).c_str(),s->configPath.c_str());
+                WritePrivateProfileStringW(L"InputCalibration",L"RightHoldMs",
+                    Format(L"%d",rightKeyHoldMs).c_str(),s->configPath.c_str());
+                if (!calibrationSummary.empty()) log(L"开局输入校准："+calibrationSummary);
+                calibrationPending=false;
+                if (s->stop.load()) break;
+                VisionResult afterCalibration=AnalyzeStable(rect,threshold,capError);
+                if (!capError.empty()) { log(L"输入校准后复核截图失败："+capError); break; }
+                if (!afterCalibration.hasActive ||
+                    afterCalibration.active.name!=piece.name ||
+                    afterCalibration.active.rotation!=piece.rotation) {
+                    log(L"输入校准后无法确认原方块仍处于活动状态；取消本次操作，不记录校准动作。");
+                    break;
+                }
+                check=std::move(afterCalibration);
+                piece=check.active;
+                board=BoardWithoutActive(check);
+            }
             if (pendingActionValidation) {
                 if (board == pendingExpectedBoard) {
                     s->trainer.AddExperience(pendingExperience);
@@ -225,7 +259,7 @@
             WORD moveKey=delta>0?VK_RIGHT:VK_LEFT;
             for(int i=0;i<std::abs(delta) && !s->stop.load();++i) {
                 std::wstring err;
-                if(!TapKey(target,moveKey,keyHoldMs,err)) throw std::runtime_error("移动按键失败或焦点丢失。");
+                if(!TapKey(target,moveKey,moveKey==VK_RIGHT?rightKeyHoldMs:leftKeyHoldMs,err)) throw std::runtime_error("移动按键失败或焦点丢失。");
                 SleepCheck(s->stop,keyGapMs);
             }
             if(s->stop.load())break;
@@ -253,7 +287,7 @@
                 const WORD correctionKey=correction>0?VK_RIGHT:VK_LEFT;
                 for(int i=0;i<std::abs(correction) && !s->stop.load();++i) {
                     std::wstring err;
-                    if(!TapKey(target,correctionKey,keyHoldMs,err)) throw std::runtime_error("位置纠正按键失败或焦点丢失。");
+                    if(!TapKey(target,correctionKey,correctionKey==VK_RIGHT?rightKeyHoldMs:leftKeyHoldMs,err)) throw std::runtime_error("位置纠正按键失败或焦点丢失。");
                     SleepCheck(s->stop,keyGapMs);
                 }
                 if(s->stop.load())break;
