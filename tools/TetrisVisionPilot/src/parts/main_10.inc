@@ -53,7 +53,7 @@ void StartBot(AppState* s) {
     const bool boardRegionValid=IsCaptureRegionInsideClient(target,s->boardRect);
     const bool nextRegionValid=IsCaptureRegionInsideClient(target,s->nextRect);
     const bool scoreRegionValid=IsCaptureRegionInsideClient(target,s->scoreRect);
-    if (!boardRegionValid || !nextRegionValid || (autoRetry && !scoreRegionValid)) {
+    if (!boardRegionValid || !nextRegionValid || !scoreRegionValid) {
         AppendLog(s,L"发现识别区域缺失、失效或超出当前窗口，自动重新定位棋盘、NEXT 和 SCORE。");
         AutoLocateRegions(s);
         NormalizeCaptureRegion(s->boardRect,target);
