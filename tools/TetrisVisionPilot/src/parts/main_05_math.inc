@@ -131,7 +131,7 @@ void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
         } else {
             ExhaustiveSearch(action.nextBoard, sequence, depth + 1, placed + 1,
                 totalLines + action.linesCleared, firstMove, firstBoard, firstLines,
-                rotationTaps, horizontalTaps, best, nodes);
+                rotationTaps, horizontalTaps, initialRotation, initialX, best, nodes);
         }
     }
 }
