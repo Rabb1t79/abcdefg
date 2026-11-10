@@ -94,6 +94,7 @@ CalibrationOutcome CalibrateOneDirection(const std::atomic<bool>& stop,
         8,
         10
     };
+    bool triedTapMs[11]{};
     const int originalX=startPiece.minX;
     int currentX=originalX;
     int currentY=startPiece.minY;
@@ -101,6 +102,8 @@ CalibrationOutcome CalibrateOneDirection(const std::atomic<bool>& stop,
     bool moved=false;
 
     for (int tapMs : tapCandidates) {
+        if (tapMs < 4 || tapMs > 10 || triedTapMs[tapMs]) continue;
+        triedTapMs[tapMs]=true;
         if (stop.load()) { note=L"用户请求停止。"; return CalibrationOutcome::Unsafe; }
         std::wstring inputError;
         if (!TapKey(target,directionKey,tapMs,inputError)) {
