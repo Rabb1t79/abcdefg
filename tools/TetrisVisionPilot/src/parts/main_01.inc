@@ -74,27 +74,62 @@ struct CapturedImage {
     std::vector<Pixel> pixels;
 };
 
+bool ResolveCaptureRect(const Rect& source, Rect& resolved, std::wstring& error) {
+    resolved = source;
+    resolved.clientRelative = false;
+    if (!source.clientRelative) return true;
+
+    HWND target = g_captureTarget;
+    if (!target || !IsWindow(target)) {
+        error = L"区域使用窗口相对坐标，但目标游戏窗口尚未绑定。";
+        return false;
+    }
+    RECT client{};
+    POINT origin{0, 0};
+    if (!GetClientRect(target, &client) || !ClientToScreen(target, &origin)) {
+        error = L"无法读取目标游戏窗口客户区坐标。";
+        return false;
+    }
+    const int clientWidth = client.right - client.left;
+    const int clientHeight = client.bottom - client.top;
+    if (source.left < 0 || source.top < 0 ||
+        source.left + source.width > clientWidth ||
+        source.top + source.height > clientHeight) {
+        error = Format(L"窗口相对区域超出客户区：区域(%d,%d %d×%d)，客户区(%d×%d)。",
+            source.left, source.top, source.width, source.height, clientWidth, clientHeight);
+        return false;
+    }
+    resolved.left = origin.x + source.left;
+    resolved.top = origin.y + source.top;
+    resolved.width = source.width;
+    resolved.height = source.height;
+    return true;
+}
+
 bool CaptureScreenRect(const Rect& rect, CapturedImage& out, std::wstring& error) {
-    // Generic screen capture is shared by the board and the much smaller NEXT panel.
-    // Validate only safe bitmap bounds here; the board-specific 10x20 minimum is checked
-    // by TestRecognition before it calls Analyze().
-    if (rect.width < 8 || rect.height < 8 || rect.width > 10000 || rect.height > 10000) {
+    // Generic screen capture is shared by the board, NEXT and SCORE regions.
+    // Window-relative regions are resolved on every capture so moving/resizing the
+    // game window never leaves stale absolute screen coordinates behind.
+    Rect captureRect{};
+    if (!ResolveCaptureRect(rect, captureRect, error)) return false;
+    if (captureRect.width < 8 || captureRect.height < 8 ||
+        captureRect.width > 10000 || captureRect.height > 10000) {
         error = Format(L"截图区域尺寸无效：%d × %d px（允许范围 8–10000 px）。",
-            rect.width, rect.height);
+            captureRect.width, captureRect.height);
         return false;
     }
     // When an HWND WGC session is active, never silently mix in desktop pixels:
     // an occluding window would contaminate the board/OCR image.
     if (IsWindowCaptureConfigured()) {
-        return TryCaptureWindowRect(rect, out, error);
+        return TryCaptureWindowRect(captureRect, out, error);
     }
     HDC screen = GetDC(nullptr);
     if (!screen) { error = L"无法访问桌面画面。"; return false; }
     HDC memory = CreateCompatibleDC(screen);
     BITMAPINFO info{};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    info.bmiHeader.biWidth = rect.width;
-    info.bmiHeader.biHeight = -rect.height; // top-down DIB
+    info.bmiHeader.biWidth = captureRect.width;
+    info.bmiHeader.biHeight = -captureRect.height; // top-down DIB
     info.bmiHeader.biPlanes = 1;
     info.bmiHeader.biBitCount = 32;
     info.bmiHeader.biCompression = BI_RGB;
@@ -108,9 +143,9 @@ bool CaptureScreenRect(const Rect& rect, CapturedImage& out, std::wstring& error
         return false;
     }
     HGDIOBJ old = SelectObject(memory, bitmap);
-    BOOL copied = BitBlt(memory, 0, 0, rect.width, rect.height, screen,
-                         rect.left, rect.top, SRCCOPY | CAPTUREBLT);
+    BOOL copied = BitBlt(memory, 0, 0, captureRect.width, captureRect.height, screen,
+                         captureRect.left, captureRect.top, SRCCOPY | CAPTUREBLT);
     if (copied) {
-        out.width = rect.width;
-        out.height = rect.height;
-        size_t count = static_cast<size_t>(rect.width) * rect.height;
+        out.width = captureRect.width;
+        out.height = captureRect.height;
+        size_t count = static_cast<size_t>(captureRect.width) * captureRect.height;
