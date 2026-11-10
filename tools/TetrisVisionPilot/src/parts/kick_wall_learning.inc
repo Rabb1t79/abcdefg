@@ -155,7 +155,7 @@ enum class WallKickAttemptOutcome {
 bool MoveActiveToColumnVerified(const std::atomic<bool>& stop, HWND target,
                                 const Rect& rect, int threshold, const Board& board,
                                 char piece, int rotation, int targetX,
-                                int leftHoldMs, int rightHoldMs, int keyGapMs,
+                                int leftTapMs, int rightTapMs, int keyGapMs,
                                 int& currentX, int& currentY, std::wstring& error) {
     const auto rotations=g_rotations.find(piece);
     if (rotations==g_rotations.end() ||
@@ -169,8 +169,8 @@ bool MoveActiveToColumnVerified(const std::atomic<bool>& stop, HWND target,
             return false;
         }
         const WORD key=direction>0?VK_RIGHT:VK_LEFT;
-        const int hold=direction>0?rightHoldMs:leftHoldMs;
-        if (!TapKey(target,key,hold,error)) return false;
+        const int pulse=direction>0?rightTapMs:leftTapMs;
+        if (!TapKey(target,key,pulse,error)) return false;
         SleepCheck(stop,keyGapMs);
         SleepCheck(stop,35);
         if (stop.load()) { error=L"用户请求停止。"; return false; }
@@ -191,8 +191,8 @@ WallKickAttemptOutcome TryEmpiricalWallKick(const std::atomic<bool>& stop,
                                             HWND target, const Rect& rect,
                                             int threshold, const Board& board,
                                             const Candidate& piece, int targetRotation,
-                                            int landingX, int rotationHoldMs, int leftHoldMs,
-                                            int rightHoldMs, int keyGapMs,
+                                            int landingX, int rotationTapMs, int leftTapMs,
+                                            int rightTapMs, int keyGapMs,
                                             KickWallLearner& learner,
                                             int& resultingX, std::wstring& logText) {
     int preX=0;
@@ -206,7 +206,7 @@ WallKickAttemptOutcome TryEmpiricalWallKick(const std::atomic<bool>& stop,
     int currentX=piece.minX,currentY=piece.minY;
     std::wstring moveError;
     if (!MoveActiveToColumnVerified(stop,target,rect,threshold,board,piece.name,
-            piece.rotation,preX,leftHoldMs,rightHoldMs,keyGapMs,
+            piece.rotation,preX,leftTapMs,rightTapMs,keyGapMs,
             currentX,currentY,moveError)) {
         if (currentX==piece.minX &&
             moveError==L"预旋转横移路径被墙壁或堆叠阻挡。") {
@@ -216,7 +216,7 @@ WallKickAttemptOutcome TryEmpiricalWallKick(const std::atomic<bool>& stop,
         if (currentX!=piece.minX) {
             std::wstring restoreError;
             if (MoveActiveToColumnVerified(stop,target,rect,threshold,board,piece.name,
-                    piece.rotation,piece.minX,leftHoldMs,rightHoldMs,keyGapMs,
+                    piece.rotation,piece.minX,leftTapMs,rightTapMs,keyGapMs,
                     currentX,currentY,restoreError)) {
                 logText=L"墙边预定位路径中途受阻，已复位；改用普通旋转。";
                 return WallKickAttemptOutcome::FailedAndRestored;
@@ -230,7 +230,7 @@ WallKickAttemptOutcome TryEmpiricalWallKick(const std::atomic<bool>& stop,
 
     const int beforeKickX=currentX,beforeKickY=currentY;
     std::wstring inputError;
-    if (!TapKey(target,VK_UP,rotationHoldMs,inputError)) {
+    if (!TapKey(target,VK_UP,rotationTapMs,inputError)) {
         logText=L"Wall Kick 旋转输入失败："+inputError;
         return WallKickAttemptOutcome::Unsafe;
     }
@@ -264,7 +264,7 @@ WallKickAttemptOutcome TryEmpiricalWallKick(const std::atomic<bool>& stop,
                         beforeKickX,beforeKickY,beforeKickX,beforeKickY);
         int restoreX=after.active.minX,restoreY=after.active.minY;
         if (!MoveActiveToColumnVerified(stop,target,rect,threshold,board,piece.name,
-                piece.rotation,piece.minX,leftHoldMs,rightHoldMs,keyGapMs,
+                piece.rotation,piece.minX,leftTapMs,rightTapMs,keyGapMs,
                 restoreX,restoreY,moveError)) {
             logText=L"Wall Kick 未成功，且无法安全复位："+moveError;
             return WallKickAttemptOutcome::Unsafe;
