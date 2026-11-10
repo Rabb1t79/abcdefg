@@ -509,9 +509,7 @@ bool NormalizeCaptureRegion(Rect& region, HWND target) {
 
 bool IsCaptureRegionInsideClient(HWND target, const Rect& region) {
     if (!region.clientRelative) {
-        RECT screenRect{region.left, region.top,
-                        region.left + region.width, region.top + region.height};
-        return IsScreenRectInsideClient(target, screenRect);
+        return IsScreenRectInsideClient(target, region);
     }
     RECT client{};
     if (!target || !GetClientRect(target, &client)) return false;
