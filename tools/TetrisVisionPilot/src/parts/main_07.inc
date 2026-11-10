@@ -454,7 +454,7 @@ void LoadConfig(AppState* s) {
     SetWindowTextW(s->keyHoldEdit,Format(L"%d",tapMs).c_str());
     int tapGapMs=GetPrivateProfileIntW(L"Input",L"TapGapMs",-1,s->configPath.c_str());
     if (tapGapMs < 0) tapGapMs=GetPrivateProfileIntW(L"Input",L"KeyGapMs",8,s->configPath.c_str());
-    if (tapGapMs < 0 || tapGapMs > 12) tapGapMs=8;
+    if (tapGapMs < 0 || tapGapMs > 10) tapGapMs=8;
     SetWindowTextW(s->keyGapEdit,Format(L"%d",tapGapMs).c_str());
     GetPrivateProfileStringW(L"Input",L"DropWaitMs",L"190",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->dropWaitEdit,value);
     GetPrivateProfileStringW(L"Training",L"LearningRate",L"0.08",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->learningRateEdit,value);
