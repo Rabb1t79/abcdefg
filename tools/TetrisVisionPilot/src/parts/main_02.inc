@@ -539,7 +539,7 @@ VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error)
 }
 
 bool ReadPieceColumn(const VisionResult& vision, char piece, int rotation,
-                     int& columnOut, bool& usedGhostOut) {
+                     int& columnOut, bool& usedGhostOut, int expectedRow = -1) {
     usedGhostOut = false;
     if (vision.hasGhost && vision.ghost.name == piece &&
         vision.ghost.rotation == rotation) {
@@ -551,6 +551,25 @@ bool ReadPieceColumn(const VisionResult& vision, char piece, int rotation,
         vision.active.rotation == rotation) {
         columnOut = vision.active.minX;
         return true;
+    }
+
+    // During a fast horizontal tap sequence the 3-frame tracker can momentarily
+    // fail to mark the component as active. The caller already knows the piece,
+    // rotation and approximate row from immediately before the movement. Search
+    // only that narrow row corridor, and accept it only when there is one match.
+    if (expectedRow >= 0) {
+        const Candidate* uniqueMatch = nullptr;
+        int matchCount = 0;
+        for (const Candidate& candidate : vision.components) {
+            if (candidate.name != piece || candidate.rotation != rotation ||
+                std::abs(candidate.minY - expectedRow) > 4) continue;
+            uniqueMatch = &candidate;
+            ++matchCount;
+        }
+        if (matchCount == 1 && uniqueMatch) {
+            columnOut = uniqueMatch->minX;
+            return true;
+        }
     }
     return false;
 }
