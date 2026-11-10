@@ -470,6 +470,174 @@ void UpdateNextRegionLabel(AppState* s) {
     else SetWindowTextW(s->scoreRegionLabel,L"SCORE区域：未选择");
 }
 
+bool MakeClientRelativeRect(HWND target, const RECT& screenRect, Rect& relativeOut) {
+    if (!target || !IsWindow(target)) return false;
+    RECT client{};
+    if (!GetClientRect(target, &client)) return false;
+    POINT first{screenRect.left, screenRect.top};
+    POINT last{screenRect.right, screenRect.bottom};
+    if (!ScreenToClient(target, &first) || !ScreenToClient(target, &last)) return false;
+    const int width = client.right - client.left;
+    const int height = client.bottom - client.top;
+    if (first.x < 0 || first.y < 0 || last.x > width || last.y > height ||
+        last.x <= first.x || last.y <= first.y) return false;
+    relativeOut = {first.x, first.y, last.x - first.x, last.y - first.y,
+                   true, width, height};
+    return true;
+}
+
+bool NormalizeCaptureRegion(Rect& region, HWND target) {
+    if (region.width <= 0 || region.height <= 0) return false;
+    RECT client{};
+    if (!target || !IsWindow(target) || !GetClientRect(target, &client)) return false;
+    const int width = client.right - client.left;
+    const int height = client.bottom - client.top;
+    if (width <= 0 || height <= 0) return false;
+
+    if (!region.clientRelative) {
+        RECT screenRect{region.left, region.top,
+                        region.left + region.width, region.top + region.height};
+        Rect converted{};
+        if (!MakeClientRelativeRect(target, screenRect, converted)) return false;
+        region = converted;
+        return true;
+    }
+    if (region.referenceClientWidth <= 0) region.referenceClientWidth = width;
+    if (region.referenceClientHeight <= 0) region.referenceClientHeight = height;
+    return true;
+}
+
+bool IsCaptureRegionInsideClient(HWND target, const Rect& region) {
+    if (!region.clientRelative) {
+        RECT screenRect{region.left, region.top,
+                        region.left + region.width, region.top + region.height};
+        return IsScreenRectInsideClient(target, screenRect);
+    }
+    RECT client{};
+    if (!target || !GetClientRect(target, &client)) return false;
+    const int width = client.right - client.left;
+    const int height = client.bottom - client.top;
+    const double sx = region.referenceClientWidth > 0
+        ? static_cast<double>(width) / region.referenceClientWidth : 1.0;
+    const double sy = region.referenceClientHeight > 0
+        ? static_cast<double>(height) / region.referenceClientHeight : 1.0;
+    const int left = static_cast<int>(std::lround(region.left * sx));
+    const int top = static_cast<int>(std::lround(region.top * sy));
+    const int w = static_cast<int>(std::lround(region.width * sx));
+    const int h = static_cast<int>(std::lround(region.height * sy));
+    return left >= 0 && top >= 0 && w > 0 && h > 0 &&
+           left + w <= width && top + h <= height;
+}
+
+void AppendLog(AppState* s, const std::wstring& message);
+
+bool AutoLocateRegions(AppState* s) {
+    HWND target = SelectedWindow(s);
+    if (!target || !IsWindow(target)) {
+        AppendLog(s, L"自动定位失败：请先选择正在运行的 Tetris Online 游戏窗口。");
+        return false;
+    }
+    std::wstring captureError;
+    if (!EnsureWindowCapture(target, captureError)) {
+        AppendLog(s, L"窗口捕获初始化失败，尝试使用桌面截图："+captureError);
+    }
+
+    RECT client{};
+    if (!GetClientRect(target, &client)) {
+        AppendLog(s, L"自动定位失败：无法读取游戏窗口客户区。");
+        return false;
+    }
+    const int width = client.right - client.left;
+    const int height = client.bottom - client.top;
+    if (width < 500 || height < 360) {
+        AppendLog(s, Format(L"自动定位失败：游戏客户区只有 %d×%d，低于可识别布局的最小尺寸。",
+            width, height));
+        return false;
+    }
+
+    // Tetris Online's fixed HUD layout, expressed as client-area ratios taken
+    // from the supplied 802×602 reference. The ratios survive window movement
+    // and scale proportionally when the game window is resized.
+    s->boardRect = {
+        static_cast<int>(std::lround(width * 0.151)),
+        static_cast<int>(std::lround(height * 0.134)),
+        static_cast<int>(std::lround(width * 0.228)),
+        static_cast<int>(std::lround(height * 0.631)),
+        true, width, height
+    };
+    s->nextRect = {
+        static_cast<int>(std::lround(width * 0.410)),
+        static_cast<int>(std::lround(height * 0.205)),
+        static_cast<int>(std::lround(width * 0.095)),
+        static_cast<int>(std::lround(height * 0.570)),
+        true, width, height
+    };
+    s->scoreRect = {
+        static_cast<int>(std::lround(width * 0.840)),
+        static_cast<int>(std::lround(height * 0.800)),
+        static_cast<int>(std::lround(width * 0.085)),
+        static_cast<int>(std::lround(height * 0.105)),
+        true, width, height
+    };
+    UpdateRegionLabel(s);
+    UpdateNextRegionLabel(s);
+    SaveConfig(s);
+
+    CapturedImage boardImage;
+    std::wstring boardError;
+    const bool boardCaptured = CaptureScreenRect(s->boardRect, boardImage, boardError);
+    int occupied = -1;
+    int effectiveThreshold = ReadThreshold(s);
+    if (boardCaptured && boardImage.width >= 80 && boardImage.height >= 160) {
+        const VisionResult board = Analyze(boardImage, ReadThreshold(s));
+        occupied = board.occupiedCount;
+        effectiveThreshold = board.usedThreshold;
+        AppendLog(s, Format(L"自动定位棋盘成功：%d×%d；占用格 %d；当前自适应颜色阈值 %d。",
+            boardImage.width, boardImage.height, occupied, effectiveThreshold));
+    } else {
+        AppendLog(s, L"自动定位已计算棋盘区域，但截图验证失败："+boardError);
+    }
+
+    const int previewCount = static_cast<int>(ReadDoubleEdit(s->nextCountEdit, 6, 1, 10));
+    NextQueueResult queue;
+    std::wstring nextError;
+    const bool nextOk = ReadNextQueue(s->nextRect, previewCount, queue, nextError);
+    if (nextOk) {
+        s->previewNextPieces = queue.pieces;
+        s->hasNextPreview = true;
+        SetWindowTextW(s->nextStatusLabel, (L"NEXT识别： "+FormatNextQueueConfidence(queue)).c_str());
+        AppendLog(s, L"自动定位 NEXT 成功："+FormatNextQueueConfidence(queue));
+    } else {
+        s->hasNextPreview = false;
+        s->previewNextPieces.clear();
+        SetWindowTextW(s->nextStatusLabel, L"NEXT识别：待校准");
+        AppendLog(s, L"自动定位 NEXT 区域已设置，但内容验证未通过："+nextError);
+    }
+
+    tesseract::TessBaseAPI ocr;
+    const std::string tessPath = WideToUtf8(s->tessdataPath);
+    const bool ocrReady = !tessPath.empty() &&
+        ocr.Init(tessPath.c_str(), "eng", tesseract::OEM_LSTM_ONLY) == 0;
+    int score = 0, confidence = 0;
+    std::string scoreText;
+    std::wstring scoreError;
+    bool zeroVerified = false;
+    const bool scoreOk = ReadScoreValue(ocr, s->scoreRect, score, confidence,
+        scoreText, scoreError, &zeroVerified, ocrReady);
+    if (ocrReady) ocr.End();
+    if (scoreOk) {
+        SetWindowTextW(s->scoreStatusLabel,
+            Format(L"SCORE识别：%d（%d）", score, confidence).c_str());
+        AppendLog(s, Format(L"自动定位 SCORE 成功：当前读数 %d，置信度 %d/100。",
+            score, confidence));
+    } else {
+        SetWindowTextW(s->scoreStatusLabel, L"SCORE识别：待校准");
+        AppendLog(s, L"自动定位 SCORE 区域已设置，但暂未读出可信数字："+scoreError);
+    }
+
+    return boardCaptured && nextOk;
+}
+
 void AppendLog(AppState* s, const std::wstring& message) {
     SYSTEMTIME st{}; GetLocalTime(&st);
     std::wstring line=Format(L"[%02d:%02d:%02d] ",st.wHour,st.wMinute,st.wSecond)+message+L"\r\n";
