@@ -173,11 +173,28 @@
                 SleepCheck(s->stop,180);
                 continue;
             }
-            PolicyDecision decision;
-            if(!ChoosePolicyAction(board,piece.name,queue.pieces,lookaheadDepth,s->trainer,s->experienceMemory,
-                                  epsilon,temperature,rng,decision))
-                throw std::runtime_error("策略模型未找到合法落点。棋盘可能已堆到顶部，或识别结果不正确。");
-            Move move=decision.move;
+            PolicyDecision decision{};
+            Move move{};
+            bool trainableAction = !mathMode;
+            if (mathMode) {
+                ExhaustiveDecision exhaustive{};
+                if (!ChooseExhaustiveAction(board,piece.name,piece.rotation,piece.minX,queue.pieces,exhaustive))
+                    throw std::runtime_error("穷举搜索未找到合法落点。棋盘可能已堆到顶部，或识别结果不正确。");
+                move = exhaustive.move;
+                decision.move = exhaustive.move;
+                decision.expectedBoard = exhaustive.expectedBoard;
+                decision.predictedLines = exhaustive.predictedLines;
+                decision.searchedNextPieces = exhaustive.searchedNextPieces;
+                log(Format(L"穷举完成：节点 %llu；耗时 %.0f ms；前瞻当前方块 + %d 个 NEXT；旋转按键估算 %d 次、横移 %d 次；目标旋转 %d、列 %d。",
+                    static_cast<unsigned long long>(exhaustive.nodes), exhaustive.elapsedMs,
+                    exhaustive.searchedNextPieces, exhaustive.rotationTaps, exhaustive.horizontalTaps,
+                    move.rotation, move.x));
+            } else {
+                if(!ChoosePolicyAction(board,piece.name,queue.pieces,lookaheadDepth,s->trainer,s->experienceMemory,
+                                      epsilon,temperature,rng,decision))
+                    throw std::runtime_error("策略模型未找到合法落点。棋盘可能已堆到顶部，或识别结果不正确。");
+                move = decision.move;
+            }
             const auto& pieceRotations=g_rotations[piece.name];
             int rotateSteps=(move.rotation-piece.rotation+static_cast<int>(pieceRotations.size()))%static_cast<int>(pieceRotations.size());
             log(Format(L"当前 %c 型（稳定采样 %d/3）；NEXT=[%s]；前瞻 %d 块；目标旋转 %d、列 %d，路径评分 %.2f。",
@@ -263,11 +280,16 @@
                 move.rotation,observedX,usedGhost?L"Ghost轮廓":L"活动方块"));
             std::wstring err;
             if(!TapKey(target,VK_SPACE,keyHoldMs,err)) throw std::runtime_error("硬降按键失败或焦点丢失。");
-            pendingExperience=decision.experience;
-            pendingExpectedBoard=decision.expectedBoard;
-            pendingActionValidation=true;
-            log(Format(L"已发送硬降；等待下一块出现后核对棋盘，再决定是否记录训练样本；本次预测消行 %d。",
-                decision.predictedLines));
+            if (trainableAction) {
+                pendingExperience=decision.experience;
+                pendingExpectedBoard=decision.expectedBoard;
+                pendingActionValidation=true;
+                log(Format(L"已发送硬降；等待下一块出现后核对棋盘，再决定是否记录训练样本；本次预测消行 %d。",
+                    decision.predictedLines));
+            } else {
+                pendingActionValidation=false;
+                log(Format(L"已发送硬降；穷举模式不写入训练样本；本次预测消行 %d。",decision.predictedLines));
+            }
             SleepCheck(s->stop,dropWaitMs);
         }
     } catch(const std::exception& e) {
