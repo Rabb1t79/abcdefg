@@ -6,9 +6,14 @@
             SetWindowTextW(s->nextStatusLabel,(L"NEXT识别： "+FormatNextQueueConfidence(queue)).c_str());
             AppendLog(s,L"NEXT 队列识别成功："+FormatNextQueueConfidence(queue));
         } else {
-            s->hasNextPreview=false; s->previewNextPieces.clear();
-            SetWindowTextW(s->nextStatusLabel,L"NEXT识别：失败");
-            AppendLog(s,L"NEXT 识别失败："+queueError);
+            AppendLog(s,L"NEXT 当前区域识别失败："+queueError+L"；尝试自动重新定位整个布局。");
+            if (AutoLocateRegions(s) && s->hasNextPreview) {
+                AppendLog(s,L"NEXT 已通过自动重新定位恢复识别。");
+            } else {
+                s->hasNextPreview=false; s->previewNextPieces.clear();
+                SetWindowTextW(s->nextStatusLabel,L"NEXT识别：失败");
+                AppendLog(s,L"自动重新定位后 NEXT 仍未通过验证；本次不会使用猜测的队列。");
+            }
         }
     } else {
         s->hasNextPreview=false; s->previewNextPieces.clear();
