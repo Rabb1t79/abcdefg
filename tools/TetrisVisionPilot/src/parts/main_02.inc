@@ -167,9 +167,34 @@ VisionResult Analyze(const CapturedImage& image, int threshold, int spawnRows = 
             (backgroundNoise.size() * 9) / 10);
         noiseP90 = backgroundNoise[p90];
     }
+
+    // Estimate the lower edge of the foreground-color cluster. Using the
+    // 20th percentile avoids letting one bright HUD/grid artefact set the
+    // threshold, while still adapting when only a few minos are visible.
+    std::vector<int> foregroundContrasts;
+    foregroundContrasts.reserve(COLS * ROWS - backgroundNoise.size());
+    for (int y = 0; y < ROWS; ++y) for (int x = 0; x < COLS; ++x) {
+        if (bucketIds[y][x] != commonBucket) {
+            foregroundContrasts.push_back(ColorDistance(result.colors[y][x], result.background));
+        }
+    }
+    int autoThreshold = 48;
+    if (!foregroundContrasts.empty()) {
+        std::sort(foregroundContrasts.begin(), foregroundContrasts.end());
+        const size_t p20 = (std::min)(foregroundContrasts.size() - 1,
+            foregroundContrasts.size() / 5);
+        const int foregroundP20 = foregroundContrasts[p20];
+        if (foregroundP20 > noiseP90 + 16) {
+            autoThreshold = (std::max)(18,
+                (std::min)(120, (noiseP90 + foregroundP20) / 2));
+        }
+    }
     const int noiseFloor = (std::max)(14, noiseP90 * 2 + 8);
+    const int requestedThreshold = (std::max)(10, (std::min)(160, threshold));
+    // The UI value is now a sensitivity bias around the image-derived value,
+    // not the sole hard cutoff. Default 48 means neutral automatic adaptation.
     const int effectiveThreshold = (std::max)(noiseFloor,
-        (std::max)(10, (std::min)(160, threshold)));
+        (std::min)(160, (autoThreshold * 2 + requestedThreshold) / 3));
     result.usedThreshold = effectiveThreshold;
 
     for (int y = 0; y < ROWS; ++y) for (int x = 0; x < COLS; ++x) {
