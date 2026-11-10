@@ -282,7 +282,7 @@
                 VisionResult rotated=AnalyzeStable(rect,threshold,capError);
                 if(!capError.empty()) { log(L"旋转后复核截图失败："+capError); break; }
                 bool usedGhost=false;
-                if(!ReadPieceColumn(rotated,piece.name,move.rotation,currentX,usedGhost)) {
+                if(!ReadPieceColumn(rotated,piece.name,move.rotation,currentX,usedGhost,piece.minY)) {
                     log(L"旋转后无法通过活动方块或 Ghost 确认目标朝向；取消本次落块并重新规划。");
                     SleepCheck(s->stop,100);
                     continue;
@@ -308,7 +308,7 @@
             if(!capError.empty()) { log(L"横移后位置复核截图失败："+capError); break; }
             int observedX=0;
             bool usedGhost=false;
-            if(!ReadPieceColumn(positioned,piece.name,move.rotation,observedX,usedGhost)) {
+            if(!ReadPieceColumn(positioned,piece.name,move.rotation,observedX,usedGhost,piece.minY)) {
                 log(L"横移后无法通过活动方块或 Ghost 确认当前位置；取消本次硬降，不记录训练样本。");
                 SleepCheck(s->stop,100);
                 continue;
@@ -333,7 +333,7 @@
                 if(!capError.empty()) { log(L"位置纠正后复核截图失败："+capError); break; }
                 int correctedX=0;
                 bool correctedByGhost=false;
-                if(!ReadPieceColumn(corrected,piece.name,move.rotation,correctedX,correctedByGhost) ||
+                if(!ReadPieceColumn(corrected,piece.name,move.rotation,correctedX,correctedByGhost,piece.minY) ||
                    correctedX!=move.x) {
                     log(L"位置纠正后仍未到达目标列；本次取消硬降并重新规划。");
                     SleepCheck(s->stop,100);
