@@ -33,26 +33,42 @@ void StartBot(AppState* s) {
             static_cast<unsigned long long>(modelState.pendingActions));
         if (MessageBoxW(s->hwnd, warning.c_str(), L"存在未结算训练样本", MB_YESNO | MB_ICONWARNING) != IDYES) return;
     }
-    if(s->boardRect.width<=0){MessageBoxW(s->hwnd,L"请先框选棋盘区域。",L"尚未选择棋盘",MB_ICONWARNING);return;}
+    HWND target=SelectedWindow(s);
+    if(!target||!IsWindow(target)){MessageBoxW(s->hwnd,L"请从窗口列表中选择正在运行的游戏。",L"尚未选择游戏窗口",MB_ICONWARNING);return;}
+    std::wstring captureInitError;
+    if (EnsureWindowCapture(target, captureInitError)) {
+        AppendLog(s,L"已绑定游戏窗口；棋盘、NEXT 和 SCORE 区域将跟随窗口移动与缩放。");
+    } else if (!captureInitError.empty()) {
+        AppendLog(s,L"WGC 初始化失败，尝试桌面截图："+captureInitError);
+    }
+    const bool boardRebased=NormalizeCaptureRegion(s->boardRect,target);
+    const bool nextRebased=NormalizeCaptureRegion(s->nextRect,target);
+    const bool scoreRebased=NormalizeCaptureRegion(s->scoreRect,target);
+    if (boardRebased || nextRebased || scoreRebased) SaveConfig(s);
+    if (s->boardRect.width<=0 || s->nextRect.width<=0 ||
+        (autoRetry && (s->scoreRect.width<=0 || s->scoreRect.height<=0))) {
+        AppendLog(s,L"启动前缺少识别区域，自动定位棋盘、NEXT 和 SCORE。");
+        AutoLocateRegions(s);
+        NormalizeCaptureRegion(s->boardRect,target);
+        NormalizeCaptureRegion(s->nextRect,target);
+        NormalizeCaptureRegion(s->scoreRect,target);
+    }
+    if(s->boardRect.width<=0){MessageBoxW(s->hwnd,L"自动定位棋盘失败。请使用“框选棋盘区域”手动设置。",L"尚未找到棋盘",MB_ICONWARNING);return;}
     if (autoRetry) {
         if (s->scoreRect.width < 24 || s->scoreRect.height < 10) {
-            MessageBoxW(s->hwnd,L"自动结算需要先框选 SCORE 数字区域，并通过“测试 SCORE 识别”。",L"尚未设置分数区域",MB_ICONWARNING); return;
+            MessageBoxW(s->hwnd,L"自动定位 SCORE 失败。请手动框选 SCORE 数字区域，并通过识别测试。",L"尚未设置分数区域",MB_ICONWARNING); return;
         }
         if (s->againRect.width < 70 || s->againRect.height < 22) {
             MessageBoxW(s->hwnd,L"自动重开还需要框选 Again 按钮。请在 Game Over 画面点“框选 Again 按钮”，只框住按钮内部。",L"尚未选择 Again 按钮",MB_ICONWARNING); return;
         }
-    }
-    HWND target=SelectedWindow(s);
-    if(!target||!IsWindow(target)){MessageBoxW(s->hwnd,L"请从窗口列表中选择正在运行的游戏。",L"尚未选择游戏窗口",MB_ICONWARNING);return;}
-    if (autoRetry) {
-        if (!IsScreenRectInsideClient(target,s->scoreRect)) {
-            MessageBoxW(s->hwnd,L"SCORE 数字区域不在所选游戏窗口内部；可能移动过游戏窗口。请重新框选 SCORE。",L"SCORE 区域不匹配",MB_ICONWARNING); return;
+        if (!IsCaptureRegionInsideClient(target,s->scoreRect)) {
+            MessageBoxW(s->hwnd,L"SCORE 区域超出当前游戏窗口；请重新自动定位或手动框选。",L"SCORE 区域不匹配",MB_ICONWARNING); return;
         }
         if (!IsScreenRectInsideClient(target,s->againRect)) {
-            MessageBoxW(s->hwnd,L"Again 按钮区域不在所选游戏窗口内部；可能移动过游戏窗口。请重新框选 Again。",L"Again 区域不匹配",MB_ICONWARNING); return;
+            MessageBoxW(s->hwnd,L"Again 按钮区域不在所选游戏窗口内部；请重新框选 Again。",L"Again 区域不匹配",MB_ICONWARNING); return;
         }
         if (!TestScoreRecognition(s)) {
-            MessageBoxW(s->hwnd,L"SCORE 识别测试未通过。请重新框选数字区域，或关闭自动重开后再运行。",L"分数识别未通过",MB_ICONWARNING); return;
+            MessageBoxW(s->hwnd,L"SCORE 识别测试未通过。请重新自动定位或手动框选数字区域。",L"分数识别未通过",MB_ICONWARNING); return;
         }
     }
     TestRecognition(s);
@@ -89,6 +105,7 @@ void CreateUi(AppState* s) {
     s->combo=make(0,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_VSCROLL|WS_TABSTOP,105,54,550,240,ID_WINDOW);
     make(0,L"BUTTON",L"刷新窗口",BS_PUSHBUTTON,665,53,105,28,ID_REFRESH);
     make(0,L"BUTTON",L"框选棋盘区域",BS_PUSHBUTTON,780,53,150,28,ID_SELECT);
+    make(0,L"BUTTON",L"自动定位全部",BS_PUSHBUTTON,935,53,140,28,ID_AUTO_LOCATE);
     s->regionLabel=make(0,L"STATIC",L"棋盘区域：尚未选择",SS_LEFT,20,95,360,24,ID_REGION);
     make(0,L"BUTTON",L"框选 NEXT 区域",BS_PUSHBUTTON,390,92,125,28,ID_SELECT_NEXT);
     s->nextRegionLabel=make(0,L"STATIC",L"NEXT区域：尚未选择",SS_LEFT,530,95,235,24,0);
@@ -167,6 +184,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND:
         switch(LOWORD(wp)){
         case ID_REFRESH:RefreshWindows(s);return 0;
+        case ID_AUTO_LOCATE:AutoLocateRegions(s);return 0;
         case ID_SELECT:StartSelector(s,false);return 0;
         case ID_SELECT_NEXT:StartSelector(s,true);return 0;
         case ID_SELECT_SCORE:StartSelector(s,false,true);return 0;
@@ -190,8 +208,8 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }break;
     case WM_HOTKEY:if(wp==HOTKEY_STOP)StopBot(s);return 0;
     case WM_APP_LOG:{std::unique_ptr<std::wstring> m(reinterpret_cast<std::wstring*>(lp));if(m)AppendLog(s,*m);return 0;}
-    case WM_APP_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->boardRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateRegionLabel(s);SaveConfig(s);AppendLog(s,L"棋盘区域已保存。请确认框选区域正好覆盖 10 列 × 20 行格子内部。");}return 0;}
-    case WM_APP_NEXT_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->nextRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateNextRegionLabel(s);SaveConfig(s);AppendLog(s,L"NEXT 区域已保存。请只包含预览卡片列，不要包含 NEXT 标题。");}return 0;}
-    case WM_APP_SCORE_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->scoreRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateNextRegionLabel(s);SaveConfig(s);AppendLog(s,L"SCORE 数字区域已保存。请点击“测试 SCORE 识别”确认数字能正确识别。");}return 0;}
+    case WM_APP_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){Rect relative{};HWND target=SelectedWindow(s);if(target&&MakeClientRelativeRect(target,*r,relative))s->boardRect=relative;else s->boardRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateRegionLabel(s);SaveConfig(s);AppendLog(s,L"棋盘区域已保存为窗口关联坐标；移动游戏窗口后会自动跟随。");}return 0;}
+    case WM_APP_NEXT_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){Rect relative{};HWND target=SelectedWindow(s);if(target&&MakeClientRelativeRect(target,*r,relative))s->nextRect=relative;else s->nextRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateNextRegionLabel(s);SaveConfig(s);AppendLog(s,L"NEXT 区域已保存为窗口关联坐标；移动游戏窗口后会自动跟随。");}return 0;}
+    case WM_APP_SCORE_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){Rect relative{};HWND target=SelectedWindow(s);if(target&&MakeClientRelativeRect(target,*r,relative))s->scoreRect=relative;else s->scoreRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateNextRegionLabel(s);SaveConfig(s);AppendLog(s,L"SCORE 区域已保存为窗口关联坐标；移动游戏窗口后会自动跟随。");}return 0;}
     case WM_APP_AGAIN_REGION:{std::unique_ptr<RECT> r(reinterpret_cast<RECT*>(lp));if(r){s->againRect={r->left,r->top,r->right-r->left,r->bottom-r->top};UpdateAgainRegionLabel(s);SaveConfig(s);AppendLog(s,L"Again 按钮区域已保存。请只框选按钮内部，不要包含 Stop。");}return 0;}
     case WM_APP_FINISHED:
