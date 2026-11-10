@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <mmsystem.h>
 #include <windowsx.h>
 #include <commctrl.h>
 #include <condition_variable>
