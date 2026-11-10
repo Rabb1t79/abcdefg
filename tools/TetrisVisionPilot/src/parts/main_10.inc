@@ -91,7 +91,7 @@ void StartBot(AppState* s) {
     const double temperature=ReadDoubleEdit(s->temperatureEdit,0.40,0.05,5.0);
     const double learningRate=ReadDoubleEdit(s->learningRateEdit,0.08,0.001,0.50);
     const int tapMs=static_cast<int>(ReadDoubleEdit(s->keyHoldEdit,8,4,10));
-    int keyGapMs=static_cast<int>(ReadDoubleEdit(s->keyGapEdit,8,0,12));
+    int keyGapMs=static_cast<int>(ReadDoubleEdit(s->keyGapEdit,8,0,10));
     if (tapMs + keyGapMs > 20) {
         keyGapMs=(std::max)(0,20-tapMs);
         SetWindowTextW(s->keyGapEdit,Format(L"%d",keyGapMs).c_str());
