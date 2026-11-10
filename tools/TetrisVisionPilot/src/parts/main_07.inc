@@ -186,7 +186,8 @@
                 if (!capError.empty()) { log(L"输入校准后复核截图失败："+capError); break; }
                 if (!afterCalibration.hasActive ||
                     afterCalibration.active.name!=piece.name ||
-                    afterCalibration.active.rotation!=piece.rotation) {
+                    afterCalibration.active.rotation!=piece.rotation ||
+                    afterCalibration.active.minX!=piece.minX) {
                     log(L"输入校准后无法确认原方块仍处于活动状态；取消本次操作，不记录校准动作。");
                     break;
                 }
