@@ -6,17 +6,31 @@ void SleepCheck(const std::atomic<bool>& stop, int milliseconds) {
 }
 
 
-bool TapKey(HWND target, WORD vk, int holdMs, std::wstring& error) {
+class ScopedInputTimerResolution {
+public:
+    ScopedInputTimerResolution() : active_(timeBeginPeriod(1) == TIMERR_NOERROR) {}
+    ~ScopedInputTimerResolution() {
+        if (active_) timeEndPeriod(1);
+    }
+    bool Active() const { return active_; }
+private:
+    bool active_{};
+};
+
+bool TapKey(HWND target, WORD vk, int pressMs, std::wstring& error) {
     if (GetAncestor(GetForegroundWindow(), GA_ROOT) != target) {
         error=L"游戏窗口已失去前台焦点，自动操作已停止，避免按键发到其他窗口。";
         return false;
     }
+    // Every call is one discrete key-down/key-up pulse. Keep the down interval
+    // short enough to avoid the game's held-key auto-repeat path.
+    const int boundedPressMs=(std::max)(4,(std::min)(10,pressMs));
     INPUT input{};
     input.type=INPUT_KEYBOARD;
     input.ki.wVk=vk;
     if (vk==VK_LEFT || vk==VK_RIGHT || vk==VK_UP || vk==VK_DOWN) input.ki.dwFlags=KEYEVENTF_EXTENDEDKEY;
     if (SendInput(1,&input,sizeof(INPUT))!=1) { error=L"发送按键失败；请检查游戏窗口焦点和权限等级。"; return false; }
-    Sleep(holdMs);
+    Sleep(boundedPressMs);
     input.ki.dwFlags |= KEYEVENTF_KEYUP;
     if (SendInput(1,&input,sizeof(INPUT)) != 1) {
         // Make one best-effort release before returning a visible failure.
@@ -501,7 +515,7 @@ void AppendTrainingCsv(AppState* s, int score, double learningRate, double epsil
 
 void BotThread(AppState* s, HWND target, Rect rect, Rect nextRect, int threshold,
                int previewCount, int lookaheadDepth, double epsilon, double temperature,
-               int keyHoldMs, int keyGapMs, int dropWaitMs, Rect scoreRect, Rect againRect,
+               int tapMs, int keyGapMs, int dropWaitMs, Rect scoreRect, Rect againRect,
                double learningRate, bool autoRetry, bool mathMode) {
     auto log=[&](const std::wstring& m){Log(s,m);};
     try {
