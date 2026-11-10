@@ -24,6 +24,11 @@ void StartBot(AppState* s) {
     if(s->worker.joinable())s->worker.join();
     const TrainerSnapshot modelState = s->trainer.Snapshot();
     if (modelState.pendingActions > 0) {
+        if (mathMode) {
+            MessageBoxW(s->hwnd,L"当前还有未结算的模拟智能训练样本。为保持纯数学模式完全不训练，请先切回“模拟智能（学习）”并提交上一局成绩，再启动穷举模式。",
+                L"请先结算训练样本",MB_OK|MB_ICONWARNING);
+            return;
+        }
         const std::wstring warning = Format(L"还有上一轮未提交的 %llu 个动作样本。若继续同一局，可以保留；若上一局已结束，应先提交那一局的最终分数。是否仍要启动？",
             static_cast<unsigned long long>(modelState.pendingActions));
         if (MessageBoxW(s->hwnd, warning.c_str(), L"存在未结算训练样本", MB_YESNO | MB_ICONWARNING) != IDYES) return;
