@@ -191,7 +191,7 @@ WallKickAttemptOutcome TryEmpiricalWallKick(const std::atomic<bool>& stop,
                                             HWND target, const Rect& rect,
                                             int threshold, const Board& board,
                                             const Candidate& piece, int targetRotation,
-                                            int landingX, int leftHoldMs,
+                                            int landingX, int rotationHoldMs, int leftHoldMs,
                                             int rightHoldMs, int keyGapMs,
                                             KickWallLearner& learner,
                                             int& resultingX, std::wstring& logText) {
@@ -214,7 +214,7 @@ WallKickAttemptOutcome TryEmpiricalWallKick(const std::atomic<bool>& stop,
 
     const int beforeKickX=currentX,beforeKickY=currentY;
     std::wstring inputError;
-    if (!TapKey(target,VK_UP,26,inputError)) {
+    if (!TapKey(target,VK_UP,rotationHoldMs,inputError)) {
         logText=L"Wall Kick 旋转输入失败："+inputError;
         return WallKickAttemptOutcome::Unsafe;
     }
