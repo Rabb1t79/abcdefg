@@ -67,6 +67,7 @@ struct VisionResult {
     Rgb background{};
     int occupiedCount{};
     int activeStableSamples{};
+    int usedThreshold{};
 };
 
 struct CapturedImage {
