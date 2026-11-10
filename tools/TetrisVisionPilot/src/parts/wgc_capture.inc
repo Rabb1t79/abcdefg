@@ -221,6 +221,9 @@ bool EnsureWindowCapture(HWND target, std::wstring& error) {
         error = L"未选择有效的游戏窗口。";
         return false;
     }
+    // Capture rectangles are stored in client coordinates; resolve them against
+    // the currently selected HWND on every frame, regardless of WGC/BitBlt mode.
+    g_captureTarget = target;
     if (IsIconic(target) || !IsWindowVisible(target)) {
         error = L"目标游戏窗口不可见或已最小化；WGC 需要窗口保持可见。";
         return false;
