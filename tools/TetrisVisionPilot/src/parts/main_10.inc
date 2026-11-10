@@ -50,9 +50,11 @@ void StartBot(AppState* s) {
     const bool nextRebased=NormalizeCaptureRegion(s->nextRect,target);
     const bool scoreRebased=NormalizeCaptureRegion(s->scoreRect,target);
     if (boardRebased || nextRebased || scoreRebased) SaveConfig(s);
-    if (s->boardRect.width<=0 || s->nextRect.width<=0 ||
-        (autoRetry && (s->scoreRect.width<=0 || s->scoreRect.height<=0))) {
-        AppendLog(s,L"启动前缺少识别区域，自动定位棋盘、NEXT 和 SCORE。");
+    const bool boardRegionValid=IsCaptureRegionInsideClient(target,s->boardRect);
+    const bool nextRegionValid=IsCaptureRegionInsideClient(target,s->nextRect);
+    const bool scoreRegionValid=IsCaptureRegionInsideClient(target,s->scoreRect);
+    if (!boardRegionValid || !nextRegionValid || (autoRetry && !scoreRegionValid)) {
+        AppendLog(s,L"发现识别区域缺失、失效或超出当前窗口，自动重新定位棋盘、NEXT 和 SCORE。");
         AutoLocateRegions(s);
         NormalizeCaptureRegion(s->boardRect,target);
         NormalizeCaptureRegion(s->nextRect,target);
