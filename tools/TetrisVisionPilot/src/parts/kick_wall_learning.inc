@@ -208,6 +208,22 @@ WallKickAttemptOutcome TryEmpiricalWallKick(const std::atomic<bool>& stop,
     if (!MoveActiveToColumnVerified(stop,target,rect,threshold,board,piece.name,
             piece.rotation,preX,leftHoldMs,rightHoldMs,keyGapMs,
             currentX,currentY,moveError)) {
+        if (currentX==piece.minX &&
+            moveError==L"预旋转横移路径被墙壁或堆叠阻挡。") {
+            logText=L"墙边预定位路径被阻挡；不尝试踢墙，改用普通旋转。";
+            return WallKickAttemptOutcome::NotApplicable;
+        }
+        if (currentX!=piece.minX) {
+            std::wstring restoreError;
+            if (MoveActiveToColumnVerified(stop,target,rect,threshold,board,piece.name,
+                    piece.rotation,piece.minX,leftHoldMs,rightHoldMs,keyGapMs,
+                    currentX,currentY,restoreError)) {
+                logText=L"墙边预定位路径中途受阻，已复位；改用普通旋转。";
+                return WallKickAttemptOutcome::FailedAndRestored;
+            }
+            logText=L"墙边预定位路径受阻且无法复位："+restoreError;
+            return WallKickAttemptOutcome::Unsafe;
+        }
         logText=L"Wall Kick 预定位未完成："+moveError;
         return WallKickAttemptOutcome::Unsafe;
     }
