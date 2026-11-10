@@ -336,6 +336,7 @@ void SaveConfig(AppState* s) {
     if (s->learningRateEdit) { GetWindowTextW(s->learningRateEdit,value,_countof(value)); WritePrivateProfileStringW(L"Training",L"LearningRate",value,s->configPath.c_str()); }
     if (s->epsilonEdit) { GetWindowTextW(s->epsilonEdit,value,_countof(value)); WritePrivateProfileStringW(L"Training",L"ExplorationRate",value,s->configPath.c_str()); }
     if (s->temperatureEdit) { GetWindowTextW(s->temperatureEdit,value,_countof(value)); WritePrivateProfileStringW(L"Training",L"Temperature",value,s->configPath.c_str()); }
+    if (s->modeCombo) WritePrivateProfileStringW(L"Automation",L"Mode",SendMessageW(s->modeCombo,CB_GETCURSEL,0,0)==1?L"1":L"0",s->configPath.c_str());
 }
 
 void LoadConfig(AppState* s) {
@@ -365,6 +366,7 @@ void LoadConfig(AppState* s) {
     GetPrivateProfileStringW(L"Training",L"LearningRate",L"0.08",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->learningRateEdit,value);
     GetPrivateProfileStringW(L"Training",L"ExplorationRate",L"5",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->epsilonEdit,value);
     GetPrivateProfileStringW(L"Training",L"Temperature",L"0.40",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->temperatureEdit,value);
+    SendMessageW(s->modeCombo,CB_SETCURSEL,GetPrivateProfileIntW(L"Automation",L"Mode",0,s->configPath.c_str())==1?1:0,0);
 }
 
 void UpdateRegionLabel(AppState* s) {
