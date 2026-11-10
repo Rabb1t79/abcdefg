@@ -20,6 +20,7 @@
 void StartBot(AppState* s) {
     if(s->running.load())return;
     const bool autoRetry=SendMessageW(s->autoRetryCheck,BM_GETCHECK,0,0)==BST_CHECKED;
+    const bool mathMode=SendMessageW(s->modeCombo,CB_GETCURSEL,0,0)==1;
     if(s->worker.joinable())s->worker.join();
     const TrainerSnapshot modelState = s->trainer.Snapshot();
     if (modelState.pendingActions > 0) {
@@ -65,7 +66,7 @@ void StartBot(AppState* s) {
     const int keyGapMs=static_cast<int>(ReadDoubleEdit(s->keyGapEdit,12,0,80));
     const int dropWaitMs=static_cast<int>(ReadDoubleEdit(s->dropWaitEdit,190,80,1000));
     SaveConfig(s);
-    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature,keyHoldMs,keyGapMs,dropWaitMs,s->scoreRect,s->againRect,learningRate,autoRetry); }
+    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature,keyHoldMs,keyGapMs,dropWaitMs,s->scoreRect,s->againRect,learningRate,autoRetry,mathMode); }
     catch(...) { s->running.store(false);EnableWindow(s->startButton,TRUE);EnableWindow(s->stopButton,FALSE);SetWindowTextW(s->statusLabel,L"状态：启动失败");MessageBoxW(s->hwnd,L"无法创建自动控制线程。",L"启动失败",MB_ICONERROR); }
 }
 
@@ -91,6 +92,11 @@ void CreateUi(AppState* s) {
     make(0,L"STATIC",L"颜色差阈值：",SS_LEFT,20,130,90,24,0);
     s->thresholdEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"48",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,110,126,55,26,ID_THRESHOLD);
     make(0,L"STATIC",L"（背景阈值）",SS_LEFT,175,130,100,24,0);
+    make(0,L"STATIC",L"模式：",SS_LEFT,300,130,45,24,0);
+    s->modeCombo=make(0,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_TABSTOP,350,126,215,120,ID_MODE);
+    SendMessageW(s->modeCombo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"模拟智能（学习）"));
+    SendMessageW(s->modeCombo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"纯数学穷举"));
+    SendMessageW(s->modeCombo,CB_SETCURSEL,0,0);
     make(0,L"STATIC",L"NEXT块数：",SS_LEFT,580,130,65,24,0);
     s->nextCountEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"6",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,650,126,38,26,ID_NEXT_COUNT);
     make(0,L"STATIC",L"前瞻NEXT：",SS_LEFT,715,130,65,24,0);
@@ -136,7 +142,7 @@ void CreateUi(AppState* s) {
     SetWindowLongPtrW(s->preview,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(s));
     AppendLog(s,L"程序已就绪。请选择游戏窗口，分别框选棋盘和 NEXT 预览列，再测试识别。");
     AppendLog(s,L"训练说明：首次使用会载入规则生成的基础示范；每次落块记录动作样本；运行中自动缓存 SCORE，识别 GAME OVER 后自动结算（也可停止后手动提交成绩）。");
-    AppendLog(s,L"算法是可解释的线性策略模型；8 个权重会影响多步搜索评分。");
+    AppendLog(s,L"模式可切换：模拟智能会使用基础示范、策略学习和经验记忆；纯数学穷举会遍历当前方块与最多两个 NEXT 方块的合法落点，不进行训练。");
     AppendLog(s,L"温和训练模式：成绩高于基准时做正向更新；低于基准时仅保存诊断记录，不执行负向权重更新。");
     AppendLog(s,L"输入节奏可在 NEXT 参数右侧调整：按住/间隔/落稳（毫秒）。请从默认值开始逐步加快。");
     AppendLog(s,L"自动结算：SCORE 优先使用游戏原生数字模板，匹配不确定时回退 OCR；GAME OVER 使用 OCR 检测。识别后冻结分数，勾选自动重开时会点击你框选的 Again 按钮。");
