@@ -169,8 +169,9 @@ void TestRecognition(AppState* s) {
     }
     const bool boardRegionValid = target && IsCaptureRegionInsideClient(target, s->boardRect);
     const bool nextRegionValid = target && IsCaptureRegionInsideClient(target, s->nextRect);
+    const bool scoreRegionValid = target && IsCaptureRegionInsideClient(target, s->scoreRect);
     if (s->boardRect.width <= 0 || s->nextRect.width <= 0 ||
-        !boardRegionValid || !nextRegionValid) {
+        !boardRegionValid || !nextRegionValid || !scoreRegionValid) {
         AppendLog(s, L"棋盘或 NEXT 区域未设置，正在自动定位全部识别区域。");
         AutoLocateRegions(s);
         if (target) {
