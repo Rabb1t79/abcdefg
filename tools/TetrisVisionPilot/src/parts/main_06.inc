@@ -494,6 +494,9 @@ bool ClickAgainButton(HWND target, const Rect& buttonRect, std::wstring& error) 
     return true;
 }
 
+#include "input_calibration.inc"
+#include "kick_wall_learning.inc"
+
 void AppendTrainingCsv(AppState* s, int score, double learningRate, double epsilon, double temperature);
 
 void BotThread(AppState* s, HWND target, Rect rect, Rect nextRect, int threshold,
