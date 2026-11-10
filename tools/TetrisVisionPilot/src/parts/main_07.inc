@@ -1,7 +1,13 @@
         SetForegroundWindow(target);
         Sleep(250);
         if(GetAncestor(GetForegroundWindow(),GA_ROOT)!=target) throw std::runtime_error("无法将游戏窗口切换到前台。请先手动点一下游戏窗口，再重新启动自动操作。");
-        log(L"自动控制已启动。F8 或界面上的“停止”可紧急停止。请勿切换到其他窗口。");
+        log(mathMode ? L"纯数学穷举模式已启动：不更新策略权重或写入训练样本。" : L"模拟智能学习模式已启动。F8 或界面上的“停止”可紧急停止。请勿切换到其他窗口。");
+        std::wstring kickPath=s->configPath;
+        const size_t configSlash=kickPath.find_last_of(L"\\/");
+        kickPath=(configSlash==std::wstring::npos?L".\\":kickPath.substr(0,configSlash+1))+L"TetrisVisionPilot-kick-wall.csv";
+        KickWallLearner kickLearner;
+        kickLearner.Load(kickPath);
+        log(Format(L"已载入 Wall Kick 实测档案：%llu 条观测。",static_cast<unsigned long long>(kickLearner.Attempts())));
         tesseract::TessBaseAPI ocr;
         const std::string tessPath = WideToUtf8(s->tessdataPath);
         const int ocrInit = tessPath.empty() ? -1 : ocr.Init(tessPath.c_str(), "eng", tesseract::OEM_LSTM_ONLY);
@@ -234,12 +240,36 @@
             log(Format(L"当前 %c 型（稳定采样 %d/3）；NEXT=[%s]；前瞻 %d 块；目标旋转 %d、列 %d，路径评分 %.2f。",
                 piece.name,check.activeStableSamples,FormatNextQueueConfidence(queue).c_str(),decision.searchedNextPieces,
                 move.rotation,move.x,move.score));
-            for(int i=0;i<rotateSteps && !s->stop.load();++i) {
-                std::wstring err; if(!TapKey(target,VK_UP,keyHoldMs,err)) throw std::runtime_error("旋转按键失败或焦点丢失。");
-                SleepCheck(s->stop,keyGapMs);
-            }
-            if(s->stop.load())break;
             int currentX=piece.minX;
+            bool rotatedWithWallKick=false;
+            if (!mathMode && rotateSteps==1 && piece.minY<=4 &&
+                ExtractFeatures(board,0).value[3] <= 0.45) {
+                int kickedX=piece.minX;
+                std::wstring kickMessage;
+                const WallKickAttemptOutcome kickOutcome=TryEmpiricalWallKick(
+                    s->stop,target,rect,threshold,board,piece,move.rotation,move.x,
+                    keyHoldMs,leftKeyHoldMs,rightKeyHoldMs,keyGapMs,
+                    kickLearner,kickedX,kickMessage);
+                if (kickOutcome==WallKickAttemptOutcome::Unsafe) {
+                    log(L"Wall Kick 尝试未能安全完成："+kickMessage+L" 自动操作已停止，未硬降。");
+                    break;
+                }
+                if (kickOutcome==WallKickAttemptOutcome::Applied) {
+                    currentX=kickedX;
+                    rotatedWithWallKick=true;
+                    rotateSteps=0;
+                    log(kickMessage);
+                } else if (kickOutcome==WallKickAttemptOutcome::FailedAndRestored) {
+                    log(kickMessage);
+                }
+            }
+            if (!rotatedWithWallKick) {
+                for(int i=0;i<rotateSteps && !s->stop.load();++i) {
+                    std::wstring err; if(!TapKey(target,VK_UP,keyHoldMs,err)) throw std::runtime_error("旋转按键失败或焦点丢失。");
+                    SleepCheck(s->stop,keyGapMs);
+                }
+                if(s->stop.load())break;
+            }
             if(rotateSteps>0) {
                 SleepCheck(s->stop,55);
                 if(s->stop.load())break;
