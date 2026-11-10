@@ -98,8 +98,14 @@ bool TestScoreRecognition(AppState* s) {
     } else if (!captureInitError.empty()) {
         AppendLog(s, L"WGC 初始化失败，将回退桌面截图（可能受遮挡影响）："+captureInitError);
     }
+    if (target && NormalizeCaptureRegion(s->scoreRect, target)) SaveConfig(s);
     if (s->scoreRect.width < 24 || s->scoreRect.height < 10) {
-        AppendLog(s, L"尚未选择 SCORE 数字区域。请只框住游戏中实际分数的数字。");
+        AppendLog(s, L"未设置 SCORE 区域，正在按 Tetris Online 布局自动定位。");
+        AutoLocateRegions(s);
+        if (target && NormalizeCaptureRegion(s->scoreRect, target)) SaveConfig(s);
+    }
+    if (s->scoreRect.width < 24 || s->scoreRect.height < 10) {
+        AppendLog(s, L"SCORE 区域仍不可用；请手动框选 SCORE 数字区域。");
         return false;
     }
     tesseract::TessBaseAPI ocr;
@@ -154,7 +160,21 @@ void TestRecognition(AppState* s) {
     } else if (!captureInitError.empty()) {
         AppendLog(s, L"WGC 初始化失败，将回退桌面截图（可能受遮挡影响）："+captureInitError);
     }
-    if(s->boardRect.width<=0){MessageBoxW(s->hwnd,L"请先点击“框选棋盘区域”。",L"尚未选择棋盘",MB_ICONWARNING);return;}
+    if (target) {
+        const bool boardRebased = NormalizeCaptureRegion(s->boardRect, target);
+        const bool nextRebased = NormalizeCaptureRegion(s->nextRect, target);
+        if (boardRebased || nextRebased) SaveConfig(s);
+    }
+    if (s->boardRect.width <= 0 || s->nextRect.width <= 0) {
+        AppendLog(s, L"棋盘或 NEXT 区域未设置，正在自动定位全部识别区域。");
+        AutoLocateRegions(s);
+        if (target) {
+            NormalizeCaptureRegion(s->boardRect, target);
+            NormalizeCaptureRegion(s->nextRect, target);
+            NormalizeCaptureRegion(s->scoreRect, target);
+        }
+    }
+    if(s->boardRect.width<=0){MessageBoxW(s->hwnd,L"自动定位失败，请尝试手动框选棋盘区域。",L"尚未找到棋盘",MB_ICONWARNING);return;}
     if(s->boardRect.width<80 || s->boardRect.height<160) {
         MessageBoxW(s->hwnd,Format(L"棋盘区域只有 %d × %d px；10×20 棋盘至少需要 80 × 160 px。请重新框选棋盘。",
             s->boardRect.width,s->boardRect.height).c_str(),L"棋盘区域尺寸不正确",MB_ICONWARNING);
@@ -164,5 +184,7 @@ void TestRecognition(AppState* s) {
     VisionResult result=AnalyzeStable(s->boardRect,ReadThreshold(s),error);
     if(!error.empty()){MessageBoxW(s->hwnd,error.c_str(),L"截图失败",MB_ICONERROR);AppendLog(s,error);return;}
     s->previewData=result;s->hasPreview=true;InvalidateRect(s->preview,nullptr,TRUE);
-    if(result.hasActive)AppendLog(s,Format(L"识别测试：占用格 %d；当前方块 %c 型，旋转 %d，位置列 %d、行 %d；稳定采样 %d/3。",result.occupiedCount,result.active.name,result.active.rotation,result.active.minX,result.active.minY,result.activeStableSamples));
-    else AppendLog(s,Format(L"识别测试：占用格 %d；当前方块未稳定识别（三帧一致数 %d/3）。请稍等方块落稳后再测试，或检查棋盘区域和颜色阈值。",result.occupiedCount,result.activeStableSamples));
+    if(result.hasActive)AppendLog(s,Format(L"识别测试：占用格 %d；自适应阈值 %d；当前方块 %c 型，旋转 %d，位置列 %d、行 %d；轨迹采样 %d/3。",
+        result.occupiedCount,result.usedThreshold,result.active.name,result.active.rotation,result.active.minX,result.active.minY,result.activeStableSamples));
+    else AppendLog(s,Format(L"识别测试：占用格 %d；自适应阈值 %d；当前方块暂未锁定到活动轨迹（三帧轨迹匹配 %d/3）。程序会继续追踪，不把一次视觉丢帧当作按键失败。",
+        result.occupiedCount,result.usedThreshold,result.activeStableSamples));
