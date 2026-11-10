@@ -30,7 +30,7 @@ bool TapKey(HWND target, WORD vk, int holdMs, std::wstring& error) {
 struct AppState {
     HWND hwnd{}, combo{}, regionLabel{}, nextRegionLabel{}, nextStatusLabel{}, nextCountEdit{}, lookaheadEdit{};
     HWND scoreRegionLabel{}, scoreStatusLabel{}, againRegionButton{};
-    HWND thresholdEdit{}, logEdit{}, preview{}, startButton{}, stopButton{}, statusLabel{};
+    HWND thresholdEdit{}, logEdit{}, preview{}, startButton{}, stopButton{}, statusLabel{}, modeCombo{};
     HWND scoreEdit{}, learningRateEdit{}, epsilonEdit{}, temperatureEdit{}, trainingStatsLabel{};
     HWND keyHoldEdit{}, keyGapEdit{}, dropWaitEdit{}, autoRetryCheck{};
     std::wstring tessdataPath{};
@@ -499,7 +499,7 @@ void AppendTrainingCsv(AppState* s, int score, double learningRate, double epsil
 void BotThread(AppState* s, HWND target, Rect rect, Rect nextRect, int threshold,
                int previewCount, int lookaheadDepth, double epsilon, double temperature,
                int keyHoldMs, int keyGapMs, int dropWaitMs, Rect scoreRect, Rect againRect,
-               double learningRate, bool autoRetry) {
+               double learningRate, bool autoRetry, bool mathMode) {
     auto log=[&](const std::wstring& m){Log(s,m);};
     try {
         if(!IsWindow(target)) throw std::runtime_error("所选游戏窗口已关闭。");
