@@ -99,6 +99,7 @@ void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
     const std::vector<ActionCandidate> actions = EnumerateActions(board, sequence[depth]);
     nodes += static_cast<std::uint64_t>(actions.size());
     if (actions.empty()) {
+        if (depth == 0) return; // No legal move for the current piece is a top-out.
         ExhaustiveEvaluation evaluation = EvaluateExhaustiveBoard(board, placed, totalLines);
         evaluation.rotationTaps = rotationTaps;
         evaluation.horizontalTaps = horizontalTaps;
