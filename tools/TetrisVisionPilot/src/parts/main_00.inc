@@ -91,6 +91,7 @@ constexpr int ID_SELECT_SCORE = 1027;
 constexpr int ID_TEST_SCORE = 1028;
 constexpr int ID_SELECT_AGAIN = 1029;
 constexpr int ID_MODE = 1030;
+constexpr int ID_AUTO_LOCATE = 1031;
 constexpr int HOTKEY_STOP = 1;
 constexpr UINT WM_APP_SCORE_RECORDED = WM_APP + 6;
 
