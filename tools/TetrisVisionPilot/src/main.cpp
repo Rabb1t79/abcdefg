@@ -7,6 +7,7 @@
 #include "parts/main_05.inc"
 #include "parts/main_05_math.inc"
 #include "parts/main_06.inc"
+#include "parts/input_calibration.inc"
 #include "parts/main_07.inc"
 #include "parts/main_08.inc"
 #include "parts/main_09.inc"
