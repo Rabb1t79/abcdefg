@@ -1,5 +1,6 @@
-// Opening input calibration is deliberately isolated from PolicyTrainer:
-// calibration movements are restored before planning and never become samples.
+// Opening input calibration is deliberately isolated from PolicyTrainer.
+// It tests discrete key taps only: one key-down, a short release interval, and
+// one key-up. It never calibrates by holding a direction key for multiple cells.
 enum class CalibrationOutcome {
     Success,
     Skipped,
@@ -8,8 +9,8 @@ enum class CalibrationOutcome {
 };
 
 struct InputCalibrationResult {
-    int leftHoldMs{};
-    int rightHoldMs{};
+    int leftTapMs{};
+    int rightTapMs{};
     bool leftCalibrated{};
     bool rightCalibrated{};
 };
@@ -33,46 +34,32 @@ bool ReadCalibrationPiece(HWND target, const Rect& rect, int threshold,
 bool RestoreCalibrationColumn(const std::atomic<bool>& stop, HWND target,
                               const Rect& rect, int threshold, char piece,
                               int rotation, int targetX, int& currentX,
-                              int& currentY, int preferredHoldMs,
+                              int& currentY, int tapMs, int keyGapMs,
                               std::wstring& error) {
-    const int correctionHolds[] = {
-        (std::max)(8, preferredHoldMs / 2),
-        (std::max)(8, preferredHoldMs - 5),
-        (std::max)(8, preferredHoldMs)
-    };
-    for (int step = 0; step < 8 && currentX != targetX; ++step) {
+    for (int step = 0; step < 10 && currentX != targetX; ++step) {
         if (stop.load()) { error = L"用户请求停止。"; return false; }
         const int direction = targetX > currentX ? 1 : -1;
         const WORD key = direction > 0 ? VK_RIGHT : VK_LEFT;
-        bool advanced = false;
-        for (int holdMs : correctionHolds) {
-            std::wstring inputError;
-            if (!TapKey(target,key,holdMs,inputError)) { error=inputError; return false; }
-            SleepCheck(stop,55);
-            if (stop.load()) { error=L"用户请求停止。"; return false; }
-            int observedX=0, observedY=0;
-            if (!ReadCalibrationPiece(target,rect,threshold,piece,rotation,
-                                      observedX,observedY,error)) return false;
-            const int delta = observedX - currentX;
-            if (delta == 0) continue;
-            // A correction pulse must move exactly one cell toward the saved
-            // column. Any overshoot is treated as unsafe rather than guessed.
-            if (delta != direction) {
-                error = L"校准复位时按键移动距离不符合单格预期；已中止自动操作。";
-                return false;
-            }
-            currentX = observedX;
-            currentY = observedY;
-            advanced = true;
-            break;
-        }
-        if (!advanced) {
-            error = L"无法把方块可靠地复位到校准前的位置；已中止自动操作。";
+        std::wstring inputError;
+        if (!TapKey(target,key,tapMs,inputError)) { error=inputError; return false; }
+        SleepCheck(stop,keyGapMs);
+        if (stop.load()) { error=L"用户请求停止。"; return false; }
+
+        int observedX=0, observedY=0;
+        if (!ReadCalibrationPiece(target,rect,threshold,piece,rotation,
+                                  observedX,observedY,error)) return false;
+        const int delta = observedX - currentX;
+        // A restoration pulse must move exactly one cell toward the saved
+        // column. Any overshoot is treated as unsafe rather than guessed.
+        if (delta != direction) {
+            error = L"校准复位时单次点按未移动恰好一格；已中止自动操作。";
             return false;
         }
+        currentX = observedX;
+        currentY = observedY;
     }
     if (currentX != targetX) {
-        error = L"校准复位超过最大修正次数；已中止自动操作。";
+        error = L"校准复位超过最大点按次数；已中止自动操作。";
         return false;
     }
     return true;
@@ -82,8 +69,8 @@ CalibrationOutcome CalibrateOneDirection(const std::atomic<bool>& stop,
                                          HWND target, const Rect& rect,
                                          int threshold, const Board& board,
                                          const Candidate& startPiece, WORD directionKey,
-                                         int baseHoldMs, int& selectedHoldMs,
-                                         std::wstring& note) {
+                                         int baseTapMs, int keyGapMs,
+                                         int& selectedTapMs, std::wstring& note) {
     const auto rotations = g_rotations.find(startPiece.name);
     if (rotations == g_rotations.end() ||
         startPiece.rotation < 0 ||
@@ -100,25 +87,29 @@ CalibrationOutcome CalibrateOneDirection(const std::atomic<bool>& stop,
         return CalibrationOutcome::Skipped;
     }
 
-    const int holds[] = {
-        (std::max)(8,(std::min)(80,baseHoldMs)),
-        (std::max)(8,(std::min)(80,baseHoldMs+8)),
-        (std::max)(8,(std::min)(80,baseHoldMs+16))
+    // Try only short, fully released pulses. Each candidate is a separate tap;
+    // no candidate holds the direction key long enough to request auto-repeat.
+    const int tapCandidates[] = {
+        (std::max)(4,(std::min)(10,baseTapMs)),
+        8,
+        10
     };
-    int originalX=startPiece.minX;
+    const int originalX=startPiece.minX;
     int currentX=originalX;
     int currentY=startPiece.minY;
+    int chosenTapMs=0;
     bool moved=false;
-    int chosen=baseHoldMs;
-    for (int holdMs : holds) {
+
+    for (int tapMs : tapCandidates) {
         if (stop.load()) { note=L"用户请求停止。"; return CalibrationOutcome::Unsafe; }
         std::wstring inputError;
-        if (!TapKey(target,directionKey,holdMs,inputError)) {
+        if (!TapKey(target,directionKey,tapMs,inputError)) {
             note=inputError;
             return CalibrationOutcome::Unsafe;
         }
-        SleepCheck(stop,55);
+        SleepCheck(stop,keyGapMs);
         if (stop.load()) { note=L"用户请求停止。"; return CalibrationOutcome::Unsafe; }
+
         int observedX=0, observedY=0;
         std::wstring visionError;
         if (!ReadCalibrationPiece(target,rect,threshold,startPiece.name,
@@ -127,71 +118,68 @@ CalibrationOutcome CalibrateOneDirection(const std::atomic<bool>& stop,
             return CalibrationOutcome::Unsafe;
         }
         const int delta=observedX-originalX;
-        if (delta==0) {
-            currentX=observedX;
-            currentY=observedY;
-            continue;
-        }
+        currentX=observedX;
+        currentY=observedY;
+        if (delta==0) continue;
         if ((delta>0?1:-1)!=dx) {
-            note=L"校准按键的实际移动方向与预期不一致；停止以避免误操作。";
+            note=L"校准点按的实际移动方向与预期不一致；停止以避免误操作。";
             return CalibrationOutcome::Unsafe;
         }
         moved=true;
-        currentX=observedX;
-        currentY=observedY;
-        chosen=holdMs;
+        chosenTapMs=tapMs;
         break;
     }
 
     if (!moved) {
         note=directionKey==VK_LEFT
-            ? L"左移短按未检测到有效位移，暂时保留原按键时长。"
-            : L"右移短按未检测到有效位移，暂时保留原按键时长。";
+            ? L"左方向键的短点按未触发移动；本方向未通过校准。"
+            : L"右方向键的短点按未触发移动；本方向未通过校准。";
         return CalibrationOutcome::Unresponsive;
     }
 
-    // A one-cell result is the only measurement accepted as a calibrated tap.
-    // Longer movement is still restored, but not used to tune the controller.
-    const bool exactOneCell = std::abs(currentX-originalX)==1;
+    // Exactly one cell per pulse is the only accepted calibration result.
+    const bool exactOneCell=std::abs(currentX-originalX)==1;
     std::wstring restoreError;
     if (!RestoreCalibrationColumn(stop,target,rect,threshold,startPiece.name,
-                                   startPiece.rotation,originalX,currentX,currentY,
-                                   chosen,restoreError)) {
+                                  startPiece.rotation,originalX,currentX,currentY,
+                                  chosenTapMs,keyGapMs,restoreError)) {
         note=restoreError;
         return CalibrationOutcome::Unsafe;
     }
     if (!exactOneCell) {
-        note=L"单次按键触发了多格移动；位置已复原，但本次数据不用于校准。";
+        note=L"单次短点按移动超过一格；已通过离散点按复位，但本方向不用于校准。";
         return CalibrationOutcome::Unresponsive;
     }
-    selectedHoldMs=chosen;
-    note=Format(L"%s短按校准成功：%d ms，实际移动 1 格；已复位。",
-        directionKey==VK_LEFT?L"左":L"右",chosen);
+
+    selectedTapMs=chosenTapMs;
+    note=Format(L"%s离散点按校准成功：按下 %d ms，单次移动 1 格；已复位。",
+        directionKey==VK_LEFT?L"左":L"右",chosenTapMs);
     return CalibrationOutcome::Success;
 }
 
 CalibrationOutcome CalibrateOpeningInput(const std::atomic<bool>& stop,
                                          HWND target, const Rect& rect, int threshold,
                                          const VisionResult& initial,
-                                         const Board& board, int baseHoldMs,
+                                         const Board& board, int baseTapMs,
+                                         int keyGapMs,
                                          InputCalibrationResult& result,
                                          std::wstring& summary) {
-    result.leftHoldMs=baseHoldMs;
-    result.rightHoldMs=baseHoldMs;
+    result.leftTapMs=baseTapMs;
+    result.rightTapMs=baseTapMs;
     if (!initial.hasActive || initial.active.minY>2 ||
         ExtractFeatures(board,0).value[3] > 0.55) {
-        summary=L"当前方块已离开安全出生区或棋盘堆叠较高，跳过开局移动校准，沿用原按键时长。";
+        summary=L"当前方块已离开安全出生区或棋盘堆叠较高，跳过开局点按校准，沿用默认短脉冲。";
         return CalibrationOutcome::Skipped;
     }
 
     Candidate current=initial.active;
     std::wstring leftNote,rightNote;
     const CalibrationOutcome left=CalibrateOneDirection(stop,target,rect,threshold,
-        board,current,VK_LEFT,baseHoldMs,result.leftHoldMs,leftNote);
+        board,current,VK_LEFT,baseTapMs,keyGapMs,result.leftTapMs,leftNote);
     if (left==CalibrationOutcome::Unsafe) { summary=leftNote; return left; }
 
-    // Read the current vertical position again because the game continues to
-    // apply gravity while the calibration pulse and image verification run.
+    // Read the current vertical position again because gravity continues while
+    // the calibration pulse and visual verification run.
     std::wstring captureError;
     int x=0,y=0;
     if (!ReadCalibrationPiece(target,rect,threshold,current.name,current.rotation,
@@ -203,7 +191,7 @@ CalibrationOutcome CalibrateOpeningInput(const std::atomic<bool>& stop,
     current.minY=y;
     const Board currentBoard=board;
     const CalibrationOutcome right=CalibrateOneDirection(stop,target,rect,threshold,
-        currentBoard,current,VK_RIGHT,baseHoldMs,result.rightHoldMs,rightNote);
+        currentBoard,current,VK_RIGHT,baseTapMs,keyGapMs,result.rightTapMs,rightNote);
     if (right==CalibrationOutcome::Unsafe) { summary=rightNote; return right; }
 
     result.leftCalibrated=left==CalibrationOutcome::Success;
