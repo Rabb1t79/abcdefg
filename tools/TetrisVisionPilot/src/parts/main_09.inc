@@ -98,8 +98,10 @@ bool TestScoreRecognition(AppState* s) {
     } else if (!captureInitError.empty()) {
         AppendLog(s, L"WGC 初始化失败，将回退桌面截图（可能受遮挡影响）："+captureInitError);
     }
-    if (target && NormalizeCaptureRegion(s->scoreRect, target)) SaveConfig(s);
-    if (s->scoreRect.width < 24 || s->scoreRect.height < 10) {
+    const bool scoreRegionValid = target && NormalizeCaptureRegion(s->scoreRect, target) &&
+        IsCaptureRegionInsideClient(target, s->scoreRect);
+    if (scoreRegionValid) SaveConfig(s);
+    if (!scoreRegionValid || s->scoreRect.width < 24 || s->scoreRect.height < 10) {
         AppendLog(s, L"未设置 SCORE 区域，正在按 Tetris Online 布局自动定位。");
         AutoLocateRegions(s);
         if (target && NormalizeCaptureRegion(s->scoreRect, target)) SaveConfig(s);
@@ -165,7 +167,10 @@ void TestRecognition(AppState* s) {
         const bool nextRebased = NormalizeCaptureRegion(s->nextRect, target);
         if (boardRebased || nextRebased) SaveConfig(s);
     }
-    if (s->boardRect.width <= 0 || s->nextRect.width <= 0) {
+    const bool boardRegionValid = target && IsCaptureRegionInsideClient(target, s->boardRect);
+    const bool nextRegionValid = target && IsCaptureRegionInsideClient(target, s->nextRect);
+    if (s->boardRect.width <= 0 || s->nextRect.width <= 0 ||
+        !boardRegionValid || !nextRegionValid) {
         AppendLog(s, L"棋盘或 NEXT 区域未设置，正在自动定位全部识别区域。");
         AutoLocateRegions(s);
         if (target) {
