@@ -521,6 +521,8 @@ void BotThread(AppState* s, HWND target, Rect rect, Rect nextRect, int threshold
     ScopedInputTimerResolution inputTimer;
     if (!inputTimer.Active())
         log(L"提示：无法将系统定时器调整到 1 ms；短点按仍会发送 key-down/key-up，但实际间隔可能受 Windows 调度精度影响。");
+    log(Format(L"输入模式：离散点按；单次按下 %d ms、释放间隔 %d ms，单次点按周期不超过 20 ms；横移按目标列差值发送对应次数。",
+        tapMs,keyGapMs));
     try {
         if(!IsWindow(target)) throw std::runtime_error("所选游戏窗口已关闭。");
         ShowWindow(target,SW_RESTORE);
