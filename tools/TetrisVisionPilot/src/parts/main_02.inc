@@ -445,7 +445,7 @@ VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error)
                 if (candidate.name == stable.ghost.name &&
                     candidate.rotation == stable.ghost.rotation &&
                     candidate.minX == stable.ghost.minX &&
-                    candidate.minY <= 7) {
+                    candidate.minY < ROWS) {
                     matching = &candidate;
                     ++matches;
                 }
@@ -477,7 +477,7 @@ VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error)
             if (candidate.name == stable.ghost.name &&
                 candidate.rotation == stable.ghost.rotation &&
                 candidate.minX == stable.ghost.minX &&
-                candidate.minY <= 7) {
+                candidate.minY < ROWS) {
                 match = &candidate;
                 ++matches;
             }
