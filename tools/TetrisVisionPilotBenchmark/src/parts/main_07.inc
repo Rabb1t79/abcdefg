@@ -1,17 +1,31 @@
         SetForegroundWindow(target);
         Sleep(250);
         if(GetAncestor(GetForegroundWindow(),GA_ROOT)!=target) throw std::runtime_error("无法将游戏窗口切换到前台。请先手动点一下游戏窗口，再重新启动自动操作。");
-        log(mathMode ? L"纯数学穷举模式已启动：不更新策略权重或写入训练样本。" : L"模拟智能学习模式已启动。F8 或界面上的“停止”可紧急停止。请勿切换到其他窗口。");
+        log(gpuMode ? L"GPU Direct3D 11 硬件穷举已启动。" : L"CPU 多核穷举已启动。两者使用相同规则和多行消除优先目标。");
         KickWallLearner kickLearner;
-        if (!mathMode) {
+        constexpr bool benchmarkUseWallKick = true;
+        if (benchmarkUseWallKick) {
             std::wstring kickPath=s->configPath;
             const size_t configSlash=kickPath.find_last_of(L"\\/");
-            kickPath=(configSlash==std::wstring::npos?L".\\":kickPath.substr(0,configSlash+1))+L"TetrisVisionPilot-kick-wall.csv";
+            kickPath=(configSlash==std::wstring::npos?L".\\":kickPath.substr(0,configSlash+1))+L"TetrisVisionPilotBenchmark-kick-wall.csv";
             kickLearner.Load(kickPath);
             log(Format(L"已载入 Wall Kick 实测档案：%llu 条观测。",static_cast<unsigned long long>(kickLearner.Attempts())));
         } else {
-            log(L"穷举模式不读取 Wall Kick 实测档案；只比较几何落点。");
+            log(L"Wall Kick 实测辅助已关闭。");
         }
+        GpuExhaustiveSolver gpuSolver;
+        if (gpuMode) {
+            std::wstring gpuInitError;
+            if (!gpuSolver.Initialize(gpuInitError))
+                throw std::runtime_error(WideToUtf8(gpuInitError));
+            log(Format(L"GPU 设备：%s；设备与着色器初始化 %.2f ms；GPU 模式不回退到 CPU/WARP。",
+                gpuSolver.DeviceName().c_str(), gpuSolver.InitializationMs()));
+        }
+        MarathonBoardMemory marathonMemory;
+        std::wstring memoryPath=s->configPath;
+        const size_t memorySlash=memoryPath.find_last_of(L"\\/");
+        memoryPath=(memorySlash==std::wstring::npos?L".\\":memoryPath.substr(0,memorySlash+1))+L"TetrisVisionPilotBenchmark-marathon-memory.csv";
+        marathonMemory.SetPath(memoryPath);
         tesseract::TessBaseAPI ocr;
         const std::string tessPath = WideToUtf8(s->tessdataPath);
         const int ocrInit = tessPath.empty() ? -1 : ocr.Init(tessPath.c_str(), "eng", tesseract::OEM_LSTM_ONLY);
