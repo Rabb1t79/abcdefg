@@ -177,7 +177,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if(!s)return DefWindowProcW(hwnd,msg,wp,lp);
     switch(msg){
     case WM_CREATE:
-        CreateUi(s);LoadConfig(s);{const bool learning=SendMessageW(s->modeCombo,CB_GETCURSEL,0,0)==0;EnableWindow(s->lookaheadEdit,learning);EnableWindow(s->learningRateEdit,learning);EnableWindow(s->epsilonEdit,learning);EnableWindow(s->temperatureEdit,learning);EnableWindow(GetDlgItem(s->hwnd,ID_SUBMIT_SCORE),learning);EnableWindow(GetDlgItem(s->hwnd,ID_RESET_MODEL),learning);}UpdateRegionLabel(s);UpdateNextRegionLabel(s);UpdateAgainRegionLabel(s);s->trainer.Load(s->modelPath);s->experienceMemory.Load(s->experiencePath);UpdateTrainingStats(s);RefreshWindows(s);
+        CreateUi(s);LoadConfig(s);EnableWindow(s->lookaheadEdit,FALSE);EnableWindow(s->learningRateEdit,FALSE);EnableWindow(s->epsilonEdit,FALSE);EnableWindow(s->temperatureEdit,FALSE);EnableWindow(GetDlgItem(s->hwnd,ID_SUBMIT_SCORE),FALSE);EnableWindow(GetDlgItem(s->hwnd,ID_RESET_MODEL),FALSE);UpdateRegionLabel(s);UpdateNextRegionLabel(s);UpdateAgainRegionLabel(s);s->trainer.Load(s->modelPath);s->experienceMemory.Load(s->experiencePath);UpdateTrainingStats(s);RefreshWindows(s);
         AppendLog(s,Format(L"已加载成功经验 %llu 条；只有高于本阶段基准的整局经验会成为后续决策的轻量参考。",
             static_cast<unsigned long long>(s->experienceMemory.Size())));
         if(!RegisterHotKey(hwnd,HOTKEY_STOP,MOD_NOREPEAT,VK_F8)) AppendLog(s,L"提示：F8 全局热键注册失败；请使用界面停止按钮，并避免切换窗口。");
@@ -197,14 +197,8 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_SUBMIT_SCORE:SubmitTrainingScore(s);return 0;
         case ID_RESET_MODEL:ResetTrainingModel(s);return 0;
         case ID_MODE:if(HIWORD(wp)==CBN_SELCHANGE){
-            const bool learning=SendMessageW(s->modeCombo,CB_GETCURSEL,0,0)==0;
-            EnableWindow(s->lookaheadEdit,learning);
-            EnableWindow(s->learningRateEdit,learning);
-            EnableWindow(s->epsilonEdit,learning);
-            EnableWindow(s->temperatureEdit,learning);
-            EnableWindow(GetDlgItem(s->hwnd,ID_SUBMIT_SCORE),learning);
-            EnableWindow(GetDlgItem(s->hwnd,ID_RESET_MODEL),learning);
-            AppendLog(s,learning?L"已切换到模拟智能学习模式。":L"已切换到纯数学穷举模式；前瞻固定为当前方块 + 最多两个 NEXT，学习参数与训练操作已停用。");
+            const bool gpu=SendMessageW(s->modeCombo,CB_GETCURSEL,0,0)==1;
+            AppendLog(s,gpu?L"已选择 GPU Direct3D 11 Compute；无真实硬件 GPU 时会明确停止，不回退 CPU/WARP。":L"已选择 CPU 多核穷举；并行拆分首层候选并使用所有可用逻辑处理器。");
         }return 0;
         }break;
     case WM_HOTKEY:if(wp==HOTKEY_STOP)StopBot(s);return 0;
