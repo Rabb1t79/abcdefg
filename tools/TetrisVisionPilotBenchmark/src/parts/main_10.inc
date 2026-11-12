@@ -25,19 +25,9 @@
 void StartBot(AppState* s) {
     if(s->running.load())return;
     const bool autoRetry=SendMessageW(s->autoRetryCheck,BM_GETCHECK,0,0)==BST_CHECKED;
-    const bool mathMode=SendMessageW(s->modeCombo,CB_GETCURSEL,0,0)==1;
+    const bool gpuMode=SendMessageW(s->modeCombo,CB_GETCURSEL,0,0)==1;
+    const bool mathMode=true; // Benchmark build never updates training weights.
     if(s->worker.joinable())s->worker.join();
-    const TrainerSnapshot modelState = s->trainer.Snapshot();
-    if (modelState.pendingActions > 0) {
-        if (mathMode) {
-            MessageBoxW(s->hwnd,L"当前还有未结算的模拟智能训练样本。为保持纯数学模式完全不训练，请先切回“模拟智能（学习）”并提交上一局成绩，再启动穷举模式。",
-                L"请先结算训练样本",MB_OK|MB_ICONWARNING);
-            return;
-        }
-        const std::wstring warning = Format(L"还有上一轮未提交的 %llu 个动作样本。若继续同一局，可以保留；若上一局已结束，应先提交那一局的最终分数。是否仍要启动？",
-            static_cast<unsigned long long>(modelState.pendingActions));
-        if (MessageBoxW(s->hwnd, warning.c_str(), L"存在未结算训练样本", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-    }
     HWND target=SelectedWindow(s);
     if(!target||!IsWindow(target)){MessageBoxW(s->hwnd,L"请从窗口列表中选择正在运行的游戏。",L"尚未选择游戏窗口",MB_ICONWARNING);return;}
     std::wstring captureInitError;
@@ -96,9 +86,9 @@ void StartBot(AppState* s) {
         keyGapMs=(std::max)(0,6-tapMs);
         SetWindowTextW(s->keyGapEdit,Format(L"%d",keyGapMs).c_str());
     }
-    const int dropWaitMs=static_cast<int>(ReadDoubleEdit(s->dropWaitEdit,190,80,1000));
+    const int dropWaitMs=static_cast<int>(ReadDoubleEdit(s->dropWaitEdit,5,0,40));
     SaveConfig(s);
-    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature,tapMs,keyGapMs,dropWaitMs,s->scoreRect,s->againRect,learningRate,autoRetry,mathMode); }
+    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature,tapMs,keyGapMs,dropWaitMs,s->scoreRect,s->againRect,learningRate,autoRetry,mathMode,gpuMode); }
     catch(...) { s->running.store(false);EnableWindow(s->startButton,TRUE);EnableWindow(s->stopButton,FALSE);SetWindowTextW(s->statusLabel,L"状态：启动失败");MessageBoxW(s->hwnd,L"无法创建自动控制线程。",L"启动失败",MB_ICONERROR); }
 }
 
