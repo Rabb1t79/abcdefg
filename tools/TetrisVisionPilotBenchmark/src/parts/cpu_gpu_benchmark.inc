@@ -10,6 +10,7 @@ struct CpuGpuBenchmarkInfo {
     double computeMs{};
     std::uint64_t candidateChecks{};
     unsigned int cpuThreads{};
+    double initializationMs{};
 };
 
 bool ChooseCpuParallelAction(const Board& board, char piece, int currentRotation,
@@ -129,6 +130,9 @@ class GpuExhaustiveSolver {
 public:
     bool Initialize(std::wstring& error) {
         if (initialized_) return true;
+        LARGE_INTEGER initFrequency{}, initStart{}, initFinish{};
+        QueryPerformanceFrequency(&initFrequency);
+        QueryPerformanceCounter(&initStart);
         UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
         D3D_FEATURE_LEVEL selected{};
         const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0};
@@ -204,6 +208,10 @@ public:
         if (FAILED(hr)) { error = L"无法创建 GPU 归约着色器。"; return false; }
 
         if (!CreateStaticShapes(error) || !CreateWorkingBuffers(error)) return false;
+        QueryPerformanceCounter(&initFinish);
+        initializationMs_ = initFrequency.QuadPart > 0
+            ? 1000.0 * static_cast<double>(initFinish.QuadPart - initStart.QuadPart) /
+              static_cast<double>(initFrequency.QuadPart) : 0.0;
         initialized_ = true;
         return true;
     }
@@ -322,7 +330,13 @@ public:
         decision.expectedBoard = firstBoard;
         decision.predictedLines = firstLines;
         decision.searchedNextPieces = sequenceLength - 1;
-        decision.nodes = 40ull + 1600ull + 64000ull;
+        std::uint64_t candidateChecks = 0;
+        std::uint64_t levelParents = 1;
+        for (int depth = 0; depth < sequenceLength; ++depth) {
+            candidateChecks += levelParents * 40ull;
+            levelParents *= 40ull;
+        }
+        decision.nodes = candidateChecks;
         decision.elapsedMs = elapsedMs;
         decision.rotationTaps = result.rotationTaps;
         decision.horizontalTaps = result.horizontalTaps;
@@ -335,6 +349,7 @@ public:
         info.computeMs = elapsedMs;
         info.candidateChecks = decision.nodes;
         info.cpuThreads = 0;
+        info.initializationMs = initializationMs_;
         return true;
     }
 
@@ -455,6 +470,7 @@ private:
 
     bool initialized_{};
     std::wstring deviceName_;
+    double initializationMs_{};
     winrt::com_ptr<ID3D11Device> device_;
     winrt::com_ptr<ID3D11DeviceContext> context_;
     winrt::com_ptr<ID3D11ComputeShader> expandShader_;
@@ -464,4 +480,167 @@ private:
     winrt::com_ptr<ID3D11Buffer> bufferA_, bufferB_, bestBuffer_, bestStaging_, paramsBuffer_;
     winrt::com_ptr<ID3D11ShaderResourceView> srvA_, srvB_;
     winrt::com_ptr<ID3D11UnorderedAccessView> uavA_, uavB_, bestUav_;
+};
+
+
+// Game-session board memory: once a locked mino has been observed or predicted,
+// it remains part of the model even when the game's late-marathon visual effect
+// makes its pixels faint or transparent. A lock event applies line clears to the
+// remembered board atomically, so old coordinates are never blindly retained.
+class MarathonBoardMemory {
+public:
+    void SetPath(const std::wstring& path) { path_ = path; }
+
+    bool Initialized() const { return initialized_; }
+
+    int RememberedCells() const {
+        int count = 0;
+        for (int y = 0; y < ROWS; ++y)
+            for (int x = 0; x < COLS; ++x) if (board_[y][x]) ++count;
+        return count;
+    }
+
+    std::size_t HistoryCount() const { return history_.size(); }
+
+    void ResetForNewGame() {
+        board_ = {};
+        confidence_ = {};
+        initialized_ = false;
+        sequence_ = 0;
+        lastReportedRecovery_ = -1;
+        history_.clear();
+        AppendSessionMarker("NEW_GAME");
+    }
+
+    Board Reconcile(const VisionResult& vision, int& recoveredCells, int& unexpectedCells) {
+        recoveredCells = 0;
+        unexpectedCells = 0;
+        if (!vision.hasActive) return board_; // never mistake an untracked active piece for fixed cells
+
+        const Board observed = BoardWithoutActive(vision);
+        if (!initialized_) {
+            Seed(observed);
+            return board_;
+        }
+
+        Board merged = board_;
+        for (int y = 0; y < ROWS; ++y) {
+            for (int x = 0; x < COLS; ++x) {
+                if (observed[y][x]) {
+                    if (!board_[y][x]) ++unexpectedCells;
+                    merged[y][x] = 1;
+                    confidence_[y][x] = 255;
+                } else if (board_[y][x]) {
+                    // It was previously visible or committed by a verified
+                    // lock. Keep it as a remembered transparent mino.
+                    ++recoveredCells;
+                    confidence_[y][x] = (std::max)(static_cast<unsigned char>(32),
+                        static_cast<unsigned char>(confidence_[y][x] > 1 ? confidence_[y][x] - 1 : 1));
+                }
+            }
+        }
+        board_ = merged;
+        return board_;
+    }
+
+    bool ShouldReportRecovery(int recoveredCells) {
+        if (recoveredCells == lastReportedRecovery_) return false;
+        lastReportedRecovery_ = recoveredCells;
+        return recoveredCells > 0;
+    }
+
+    void Seed(const Board& board) {
+        board_ = board;
+        initialized_ = true;
+        for (int y = 0; y < ROWS; ++y)
+            for (int x = 0; x < COLS; ++x)
+                confidence_[y][x] = board[y][x] ? 255 : 0;
+        lastReportedRecovery_ = -1;
+    }
+
+    void Commit(const Board& expectedBoard, char piece, int rotation, int x,
+                int clearedLines, int multiClearEvents, double computeMs,
+                double inputMs, double endToEndMs) {
+        board_ = expectedBoard;
+        initialized_ = true;
+        lastReportedRecovery_ = -1;
+        for (int y = 0; y < ROWS; ++y)
+            for (int col = 0; col < COLS; ++col)
+                confidence_[y][col] = expectedBoard[y][col] ? 255 : 0;
+
+        MarathonMoveRecord record;
+        record.sequence = ++sequence_;
+        record.piece = piece;
+        record.rotation = rotation;
+        record.x = x;
+        record.clearedLines = clearedLines;
+        record.multiClearEvents = multiClearEvents;
+        record.computeMs = computeMs;
+        record.inputMs = inputMs;
+        record.endToEndMs = endToEndMs;
+        record.boardHash = HashBoard(expectedBoard);
+        history_.push_back(record);
+        if (history_.size() > 4096) history_.erase(history_.begin());
+
+        if (!path_.empty()) {
+            const std::filesystem::path filePath(path_);
+            const bool writeHeader = !std::filesystem::exists(filePath);
+            std::ofstream output{filePath, std::ios::out | std::ios::app};
+            if (output) {
+                if (writeHeader)
+                    output << "sequence,piece,rotation,x,cleared_lines,multi_clear_events,compute_ms,input_ms,end_to_end_ms,board_hash,rows_hex\n";
+                output << record.sequence << ',' << record.piece << ',' << record.rotation << ','
+                       << record.x << ',' << record.clearedLines << ',' << record.multiClearEvents << ','
+                       << std::fixed << std::setprecision(3) << record.computeMs << ','
+                       << record.inputMs << ',' << record.endToEndMs << ','
+                       << std::hex << record.boardHash << std::dec << ',';
+                for (int y = 0; y < ROWS; ++y) {
+                    unsigned int mask = 0;
+                    for (int col = 0; col < COLS; ++col) if (expectedBoard[y][col]) mask |= (1u << col);
+                    output << std::hex << std::setw(3) << std::setfill('0') << mask;
+                    if (y + 1 < ROWS) output << ':';
+                }
+                output << std::dec << std::setfill(' ') << '\n';
+            }
+        }
+    }
+
+private:
+    struct MarathonMoveRecord {
+        std::uint64_t sequence{};
+        char piece{};
+        int rotation{};
+        int x{};
+        int clearedLines{};
+        int multiClearEvents{};
+        double computeMs{};
+        double inputMs{};
+        double endToEndMs{};
+        std::uint64_t boardHash{};
+    };
+
+    static std::uint64_t HashBoard(const Board& board) {
+        std::uint64_t hash = 1469598103934665603ull;
+        for (int y = 0; y < ROWS; ++y) {
+            std::uint32_t rowMask = 0;
+            for (int x = 0; x < COLS; ++x) if (board[y][x]) rowMask |= (1u << x);
+            hash ^= rowMask;
+            hash *= 1099511628211ull;
+        }
+        return hash;
+    }
+
+    void AppendSessionMarker(const char* marker) {
+        if (path_.empty()) return;
+        std::ofstream output{std::filesystem::path(path_), std::ios::out | std::ios::app};
+        if (output) output << "# " << marker << '\n';
+    }
+
+    Board board_{};
+    std::array<std::array<unsigned char, COLS>, ROWS> confidence_{};
+    bool initialized_{};
+    std::uint64_t sequence_{};
+    int lastReportedRecovery_{-1};
+    std::vector<MarathonMoveRecord> history_;
+    std::wstring path_;
 };
