@@ -90,11 +90,10 @@ CalibrationOutcome CalibrateOneDirection(const std::atomic<bool>& stop,
     // Try only short, fully released pulses. Each candidate is a separate tap;
     // no candidate holds the direction key long enough to request auto-repeat.
     const int tapCandidates[] = {
-        (std::max)(4,(std::min)(10,baseTapMs)),
-        8,
-        10
+        (std::max)(1,(std::min)(4,baseTapMs)),
+        2, 3, 4
     };
-    bool triedTapMs[11]{};
+    bool triedTapMs[5]{};
     const int originalX=startPiece.minX;
     int currentX=originalX;
     int currentY=startPiece.minY;
@@ -102,7 +101,7 @@ CalibrationOutcome CalibrateOneDirection(const std::atomic<bool>& stop,
     bool moved=false;
 
     for (int tapMs : tapCandidates) {
-        if (tapMs < 4 || tapMs > 10 || triedTapMs[tapMs]) continue;
+        if (tapMs < 1 || tapMs > 4 || triedTapMs[tapMs]) continue;
         triedTapMs[tapMs]=true;
         if (stop.load()) { note=L"用户请求停止。"; return CalibrationOutcome::Unsafe; }
         std::wstring inputError;
