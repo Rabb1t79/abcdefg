@@ -1,0 +1,8 @@
+build/
+.vs/
+*.user
+TetrisVisionPilotBenchmark.ini
+TetrisVisionPilot.model.ini
+TetrisVisionPilot-training.csv
+TetrisVisionPilot.log
+*.bak
