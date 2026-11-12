@@ -24,13 +24,23 @@ bool TapKey(HWND target, WORD vk, int pressMs, std::wstring& error) {
     }
     // Every call is one discrete key-down/key-up pulse. Keep the down interval
     // short enough to avoid the game's held-key auto-repeat path.
-    const int boundedPressMs=(std::max)(4,(std::min)(10,pressMs));
+    const int boundedPressMs=(std::max)(1,(std::min)(4,pressMs));
     INPUT input{};
     input.type=INPUT_KEYBOARD;
     input.ki.wVk=vk;
     if (vk==VK_LEFT || vk==VK_RIGHT || vk==VK_UP || vk==VK_DOWN) input.ki.dwFlags=KEYEVENTF_EXTENDEDKEY;
     if (SendInput(1,&input,sizeof(INPUT))!=1) { error=L"发送按键失败；请检查游戏窗口焦点和权限等级。"; return false; }
-    Sleep(boundedPressMs);
+    // Use a short high-resolution CPU spin rather than Sleep(), whose scheduler
+    // granularity can inflate a 1 ms pulse into a much longer hold.
+    LARGE_INTEGER frequency{}, started{}, current{};
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&started);
+    const LONGLONG targetTicks = (std::max)(1ll,
+        frequency.QuadPart * boundedPressMs / 1000);
+    do {
+        QueryPerformanceCounter(&current);
+        _mm_pause();
+    } while (current.QuadPart - started.QuadPart < targetTicks);
     input.ki.dwFlags |= KEYEVENTF_KEYUP;
     if (SendInput(1,&input,sizeof(INPUT)) != 1) {
         // Make one best-effort release before returning a visible failure.
