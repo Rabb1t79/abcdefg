@@ -8,6 +8,9 @@
 #include <commctrl.h>
 #include <shellapi.h>
 #include <condition_variable>
+#include <windows.foundation.h>
+#include <windows.graphics.capture.h>
+#include <windows.graphics.directx.direct3d11.h>
 #include <chrono>
 #include <d3d11.h>
 #include <d3dcompiler.h>

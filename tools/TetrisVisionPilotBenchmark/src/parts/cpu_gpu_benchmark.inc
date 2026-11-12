@@ -151,8 +151,11 @@ public:
         winrt::com_ptr<IDXGIAdapter> adapter;
         hr = dxgiDevice->GetAdapter(adapter.put());
         if (FAILED(hr)) { error = L"无法读取实际 GPU 适配器。"; return false; }
-        DXGI_ADAPTER_DESC adapterDesc{};
-        hr = adapter->GetDesc(&adapterDesc);
+        winrt::com_ptr<IDXGIAdapter1> adapter1;
+        hr = adapter->QueryInterface(__uuidof(IDXGIAdapter1), adapter1.put_void());
+        if (FAILED(hr)) { error = L"当前 DXGI 适配器不支持 DXGI 1.1 描述接口。"; return false; }
+        DXGI_ADAPTER_DESC1 adapterDesc{};
+        hr = adapter1->GetDesc1(&adapterDesc);
         if (FAILED(hr)) { error = L"无法读取 GPU 名称。"; return false; }
         if ((adapterDesc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
             error = L"检测到软件图形适配器；GPU 测试拒绝使用软件模拟器。";
