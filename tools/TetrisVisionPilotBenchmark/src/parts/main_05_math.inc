@@ -1,11 +1,10 @@
-// Bounded exhaustive solver. This is a deterministic mathematical baseline,
-// intentionally independent of the policy trainer and experience memory.
-//
-// It searches every legal placement for the current piece and up to two NEXT
-// pieces. "Optimal" therefore means optimal under this finite horizon and the
-// explicit lexicographic objective below, not a guarantee about the unseen game.
+// Deterministic three-piece exhaustive search shared by CPU and GPU backends.
+// "Optimal" is relative to the visible sequence (current + up to two NEXT)
+// and the declared objective; it is not a proof of whole-game global optimality.
 struct ExhaustiveEvaluation {
     int placed{};
+    int multiClearEvents{};
+    int multiClearLines{};
     int lines{};
     int holes{};
     int maxHeight{};
@@ -31,10 +30,15 @@ struct ExhaustiveDecision {
     int keyTaps{};
     int rotationTaps{};
     int horizontalTaps{};
+    int multiClearEvents{};
+    int multiClearLines{};
 };
 
 bool BetterExhaustive(const ExhaustiveEvaluation& a, const ExhaustiveEvaluation& b) {
     if (a.placed != b.placed) return a.placed > b.placed;
+    // Give explicit preference to one placement clearing two or more rows.
+    if (a.multiClearEvents != b.multiClearEvents) return a.multiClearEvents > b.multiClearEvents;
+    if (a.multiClearLines != b.multiClearLines) return a.multiClearLines > b.multiClearLines;
     if (a.lines != b.lines) return a.lines > b.lines;
     if (a.holes != b.holes) return a.holes < b.holes;
     if (a.maxHeight != b.maxHeight) return a.maxHeight < b.maxHeight;
@@ -50,10 +54,13 @@ bool BetterExhaustive(const ExhaustiveEvaluation& a, const ExhaustiveEvaluation&
     return a.firstRotation < b.firstRotation;
 }
 
-ExhaustiveEvaluation EvaluateExhaustiveBoard(const Board& board, int placed, int lines) {
+ExhaustiveEvaluation EvaluateExhaustiveBoard(const Board& board, int placed, int lines,
+                                               int multiClearEvents, int multiClearLines) {
     const Features f = ExtractFeatures(board, 0);
     ExhaustiveEvaluation e;
     e.placed = placed;
+    e.multiClearEvents = multiClearEvents;
+    e.multiClearLines = multiClearLines;
     e.lines = lines;
     e.aggregateHeight = static_cast<int>(std::lround(f.value[0] * 200.0));
     e.holes = static_cast<int>(std::lround(f.value[1] * 40.0));
@@ -75,12 +82,14 @@ struct ExhaustiveSearchState {
 
 void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
                       size_t depth, int placed, int totalLines,
+                      int multiClearEvents, int multiClearLines,
                       const Move& firstMove, const Board& firstBoard, int firstLines,
                       int rotationTaps, int horizontalTaps,
                       int initialRotation, int initialX,
                       ExhaustiveSearchState& best, std::uint64_t& nodes) {
     if (depth >= sequence.size()) {
-        ExhaustiveEvaluation evaluation = EvaluateExhaustiveBoard(board, placed, totalLines, multiClearEvents, multiClearLines);
+        ExhaustiveEvaluation evaluation = EvaluateExhaustiveBoard(
+            board, placed, totalLines, multiClearEvents, multiClearLines);
         evaluation.rotationTaps = rotationTaps;
         evaluation.horizontalTaps = horizontalTaps;
         evaluation.keyTaps = rotationTaps + horizontalTaps;
@@ -100,7 +109,8 @@ void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
     nodes += static_cast<std::uint64_t>(actions.size());
     if (actions.empty()) {
         if (depth == 0) return; // No legal move for the current piece is a top-out.
-        ExhaustiveEvaluation evaluation = EvaluateExhaustiveBoard(board, placed, totalLines, multiClearEvents, multiClearLines);
+        ExhaustiveEvaluation evaluation = EvaluateExhaustiveBoard(
+            board, placed, totalLines, multiClearEvents, multiClearLines);
         evaluation.rotationTaps = rotationTaps;
         evaluation.horizontalTaps = horizontalTaps;
         evaluation.keyTaps = rotationTaps + horizontalTaps;
@@ -117,6 +127,8 @@ void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
     }
 
     for (const ActionCandidate& action : actions) {
+        const int nextMultiEvents = multiClearEvents + (action.linesCleared >= 2 ? 1 : 0);
+        const int nextMultiLines = multiClearLines + (action.linesCleared >= 2 ? action.linesCleared : 0);
         if (depth == 0) {
             const auto rotations = g_rotations.find(sequence[depth]);
             const int rotationCount = rotations == g_rotations.end()
@@ -124,16 +136,12 @@ void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
             const int rootRotationTaps = rotationCount > 0
                 ? (action.move.rotation - initialRotation + rotationCount) % rotationCount : 0;
             const int rootHorizontalTaps = std::abs(action.move.x - initialX);
-            const int nextMultiEvents = multiClearEvents + (action.linesCleared >= 2 ? 1 : 0);
-            const int nextMultiLines = multiClearLines + (action.linesCleared >= 2 ? action.linesCleared : 0);
             ExhaustiveSearch(action.nextBoard, sequence, depth + 1, placed + 1,
                 totalLines + action.linesCleared, nextMultiEvents, nextMultiLines,
                 action.move, action.nextBoard, action.linesCleared,
                 rootRotationTaps, rootHorizontalTaps,
                 initialRotation, initialX, best, nodes);
         } else {
-            const int nextMultiEvents = multiClearEvents + (action.linesCleared >= 2 ? 1 : 0);
-            const int nextMultiLines = multiClearLines + (action.linesCleared >= 2 ? action.linesCleared : 0);
             ExhaustiveSearch(action.nextBoard, sequence, depth + 1, placed + 1,
                 totalLines + action.linesCleared, nextMultiEvents, nextMultiLines,
                 firstMove, firstBoard, firstLines, rotationTaps, horizontalTaps,
@@ -147,35 +155,32 @@ bool ChooseExhaustiveAction(const Board& board, char piece, int currentRotation,
                             ExhaustiveDecision& decision) {
     const auto rotationIt = g_rotations.find(piece);
     if (rotationIt == g_rotations.end() || rotationIt->second.empty()) return false;
-
-    std::vector<char> sequence;
-    sequence.push_back(piece);
+    std::vector<char> sequence{piece};
     const int futureCount = (std::min)(2, static_cast<int>(nextQueue.size()));
     for (int i = 0; i < futureCount; ++i) sequence.push_back(nextQueue[static_cast<size_t>(i)]);
 
     ExhaustiveSearchState best{};
     std::uint64_t nodes = 0;
-    const ULONGLONG started = GetTickCount64();
-    // Search all legal placements for each visible piece; no beam width,
-    // Softmax, epsilon exploration, experience memory, or policy weights.
+    const auto started = std::chrono::steady_clock::now();
     ExhaustiveSearch(board, sequence, 0, 0, 0, 0, 0, Move{}, Board{}, 0,
                      0, 0, currentRotation, currentX, best, nodes);
-    const ULONGLONG elapsed = GetTickCount64() - started;
+    const auto finished = std::chrono::steady_clock::now();
     if (!best.valid) return false;
 
     const int rotationCount = static_cast<int>(rotationIt->second.size());
     const int rotationTaps = rotationCount > 0
         ? (best.firstMove.rotation - currentRotation + rotationCount) % rotationCount : 0;
     const int horizontalTaps = std::abs(best.firstMove.x - currentX);
-
     decision.move = best.firstMove;
     decision.expectedBoard = best.firstBoard;
     decision.predictedLines = best.firstLines;
     decision.searchedNextPieces = futureCount;
     decision.nodes = nodes;
-    decision.elapsedMs = static_cast<double>(elapsed);
+    decision.elapsedMs = std::chrono::duration<double, std::milli>(finished - started).count();
     decision.rotationTaps = rotationTaps;
     decision.horizontalTaps = horizontalTaps;
     decision.keyTaps = rotationTaps + horizontalTaps;
+    decision.multiClearEvents = best.evaluation.multiClearEvents;
+    decision.multiClearLines = best.evaluation.multiClearLines;
     return true;
 }
