@@ -216,6 +216,9 @@ public:
         return true;
     }
 
+    const std::wstring& DeviceName() const { return deviceName_; }
+    double InitializationMs() const { return initializationMs_; }
+
     bool Solve(const Board& board, char piece, int currentRotation, int currentX,
                const std::vector<char>& nextQueue, ExhaustiveDecision& decision,
                CpuGpuBenchmarkInfo& info, std::wstring& error) {
