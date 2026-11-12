@@ -250,27 +250,33 @@
             }
             PolicyDecision decision{};
             Move move{};
-            bool trainableAction = !mathMode;
-            if (mathMode) {
-                ExhaustiveDecision exhaustive{};
-                if (!ChooseExhaustiveAction(board,piece.name,piece.rotation,piece.minX,queue.pieces,exhaustive))
-                    throw std::runtime_error("穷举搜索未找到合法落点。棋盘可能已堆到顶部，或识别结果不正确。");
-                move = exhaustive.move;
-                move.score = 0.0; // The exhaustive objective is lexicographic, not a learned score.
-                decision.move = move;
-                decision.expectedBoard = exhaustive.expectedBoard;
-                decision.predictedLines = exhaustive.predictedLines;
-                decision.searchedNextPieces = exhaustive.searchedNextPieces;
-                log(Format(L"穷举完成：节点 %llu；耗时 %.0f ms；前瞻当前方块 + %d 个 NEXT；旋转按键估算 %d 次、横移 %d 次；目标旋转 %d、列 %d。",
-                    static_cast<unsigned long long>(exhaustive.nodes), exhaustive.elapsedMs,
-                    exhaustive.searchedNextPieces, exhaustive.rotationTaps, exhaustive.horizontalTaps,
-                    move.rotation, move.x));
-            } else {
-                if(!ChoosePolicyAction(board,piece.name,queue.pieces,lookaheadDepth,s->trainer,s->experienceMemory,
-                                      epsilon,temperature,rng,decision))
-                    throw std::runtime_error("策略模型未找到合法落点。棋盘可能已堆到顶部，或识别结果不正确。");
-                move = decision.move;
+            bool trainableAction = false; // This benchmark never writes policy samples.
+            const auto solverStart = std::chrono::steady_clock::now();
+            ExhaustiveDecision exhaustive{};
+            CpuGpuBenchmarkInfo backendInfo{};
+            const bool solved = gpuMode
+                ? gpuSolver.Solve(board,piece.name,piece.rotation,piece.minX,queue.pieces,
+                                  exhaustive,backendInfo,capError)
+                : ChooseCpuParallelAction(board,piece.name,piece.rotation,piece.minX,queue.pieces,
+                                          exhaustive,backendInfo);
+            if (!solved) {
+                if (gpuMode && !capError.empty()) throw std::runtime_error(WideToUtf8(capError));
+                throw std::runtime_error("所选硬件后端未找到合法落点；棋盘可能已堆到顶部，或识别结果不正确。");
             }
+            move = exhaustive.move;
+            move.score = 0.0;
+            decision.move = move;
+            decision.expectedBoard = exhaustive.expectedBoard;
+            decision.predictedLines = exhaustive.predictedLines;
+            decision.searchedNextPieces = exhaustive.searchedNextPieces;
+            log(Format(L"%s 搜索完成：候选节点 %llu；纯计算 %.3f ms；CPU 线程 %u；设备 %s；前瞻当前方块 + %d NEXT；多行清除计划 %d 次（%d 行）；目标旋转 %d、列 %d。",
+                backendInfo.backend.c_str(),
+                static_cast<unsigned long long>(exhaustive.nodes),backendInfo.computeMs,
+                backendInfo.cpuThreads,backendInfo.device.empty()?L"CPU":backendInfo.device.c_str(),
+                exhaustive.searchedNextPieces,exhaustive.multiClearEvents,exhaustive.multiClearLines,
+                move.rotation,move.x));
+            if (gpuMode && backendInfo.initializationMs > 0.0)
+                log(Format(L"GPU 冷启动初始化另计：%.3f ms；不计入稳态搜索耗时。",backendInfo.initializationMs));
             const auto& pieceRotations=g_rotations[piece.name];
             int rotateSteps=(move.rotation-piece.rotation+static_cast<int>(pieceRotations.size()))%static_cast<int>(pieceRotations.size());
             log(Format(L"当前 %c 型（稳定采样 %d/3）；NEXT=[%s]；前瞻 %d 块；目标旋转 %d、列 %d，路径评分 %.2f。",
@@ -278,7 +284,7 @@
                 move.rotation,move.x,move.score));
             int currentX=piece.minX;
             bool rotatedWithWallKick=false;
-            if (!mathMode && rotateSteps==1 && piece.minY<=4 &&
+            if (benchmarkUseWallKick && rotateSteps==1 && piece.minY<=4 &&
                 ExtractFeatures(board,0).value[3] <= 0.45) {
                 int kickedX=piece.minX;
                 std::wstring kickMessage;
