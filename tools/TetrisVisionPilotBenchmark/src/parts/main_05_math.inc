@@ -80,7 +80,7 @@ void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
                       int initialRotation, int initialX,
                       ExhaustiveSearchState& best, std::uint64_t& nodes) {
     if (depth >= sequence.size()) {
-        ExhaustiveEvaluation evaluation = EvaluateExhaustiveBoard(board, placed, totalLines);
+        ExhaustiveEvaluation evaluation = EvaluateExhaustiveBoard(board, placed, totalLines, multiClearEvents, multiClearLines);
         evaluation.rotationTaps = rotationTaps;
         evaluation.horizontalTaps = horizontalTaps;
         evaluation.keyTaps = rotationTaps + horizontalTaps;
@@ -100,7 +100,7 @@ void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
     nodes += static_cast<std::uint64_t>(actions.size());
     if (actions.empty()) {
         if (depth == 0) return; // No legal move for the current piece is a top-out.
-        ExhaustiveEvaluation evaluation = EvaluateExhaustiveBoard(board, placed, totalLines);
+        ExhaustiveEvaluation evaluation = EvaluateExhaustiveBoard(board, placed, totalLines, multiClearEvents, multiClearLines);
         evaluation.rotationTaps = rotationTaps;
         evaluation.horizontalTaps = horizontalTaps;
         evaluation.keyTaps = rotationTaps + horizontalTaps;
@@ -124,14 +124,20 @@ void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
             const int rootRotationTaps = rotationCount > 0
                 ? (action.move.rotation - initialRotation + rotationCount) % rotationCount : 0;
             const int rootHorizontalTaps = std::abs(action.move.x - initialX);
+            const int nextMultiEvents = multiClearEvents + (action.linesCleared >= 2 ? 1 : 0);
+            const int nextMultiLines = multiClearLines + (action.linesCleared >= 2 ? action.linesCleared : 0);
             ExhaustiveSearch(action.nextBoard, sequence, depth + 1, placed + 1,
-                totalLines + action.linesCleared, action.move, action.nextBoard,
-                action.linesCleared, rootRotationTaps, rootHorizontalTaps,
+                totalLines + action.linesCleared, nextMultiEvents, nextMultiLines,
+                action.move, action.nextBoard, action.linesCleared,
+                rootRotationTaps, rootHorizontalTaps,
                 initialRotation, initialX, best, nodes);
         } else {
+            const int nextMultiEvents = multiClearEvents + (action.linesCleared >= 2 ? 1 : 0);
+            const int nextMultiLines = multiClearLines + (action.linesCleared >= 2 ? action.linesCleared : 0);
             ExhaustiveSearch(action.nextBoard, sequence, depth + 1, placed + 1,
-                totalLines + action.linesCleared, firstMove, firstBoard, firstLines,
-                rotationTaps, horizontalTaps, initialRotation, initialX, best, nodes);
+                totalLines + action.linesCleared, nextMultiEvents, nextMultiLines,
+                firstMove, firstBoard, firstLines, rotationTaps, horizontalTaps,
+                initialRotation, initialX, best, nodes);
         }
     }
 }
@@ -152,7 +158,7 @@ bool ChooseExhaustiveAction(const Board& board, char piece, int currentRotation,
     const ULONGLONG started = GetTickCount64();
     // Search all legal placements for each visible piece; no beam width,
     // Softmax, epsilon exploration, experience memory, or policy weights.
-    ExhaustiveSearch(board, sequence, 0, 0, 0, Move{}, Board{}, 0,
+    ExhaustiveSearch(board, sequence, 0, 0, 0, 0, 0, Move{}, Board{}, 0,
                      0, 0, currentRotation, currentX, best, nodes);
     const ULONGLONG elapsed = GetTickCount64() - started;
     if (!best.valid) return false;
