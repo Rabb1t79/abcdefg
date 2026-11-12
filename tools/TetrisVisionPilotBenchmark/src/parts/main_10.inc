@@ -101,7 +101,7 @@ void CreateUi(AppState* s) {
     auto make=[&](DWORD ex,const wchar_t* cls,const wchar_t* text,DWORD style,int x,int y,int w,int h,int id){
         HWND c=CreateWindowExW(ex,cls,text,WS_CHILD|WS_VISIBLE|style,x,y,w,h,s->hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),g_instance,nullptr);
         if(c)SendMessageW(c,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);return c;};
-    make(0,L"STATIC",L"Tetris Vision Pilot  |  C++ 视觉控制 + 在线强化学习",SS_LEFT,20,14,760,30,0);
+    make(0,L"STATIC",L"Tetris Vision Pilot  |  CPU / GPU 硬件穷举对照测试",SS_LEFT,20,14,760,30,0);
     make(0,L"STATIC",L"游戏窗口：",SS_LEFT,20,58,90,24,0);
     s->combo=make(0,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_VSCROLL|WS_TABSTOP,105,54,550,240,ID_WINDOW);
     make(0,L"BUTTON",L"刷新窗口",BS_PUSHBUTTON,665,53,105,28,ID_REFRESH);
@@ -142,21 +142,17 @@ void CreateUi(AppState* s) {
     s->autoRetryCheck=make(0,L"BUTTON",L"Game Over 后自动结算并点击 Again 重开",BS_AUTOCHECKBOX|WS_TABSTOP,735,212,340,27,ID_AUTO_RETRY);
     SendMessageW(s->autoRetryCheck,BM_SETCHECK,BST_CHECKED,0);
 
-    // Training controls: reward comes from the real end-of-game score entered by the user.
-    make(0,L"STATIC",L"性能统计：搜索耗时、候选节点、输入耗时、端到端耗时、多行消除规划",SS_LEFT,20,252,900,22,0);
-    make(0,L"STATIC",L"测试模式：",SS_LEFT,20,284,100,24,0);
-    s->scoreEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,120,280,90,27,ID_SCORE);
-    make(0,L"BUTTON",L"保存性能记录",BS_PUSHBUTTON,225,278,145,32,ID_SUBMIT_SCORE);
-    make(0,L"BUTTON",L"清除学习数据",BS_PUSHBUTTON,380,278,100,32,ID_RESET_MODEL);
-    make(0,L"STATIC",L"学习率：",SS_LEFT,20,322,58,24,0);
-    s->learningRateEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0.08",ES_AUTOHSCROLL,82,318,55,26,ID_LEARNING_RATE);
-    make(0,L"STATIC",L"探索率 %：",SS_LEFT,155,322,72,24,0);
-    s->epsilonEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"5",ES_AUTOHSCROLL,230,318,50,26,ID_EPSILON);
-    make(0,L"STATIC",L"温度：",SS_LEFT,300,322,48,24,0);
-    s->temperatureEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0.40",ES_AUTOHSCROLL,350,318,55,26,ID_TEMPERATURE);
-    make(0,L"STATIC",L"学习率控制每次更新幅度；探索率控制尝试非当前最优动作的概率；温度控制策略随机性。",SS_LEFT,425,322,625,24,0);
-    s->trainingStatsLabel=make(0,L"STATIC",L"模型状态：正在加载……",SS_LEFT,20,354,1030,55,ID_TRAIN_STATS);
-    make(0,L"STATIC",L"CPU/GPU 使用相同三块前瞻穷举规则；GPU 通过 Direct3D 11 计算着色器扩展搜索树并执行最终归约。",SS_LEFT,20,410,1040,24,0);
+    make(0,L"STATIC",L"性能指标：搜索耗时、输入链路、端到端耗时、计划多行消除次数；1 秒目标按实测记录，不作固定保证。",SS_LEFT,20,252,1040,22,0);
+    make(0,L"STATIC",L"最近完成分数：",SS_LEFT,20,284,100,24,0);
+    s->scoreEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0",ES_AUTOHSCROLL|ES_NUMBER|ES_READONLY,125,280,90,27,ID_SCORE);
+    make(0,L"BUTTON",L"打开性能日志",BS_PUSHBUTTON,230,278,135,32,ID_SUBMIT_SCORE);
+    make(0,L"BUTTON",L"打开马拉松记忆",BS_PUSHBUTTON,375,278,145,32,ID_RESET_MODEL);
+    make(0,L"STATIC",L"搜索目标：优先能放置更多方块，再优先累计 2 行及以上的消除事件，随后比较棋盘安全特征与输入步数。",SS_LEFT,20,322,1040,24,0);
+    s->learningRateEdit=nullptr;
+    s->epsilonEdit=nullptr;
+    s->temperatureEdit=nullptr;
+    s->trainingStatsLabel=make(0,L"STATIC",L"CPU 与 GPU 使用相同规则目标和当前方块 + 最多两个 NEXT 的三块前瞻。",SS_LEFT,20,354,1030,55,ID_TRAIN_STATS);
+    make(0,L"STATIC",L"注意：GPU 模式必须创建真实 D3D11 硬件设备，不会回退到 CPU/WARP；透明砖块记忆按确认锁定逐步更新。",SS_LEFT,20,410,1040,24,0);
 
     make(0,L"STATIC",L"运行日志",SS_LEFT,20,443,500,22,0);
     s->logEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"",ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL|WS_VSCROLL|WS_HSCROLL,20,468,760,410,ID_LOG);
@@ -177,9 +173,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if(!s)return DefWindowProcW(hwnd,msg,wp,lp);
     switch(msg){
     case WM_CREATE:
-        CreateUi(s);LoadConfig(s);EnableWindow(s->lookaheadEdit,FALSE);EnableWindow(s->learningRateEdit,FALSE);EnableWindow(s->epsilonEdit,FALSE);EnableWindow(s->temperatureEdit,FALSE);EnableWindow(GetDlgItem(s->hwnd,ID_SUBMIT_SCORE),FALSE);EnableWindow(GetDlgItem(s->hwnd,ID_RESET_MODEL),FALSE);UpdateRegionLabel(s);UpdateNextRegionLabel(s);UpdateAgainRegionLabel(s);s->trainer.Load(s->modelPath);s->experienceMemory.Load(s->experiencePath);UpdateTrainingStats(s);RefreshWindows(s);
-        AppendLog(s,Format(L"已加载成功经验 %llu 条；只有高于本阶段基准的整局经验会成为后续决策的轻量参考。",
-            static_cast<unsigned long long>(s->experienceMemory.Size())));
+        CreateUi(s);LoadConfig(s);EnableWindow(s->lookaheadEdit,FALSE);UpdateRegionLabel(s);UpdateNextRegionLabel(s);UpdateAgainRegionLabel(s);UpdateTrainingStats(s);RefreshWindows(s);
         if(!RegisterHotKey(hwnd,HOTKEY_STOP,MOD_NOREPEAT,VK_F8)) AppendLog(s,L"提示：F8 全局热键注册失败；请使用界面停止按钮，并避免切换窗口。");
         return 0;
     case WM_COMMAND:
@@ -194,8 +188,8 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_TEST:TestRecognition(s);return 0;
         case ID_START:StartBot(s);return 0;
         case ID_STOP:StopBot(s);return 0;
-        case ID_SUBMIT_SCORE:SubmitTrainingScore(s);return 0;
-        case ID_RESET_MODEL:ResetTrainingModel(s);return 0;
+        case ID_SUBMIT_SCORE:OpenBenchmarkFile(s,false);return 0;
+        case ID_RESET_MODEL:OpenBenchmarkFile(s,true);return 0;
         case ID_MODE:if(HIWORD(wp)==CBN_SELCHANGE){
             const bool gpu=SendMessageW(s->modeCombo,CB_GETCURSEL,0,0)==1;
             AppendLog(s,gpu?L"已选择 GPU Direct3D 11 Compute；无真实硬件 GPU 时会明确停止，不回退 CPU/WARP。":L"已选择 CPU 多核穷举；并行拆分首层候选并使用所有可用逻辑处理器。");

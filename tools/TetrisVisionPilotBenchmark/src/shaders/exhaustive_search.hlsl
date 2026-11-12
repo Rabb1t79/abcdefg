@@ -3,6 +3,7 @@
 #define MASK ((1u << COLS) - 1u)
 struct Node {
     uint rows[20];
+    uint firstRows[20];
     int placed;
     int lines;
     int firstX;
@@ -76,7 +77,10 @@ void ExpandCS(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID
 
     Node parent = gInput[parentIndex];
     Node child;
-    [unroll] for (int r = 0; r < ROWS; ++r) child.rows[r] = 0;
+    [unroll] for (int r = 0; r < ROWS; ++r) {
+        child.rows[r] = 0;
+        child.firstRows[r] = 0;
+    }
     child.placed = 0;
     child.lines = 0;
     child.firstX = 0;
@@ -123,7 +127,10 @@ void ExpandCS(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID
                             if (placedRows[readRow] == MASK) ++cleared;
                             else compact[writeRow--] = placedRows[readRow];
                         }
-                        [unroll] for (int row = 0; row < ROWS; ++row) child.rows[row] = compact[row];
+                        [unroll] for (int row = 0; row < ROWS; ++row) {
+                            child.rows[row] = compact[row];
+                            child.firstRows[row] = gDepth == 0 ? compact[row] : parent.firstRows[row];
+                        }
                         child.placed = parent.placed + 1;
                         child.lines = parent.lines + cleared;
                         child.firstX = gDepth == 0 ? x : parent.firstX;
@@ -245,24 +252,27 @@ bool Better(Eval a, Eval b) {
     return a.firstRotation < b.firstRotation;
 }
 
-groupshared Node gBestNodes[128];
-groupshared Eval gBestEvals[128];
-groupshared uint gHasBest[128];
+groupshared Node gBestNodes[64];
+groupshared Eval gBestEvals[64];
+groupshared uint gHasBest[64];
 
-[numthreads(128, 1, 1)]
+[numthreads(64, 1, 1)]
 void ReduceCS(uint3 groupThreadId : SV_GroupThreadID) {
     const uint lane = groupThreadId.x;
     bool has = false;
     Node bestNode;
     Eval bestEval;
-    [unroll] for (int r = 0; r < ROWS; ++r) bestNode.rows[r] = 0;
+    [unroll] for (int r = 0; r < ROWS; ++r) {
+        bestNode.rows[r] = 0;
+        bestNode.firstRows[r] = 0;
+    }
     bestNode.placed = 0; bestNode.lines = 0; bestNode.firstX = 0;
     bestNode.firstRotation = 0; bestNode.rotationTaps = 0;
     bestNode.horizontalTaps = 0; bestNode.firstLines = 0;
     bestNode.multiClearEvents = 0; bestNode.multiClearLines = 0;
     bestNode.valid = 0; bestNode.terminal = 0;
 
-    for (uint i = lane; i < gInputCount; i += 128) {
+    for (uint i = lane; i < gInputCount; i += 64) {
         Node node = gInput[i];
         if (node.valid == 0) continue;
         Eval e = Evaluate(node);
@@ -277,7 +287,7 @@ void ReduceCS(uint3 groupThreadId : SV_GroupThreadID) {
     gHasBest[lane] = has ? 1u : 0u;
     GroupMemoryBarrierWithGroupSync();
 
-    for (uint offset = 64; offset > 0; offset >>= 1) {
+    for (uint offset = 32; offset > 0; offset >>= 1) {
         if (lane < offset && gHasBest[lane + offset] != 0 &&
             (gHasBest[lane] == 0 || Better(gBestEvals[lane + offset], gBestEvals[lane]))) {
             gBestNodes[lane] = gBestNodes[lane + offset];

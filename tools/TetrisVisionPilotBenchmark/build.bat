@@ -14,8 +14,8 @@ if errorlevel 1 goto failed
 cmake --build build --config Release
 if errorlevel 1 goto failed
 echo.
-echo Build successful: %cd%\build\Release\TetrisVisionPilotBenchmarkBenchmark.exe
-start "" "%cd%\build\Release\TetrisVisionPilot.exe"
+echo Build successful: %cd%\build\Release\TetrisVisionPilotBenchmark.exe
+start "" "%cd%\build\Release\TetrisVisionPilotBenchmark.exe"
 exit /b 0
 :failed
 echo.

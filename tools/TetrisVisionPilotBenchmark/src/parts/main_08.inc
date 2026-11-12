@@ -13,17 +13,27 @@
 
 void UpdateTrainingStats(AppState* s) {
     if (!s->trainingStatsLabel) return;
-    const TrainerSnapshot snap = s->trainer.Snapshot();
-    std::wstring text = Format(
-        L"训练局数：%llu    平均分：%.0f    最高分：%d    基础示范样本：%llu 对    高分局经验：%llu 条    待结算动作：%llu    最近成绩差值（仅记录）：%+.3f\r\n"
-        L"权重：高度 %.4f | 空洞 %.4f | 起伏 %.4f | 最高列 %.4f | 井 %.4f | 行边界 %.4f | 列边界 %.4f | 消行 %.4f",
-        static_cast<unsigned long long>(snap.games), snap.averageScore, snap.bestScore,
-        static_cast<unsigned long long>(snap.bootstrapSamples),
-        static_cast<unsigned long long>(s->experienceMemory.Size()),
-        static_cast<unsigned long long>(snap.pendingActions), snap.lastAdvantage,
-        snap.weights[0], snap.weights[1], snap.weights[2], snap.weights[3],
-        snap.weights[4], snap.weights[5], snap.weights[6], snap.weights[7]);
-    SetWindowTextW(s->trainingStatsLabel, text.c_str());
+    SetWindowTextW(s->trainingStatsLabel,
+        L"对照说明：CPU 使用多核并行；GPU 使用真实 D3D11 硬件计算着色器。GPU 初始化耗时单独统计，稳态搜索耗时不含首次创建设备。\r\n"
+        L"马拉松记忆只在确认 NEXT 方块出生后提交锁定棋盘；若无法验证或发现未知新增格，会停止而不猜测。");
+}
+
+void OpenBenchmarkFile(AppState* s, bool memoryFile) {
+    std::wstring path = memoryFile ? s->configPath : s->logPath;
+    const size_t slash = path.find_last_of(L"\\/");
+    path = (slash == std::wstring::npos ? L".\\" : path.substr(0, slash + 1)) +
+        (memoryFile ? L"TetrisVisionPilotBenchmark-marathon-memory.csv" : L"TetrisVisionPilotBenchmark.log");
+    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        MessageBoxW(s->hwnd, memoryFile
+            ? L"马拉松记忆档案尚未生成。请先开始一局并完成至少一次锁定。"
+            : L"性能日志尚未生成。请先运行一次 CPU 或 GPU 测试。",
+            L"文件尚不存在", MB_ICONINFORMATION);
+        return;
+    }
+    const HINSTANCE result = ShellExecuteW(s->hwnd, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(result) <= 32) {
+        MessageBoxW(s->hwnd, L"无法打开记录文件；请检查文件关联或权限。", L"打开失败", MB_ICONWARNING);
+    }
 }
 
 void AppendTrainingCsv(AppState* s, int score, double learningRate, double epsilon, double temperature) {

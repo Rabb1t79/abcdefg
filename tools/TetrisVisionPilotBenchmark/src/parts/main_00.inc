@@ -6,6 +6,7 @@
 #include <mmsystem.h>
 #include <windowsx.h>
 #include <commctrl.h>
+#include <shellapi.h>
 #include <condition_variable>
 #include <chrono>
 #include <d3d11.h>

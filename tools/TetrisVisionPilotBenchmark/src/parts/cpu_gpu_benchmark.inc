@@ -23,6 +23,10 @@ bool ChooseCpuParallelAction(const Board& board, char piece, int currentRotation
     const int futureCount = (std::min)(2, static_cast<int>(nextQueue.size()));
     for (int i = 0; i < futureCount; ++i) sequence.push_back(nextQueue[static_cast<size_t>(i)]);
 
+    LARGE_INTEGER frequency{}, started{}, finished{};
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&started);
+
     const std::vector<ActionCandidate> roots = EnumerateActions(board, piece);
     if (roots.empty()) return false;
 
@@ -31,9 +35,6 @@ bool ChooseCpuParallelAction(const Board& board, char piece, int currentRotation
     std::vector<ExhaustiveSearchState> localBest(roots.size());
     std::vector<std::uint64_t> localNodes(roots.size(), 0);
     std::atomic<size_t> cursor{0};
-    LARGE_INTEGER frequency{}, started{}, finished{};
-    QueryPerformanceFrequency(&frequency);
-    QueryPerformanceCounter(&started);
 
     auto worker = [&]() {
         for (;;) {
@@ -95,6 +96,7 @@ bool ChooseCpuParallelAction(const Board& board, char piece, int currentRotation
 
 struct GpuNode {
     std::uint32_t rows[20]{};
+    std::uint32_t firstRows[20]{};
     std::int32_t placed{};
     std::int32_t lines{};
     std::int32_t firstX{};
@@ -122,7 +124,7 @@ struct GpuParams {
     std::int32_t currentX{};
     std::uint32_t pad[3]{};
 };
-static_assert(sizeof(GpuNode) == 124, "GPU node layout must match HLSL");
+static_assert(sizeof(GpuNode) == 204, "GPU node layout must match HLSL");
 static_assert(sizeof(GpuShape) == 48, "GPU shape layout must match HLSL");
 static_assert(sizeof(GpuParams) == 32, "GPU constant buffer must be 16-byte aligned");
 
@@ -317,11 +319,12 @@ public:
             return false;
         }
         Board firstBoard{};
-        int firstLines = 0;
-        if (!PlaceAndClear(board, rotations->second[static_cast<size_t>(result.firstRotation)],
-                           result.firstX, firstBoard, firstLines) ||
-            firstLines != result.firstLines) {
-            error = L"GPU 最优动作无法由主规则引擎复现；为避免执行不一致动作，已中止。";
+        for (int y = 0; y < ROWS; ++y)
+            for (int x = 0; x < COLS; ++x)
+                firstBoard[y][x] = (result.firstRows[y] & (1u << x)) ? 1 : 0;
+        const int firstLines = result.firstLines;
+        if (firstLines < 0 || firstLines > 4) {
+            error = L"GPU 返回的首步消行数超出有效范围；已中止。";
             return false;
         }
 
@@ -563,7 +566,8 @@ public:
 
     void Commit(const Board& expectedBoard, char piece, int rotation, int x,
                 int clearedLines, int multiClearEvents, double computeMs,
-                double inputMs, double endToEndMs) {
+                double inputMs, double endToEndMs, const Board& sourceBoard,
+                std::uint64_t candidateChecks, int backendCode) {
         board_ = expectedBoard;
         initialized_ = true;
         lastReportedRecovery_ = -1;
@@ -582,6 +586,9 @@ public:
         record.inputMs = inputMs;
         record.endToEndMs = endToEndMs;
         record.boardHash = HashBoard(expectedBoard);
+        record.sourceBoardHash = HashBoard(sourceBoard);
+        record.candidateChecks = candidateChecks;
+        record.backendCode = backendCode;
         history_.push_back(record);
         if (history_.size() > 4096) history_.erase(history_.begin());
 
@@ -591,12 +598,13 @@ public:
             std::ofstream output{filePath, std::ios::out | std::ios::app};
             if (output) {
                 if (writeHeader)
-                    output << "sequence,piece,rotation,x,cleared_lines,multi_clear_events,compute_ms,input_ms,end_to_end_ms,board_hash,rows_hex\n";
+                    output << "sequence,piece,rotation,x,cleared_lines,multi_clear_events,compute_ms,input_ms,end_to_end_ms,board_hash,source_board_hash,backend_code,candidate_checks,rows_hex\n";
                 output << record.sequence << ',' << record.piece << ',' << record.rotation << ','
                        << record.x << ',' << record.clearedLines << ',' << record.multiClearEvents << ','
                        << std::fixed << std::setprecision(3) << record.computeMs << ','
                        << record.inputMs << ',' << record.endToEndMs << ','
-                       << std::hex << record.boardHash << std::dec << ',';
+                       << std::hex << record.boardHash << ',' << record.sourceBoardHash << std::dec << ','
+                       << record.backendCode << ',' << record.candidateChecks << ',';
                 for (int y = 0; y < ROWS; ++y) {
                     unsigned int mask = 0;
                     for (int col = 0; col < COLS; ++col) if (expectedBoard[y][col]) mask |= (1u << col);
@@ -620,6 +628,9 @@ private:
         double inputMs{};
         double endToEndMs{};
         std::uint64_t boardHash{};
+        std::uint64_t sourceBoardHash{};
+        std::uint64_t candidateChecks{};
+        int backendCode{};
     };
 
     static std::uint64_t HashBoard(const Board& board) {

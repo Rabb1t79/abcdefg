@@ -10,7 +10,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 add_executable(TetrisVisionPilotBenchmark WIN32 src/main.cpp)
 target_compile_features(TetrisVisionPilotBenchmark PRIVATE cxx_std_17)
 find_package(Tesseract CONFIG REQUIRED)
-target_link_libraries(TetrisVisionPilotBenchmark PRIVATE user32 gdi32 comctl32 winmm d3d11 dxgi dwmapi windowsapp d3dcompiler Tesseract::libtesseract)
+target_link_libraries(TetrisVisionPilotBenchmark PRIVATE user32 gdi32 comctl32 winmm d3d11 dxgi dwmapi windowsapp d3dcompiler shell32 Tesseract::libtesseract)
 add_custom_command(TARGET TetrisVisionPilotBenchmark POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/tessdata"

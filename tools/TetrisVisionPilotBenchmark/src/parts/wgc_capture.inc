@@ -115,7 +115,7 @@ void WgcCaptureThread(const std::shared_ptr<WgcCaptureState>& state) {
 
             const auto contentSize = frame.ContentSize();
             const ULONGLONG now = GetTickCount64();
-            if (contentSize.Width > 0 && contentSize.Height > 0 && now - lastPublish >= 25) {
+            if (contentSize.Width > 0 && contentSize.Height > 0 && now - lastPublish >= 16) {
                 auto surface = frame.Surface();
                 auto access = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                 winrt::com_ptr<ID3D11Texture2D> sourceTexture;

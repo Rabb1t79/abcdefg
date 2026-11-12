@@ -26,6 +26,8 @@
         const size_t memorySlash=memoryPath.find_last_of(L"\\/");
         memoryPath=(memorySlash==std::wstring::npos?L".\\":memoryPath.substr(0,memorySlash+1))+L"TetrisVisionPilotBenchmark-marathon-memory.csv";
         marathonMemory.SetPath(memoryPath);
+        marathonMemory.ResetForNewGame();
+        log(L"已建立本局马拉松棋盘记忆；每次确认锁定后都会保存预测棋盘、来源棋盘和性能数据。");
         tesseract::TessBaseAPI ocr;
         const std::string tessPath = WideToUtf8(s->tessdataPath);
         const int ocrInit = tessPath.empty() ? -1 : ocr.Init(tessPath.c_str(), "eng", tesseract::OEM_LSTM_ONLY);
@@ -41,6 +43,17 @@
         bool pendingActionValidation=false;
         TrainingExperience pendingExperience{};
         Board pendingExpectedBoard{};
+        bool pendingMemoryCommit=false;
+        Board pendingSourceBoard{};
+        char pendingMemoryPiece{};
+        char pendingMemoryNextPiece{};
+        int pendingMemoryRotation{}, pendingMemoryX{}, pendingMemoryMinY{};
+        int pendingMemoryLines{}, pendingMemoryMultiEvents{};
+        double pendingMemoryComputeMs{}, pendingMemoryInputMs{};
+        std::uint64_t pendingMemoryCandidateChecks{};
+        int pendingMemoryBackendCode{};
+        std::chrono::steady_clock::time_point pendingMemoryDecisionStart{};
+        DWORD pendingDropTick{};
         DWORD lastScoreRead=0, lastGameOverRead=0;
         int latestScore=0, gameOverHits=0;
         bool hasLatestScore=false;
@@ -100,23 +113,24 @@
 
             if (detectedGameOver) {
                 log(L"检测到 GAME OVER，正在结算本局。");
+                if (pendingMemoryCommit) {
+                    const double endToEndMs = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - pendingMemoryDecisionStart).count();
+                    marathonMemory.Commit(pendingExpectedBoard, pendingMemoryPiece,
+                        pendingMemoryRotation, pendingMemoryX, pendingMemoryLines,
+                        pendingMemoryMultiEvents, pendingMemoryComputeMs,
+                        pendingMemoryInputMs, endToEndMs, pendingSourceBoard,
+                        pendingMemoryCandidateChecks, pendingMemoryBackendCode);
+                    pendingMemoryCommit = false;
+                    log(L"GAME OVER 前最后一次硬降已写入马拉松记忆档案。");
+                }
                 if (pendingActionValidation) {
                     log(L"最后一次硬降未等到下一块棋盘验证；该动作不计入训练样本。");
                     pendingActionValidation=false;
                 }
                 if (hasLatestScore) {
                     PostMessageW(s->hwnd, WM_APP_SCORE_RECORDED, static_cast<WPARAM>(latestScore), 0);
-                    const TrainerSnapshot training = s->trainer.Snapshot();
-                    if (training.pendingActions > 0) {
-                        SaveCurrentEpisodeMemory(s,latestScore);
-                        double advantage = 0.0; size_t samples = 0; std::wstring trainingMessage;
-                        if (s->trainer.SubmitScore(latestScore, learningRate, advantage, samples, trainingMessage)) {
-                            s->trainer.Save(s->modelPath);
-                            log(trainingMessage);
-                            PostMessageW(s->hwnd, WM_APP_TRAIN_STATS, 0, 0);
-                        } else log(L"自动结算未执行训练："+trainingMessage);
-                    } else log(L"已保存最终分数，但本局没有待结算的 AI 动作样本。");
-                    AppendTrainingCsv(s, latestScore, learningRate, epsilon, temperature);
+                    log(Format(L"本局最终 SCORE：%d；本测试版本不执行在线训练，性能数据独立记录到日志与马拉松记忆 CSV。",latestScore));
                 } else {
                     log(L"检测到 GAME OVER，但运行期间没有读到可信分数；未猜测分数，也未自动重开。");
                     break;
@@ -142,7 +156,10 @@
                     if (boardError.empty() && newGame.hasActive) { restarted=true; break; }
                 }
                 if(!restarted){log(L"点击 Again 后未确认新方块出现；已停止自动重试，避免在旧弹窗上重复点击。");break;}
-                log(L"已确认新一局开始，重置分数缓存。");
+                log(L"已确认新一局开始，重置分数缓存和透明砖块记忆。");
+                marathonMemory.ResetForNewGame();
+                pendingActionValidation=false;
+                pendingMemoryCommit=false;
                 SleepCheck(s->stop,450);
                 latestScore = 0; hasLatestScore = false;
                 scoreResetObserved = false;
@@ -155,6 +172,47 @@
             std::wstring capError;
             VisionResult vision=AnalyzeStable(rect,threshold,capError,2,4);
             if(!capError.empty()) { log(L"屏幕截图失败："+capError); break; }
+
+            if (pendingMemoryCommit) {
+                const bool expectedSpawnType = pendingMemoryNextPiece == 0 ||
+                    vision.active.name == pendingMemoryNextPiece;
+                const bool newPieceAtSpawn = vision.hasActive &&
+                    expectedSpawnType && vision.active.minY <= 2 &&
+                    (vision.active.name != pendingMemoryPiece || pendingMemoryMinY > 2 ||
+                     GetTickCount() - pendingDropTick >= 80);
+                if (!newPieceAtSpawn) {
+                    if (GetTickCount() - pendingDropTick > 5000) {
+                        log(L"硬降后 5 秒内未确认 NEXT 新方块出生；未提交猜测棋盘，自动操作已停止。");
+                        break;
+                    }
+                    SleepCheck(s->stop,8);
+                    continue;
+                }
+
+                const Board observedFixedBoard = BoardWithoutActive(vision);
+                int unexpectedAfterLock = 0;
+                for (int y = 0; y < ROWS; ++y)
+                    for (int x = 0; x < COLS; ++x)
+                        if (observedFixedBoard[y][x] && !pendingExpectedBoard[y][x])
+                            ++unexpectedAfterLock;
+                if (unexpectedAfterLock > 0) {
+                    log(Format(L"新方块出生后发现 %d 个超出预测棋盘的固定格；不写入不一致记忆，已停止。",unexpectedAfterLock));
+                    break;
+                }
+
+                const double endToEndMs = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - pendingMemoryDecisionStart).count();
+                marathonMemory.Commit(pendingExpectedBoard, pendingMemoryPiece,
+                    pendingMemoryRotation, pendingMemoryX, pendingMemoryLines,
+                    pendingMemoryMultiEvents, pendingMemoryComputeMs,
+                    pendingMemoryInputMs, endToEndMs, pendingSourceBoard,
+                    pendingMemoryCandidateChecks, pendingMemoryBackendCode);
+                pendingMemoryCommit = false;
+                pendingActionValidation = true;
+                log(Format(L"马拉松记忆已确认并保存：当前固定格 %d；本次消行 %d；纯计算 %.3f ms；输入链路 %.3f ms；端到端 %.3f ms。",
+                    marathonMemory.RememberedCells(),pendingMemoryLines,
+                    pendingMemoryComputeMs,pendingMemoryInputMs,endToEndMs));
+            }
 
             int recoveredCells=0, unexpectedCells=0;
             Board rememberedVisionBoard=marathonMemory.Reconcile(vision,recoveredCells,unexpectedCells);
@@ -277,6 +335,7 @@
                 move.rotation,move.x));
             if (gpuMode && backendInfo.initializationMs > 0.0)
                 log(Format(L"GPU 冷启动初始化另计：%.3f ms；不计入稳态搜索耗时。",backendInfo.initializationMs));
+            const auto inputStarted = std::chrono::steady_clock::now();
             const auto& pieceRotations=g_rotations[piece.name];
             int rotateSteps=(move.rotation-piece.rotation+static_cast<int>(pieceRotations.size()))%static_cast<int>(pieceRotations.size());
             log(Format(L"当前 %c 型（稳定采样 %d/3）；NEXT=[%s]；前瞻 %d 块；目标旋转 %d、列 %d，路径评分 %.2f。",
@@ -386,16 +445,26 @@
                 move.rotation,observedX,usedGhost?L"Ghost轮廓":L"活动方块"));
             std::wstring err;
             if(!TapKey(target,VK_SPACE,tapMs,err)) throw std::runtime_error("硬降按键失败或焦点丢失。");
-            if (trainableAction) {
-                pendingExperience=decision.experience;
-                pendingExpectedBoard=decision.expectedBoard;
-                pendingActionValidation=true;
-                log(Format(L"已发送硬降；等待下一块出现后核对棋盘，再决定是否记录训练样本；本次预测消行 %d。",
-                    decision.predictedLines));
-            } else {
-                pendingActionValidation=false;
-                log(Format(L"已发送硬降；穷举模式不写入训练样本；本次预测消行 %d。",decision.predictedLines));
-            }
+            pendingExpectedBoard = decision.expectedBoard;
+            pendingSourceBoard = board;
+            pendingMemoryPiece = piece.name;
+            pendingMemoryNextPiece = queue.pieces.empty() ? 0 : queue.pieces.front();
+            pendingMemoryRotation = move.rotation;
+            pendingMemoryX = move.x;
+            pendingMemoryMinY = positioned.hasActive ? positioned.active.minY : piece.minY;
+            pendingMemoryLines = decision.predictedLines;
+            pendingMemoryMultiEvents = exhaustive.multiClearEvents;
+            pendingMemoryComputeMs = backendInfo.computeMs;
+            pendingMemoryInputMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - inputStarted).count();
+            pendingMemoryCandidateChecks = backendInfo.candidateChecks;
+            pendingMemoryBackendCode = gpuMode ? 1 : 0;
+            pendingMemoryDecisionStart = solverStart;
+            pendingDropTick = GetTickCount();
+            pendingMemoryCommit = true;
+            pendingActionValidation = false;
+            log(Format(L"已发送硬降；等待确认 NEXT 方块出生，再将锁定棋盘写入马拉松记忆；本次预测消行 %d。",
+                decision.predictedLines));
             SleepCheck(s->stop,dropWaitMs);
         }
     } catch(const std::exception& e) {
