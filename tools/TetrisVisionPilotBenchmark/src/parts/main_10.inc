@@ -143,11 +143,11 @@ void CreateUi(AppState* s) {
     SendMessageW(s->autoRetryCheck,BM_SETCHECK,BST_CHECKED,0);
 
     // Training controls: reward comes from the real end-of-game score entered by the user.
-    make(0,L"STATIC",L"成绩反馈学习（高于基准时正向强化；低分只记录原因，不反向惩罚权重）",SS_LEFT,20,252,900,22,0);
-    make(0,L"STATIC",L"本局最终分数：",SS_LEFT,20,284,100,24,0);
+    make(0,L"STATIC",L"性能统计：搜索耗时、候选节点、输入耗时、端到端耗时、多行消除规划",SS_LEFT,20,252,900,22,0);
+    make(0,L"STATIC",L"测试模式：",SS_LEFT,20,284,100,24,0);
     s->scoreEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,120,280,90,27,ID_SCORE);
-    make(0,L"BUTTON",L"提交成绩并学习",BS_PUSHBUTTON,225,278,145,32,ID_SUBMIT_SCORE);
-    make(0,L"BUTTON",L"重置模型",BS_PUSHBUTTON,380,278,100,32,ID_RESET_MODEL);
+    make(0,L"BUTTON",L"保存性能记录",BS_PUSHBUTTON,225,278,145,32,ID_SUBMIT_SCORE);
+    make(0,L"BUTTON",L"清除学习数据",BS_PUSHBUTTON,380,278,100,32,ID_RESET_MODEL);
     make(0,L"STATIC",L"学习率：",SS_LEFT,20,322,58,24,0);
     s->learningRateEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0.08",ES_AUTOHSCROLL,82,318,55,26,ID_LEARNING_RATE);
     make(0,L"STATIC",L"探索率 %：",SS_LEFT,155,322,72,24,0);
@@ -156,7 +156,7 @@ void CreateUi(AppState* s) {
     s->temperatureEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0.40",ES_AUTOHSCROLL,350,318,55,26,ID_TEMPERATURE);
     make(0,L"STATIC",L"学习率控制每次更新幅度；探索率控制尝试非当前最优动作的概率；温度控制策略随机性。",SS_LEFT,425,322,625,24,0);
     s->trainingStatsLabel=make(0,L"STATIC",L"模型状态：正在加载……",SS_LEFT,20,354,1030,55,ID_TRAIN_STATS);
-    make(0,L"STATIC",L"算法说明：Softmax + ε 探索 + REINFORCE；当前落点会模拟 NEXT 队列，并用有限宽度 Beam Search 规划多步路径。",SS_LEFT,20,410,1040,24,0);
+    make(0,L"STATIC",L"CPU/GPU 使用相同三块前瞻穷举规则；GPU 通过 Direct3D 11 计算着色器扩展搜索树并执行最终归约。",SS_LEFT,20,410,1040,24,0);
 
     make(0,L"STATIC",L"运行日志",SS_LEFT,20,443,500,22,0);
     s->logEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"",ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL|WS_VSCROLL|WS_HSCROLL,20,468,760,410,ID_LOG);
@@ -164,9 +164,9 @@ void CreateUi(AppState* s) {
     s->preview=CreateWindowExW(WS_EX_CLIENTEDGE,L"TetrisPreview",L"",WS_CHILD|WS_VISIBLE,805,468,245,410,s->hwnd,reinterpret_cast<HMENU>(ID_PREVIEW),g_instance,nullptr);
     SetWindowLongPtrW(s->preview,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(s));
     AppendLog(s,L"程序已就绪。请选择游戏窗口，分别框选棋盘和 NEXT 预览列，再测试识别。");
-    AppendLog(s,L"训练说明：首次使用会载入规则生成的基础示范；每次落块记录动作样本；运行中自动缓存 SCORE，识别 GAME OVER 后自动结算（也可停止后手动提交成绩）。");
-    AppendLog(s,L"模式可切换：模拟智能会使用基础示范、策略学习和经验记忆；纯数学穷举会遍历当前方块与最多两个 NEXT 方块的合法落点，不进行训练。");
-    AppendLog(s,L"温和训练模式：成绩高于基准时做正向更新；低于基准时仅保存诊断记录，不执行负向权重更新。");
+    AppendLog(s,L"本程序不进行策略训练，专用于比较 CPU 多核与 GPU 硬件计算吞吐。");
+    AppendLog(s,L"请选择 CPU 多核穷举或 GPU Direct3D 11 计算；两种模式使用同一棵当前方块 + 最多两个 NEXT 的搜索树。");
+    AppendLog(s,L"马拉松棋盘记忆：锁定后更新 10×20 状态；透明砖块使用已记忆位置补全，消行后同步压缩棋盘记忆。");
     AppendLog(s,L"输入节奏：方向键采用高精度独立点按；默认按下 1 ms、间隔 0 ms，启动时以 1–4 ms 校准；游戏实际响应仍受帧轮询限制。");
     AppendLog(s,L"自动结算：SCORE 优先使用游戏原生数字模板，匹配不确定时回退 OCR；GAME OVER 使用 OCR 检测。识别后冻结分数，勾选自动重开时会点击你框选的 Again 按钮。");
 }
