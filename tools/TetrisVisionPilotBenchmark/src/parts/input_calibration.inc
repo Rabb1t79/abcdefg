@@ -18,7 +18,7 @@ struct InputCalibrationResult {
 bool ReadCalibrationPiece(HWND target, const Rect& rect, int threshold,
                           char expectedPiece, int expectedRotation,
                           int& xOut, int& yOut, std::wstring& error) {
-    VisionResult vision = AnalyzeStable(rect, threshold, error);
+    VisionResult vision = AnalyzeStable(rect, threshold, error, 2, 4);
     if (!error.empty()) return false;
     if (!vision.hasActive ||
         vision.active.name != expectedPiece ||
