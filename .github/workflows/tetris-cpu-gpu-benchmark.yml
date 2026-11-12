@@ -1,0 +1,63 @@
+name: Tetris CPU-GPU Benchmark - Windows
+
+on:
+  push:
+    branches:
+      - feat/tetris-cpu-gpu-benchmark-20261113
+    paths:
+      - "tools/TetrisVisionPilotBenchmark/**"
+      - ".github/workflows/tetris-cpu-gpu-benchmark.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build CPU-GPU Benchmark Windows x64
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Tesseract OCR (static x64)
+        shell: pwsh
+        run: |
+          $vcpkg = Join-Path $env:VCPKG_INSTALLATION_ROOT "vcpkg.exe"
+          & $vcpkg install tesseract:x64-windows-static
+
+      - name: Download English OCR model
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force tools/TetrisVisionPilotBenchmark/tessdata | Out-Null
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata" -OutFile "tools/TetrisVisionPilotBenchmark/tessdata/eng.traineddata"
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -S tools/TetrisVisionPilotBenchmark -B build/tetris-vision-pilot-benchmark -A x64 "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static
+
+      - name: Build
+        run: cmake --build build/tetris-vision-pilot-benchmark --config Release --parallel
+
+      - name: Verify executable and runtime assets
+        shell: pwsh
+        run: |
+          $exe = "build/tetris-vision-pilot-benchmark/Release/TetrisVisionPilotBenchmark.exe"
+          $shader = "build/tetris-vision-pilot-benchmark/Release/shaders/exhaustive_search.hlsl"
+          $tessdata = "build/tetris-vision-pilot-benchmark/Release/tessdata/eng.traineddata"
+          foreach ($path in @($exe, $shader, $tessdata)) {
+            if (!(Test-Path $path)) { throw "Expected build asset was not produced: $path" }
+            Get-Item $path | Format-List FullName,Length,LastWriteTime
+          }
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: TetrisVisionPilotBenchmark-Windows-x64
+          if-no-files-found: error
+          path: |
+            build/tetris-vision-pilot-benchmark/Release/TetrisVisionPilotBenchmark.exe
+            build/tetris-vision-pilot-benchmark/Release/shaders/exhaustive_search.hlsl
+            build/tetris-vision-pilot-benchmark/Release/tessdata/eng.traineddata
+            tools/TetrisVisionPilotBenchmark/README.md
+            tools/TetrisVisionPilotBenchmark/LEARNING_GUIDE.md
