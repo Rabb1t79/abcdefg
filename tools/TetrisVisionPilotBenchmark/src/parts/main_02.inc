@@ -358,10 +358,11 @@ VisionResult Analyze(const CapturedImage& image, int threshold, int spawnRows = 
 }
 
 
-VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error) {
-    constexpr int kSamples = 3;
-    constexpr int kSampleIntervalMs = 28;
-    std::array<VisionResult, kSamples> samples{};
+VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error,
+                           int requestedSamples = 3, int sampleIntervalMs = 28) {
+    const int kSamples = (std::max)(2, (std::min)(3, requestedSamples));
+    const int kSampleIntervalMs = (std::max)(0, (std::min)(28, sampleIntervalMs));
+    std::array<VisionResult, 3> samples{};
     for (int i = 0; i < kSamples; ++i) {
         CapturedImage image;
         if (!CaptureScreenRect(rect, image, error)) return {};
@@ -370,7 +371,7 @@ VisionResult AnalyzeStable(const Rect& rect, int threshold, std::wstring& error)
     }
 
     // Confirm the ghost outline in at least two of three captured frames.
-    const auto& latest = samples.back();
+    const auto& latest = samples[static_cast<size_t>(kSamples - 1)];
     Candidate stableGhost{};
     int stableGhostCount = 0;
     int stableGhostIndex = -1;
