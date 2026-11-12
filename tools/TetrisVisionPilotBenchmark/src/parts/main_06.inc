@@ -526,7 +526,7 @@ void AppendTrainingCsv(AppState* s, int score, double learningRate, double epsil
 void BotThread(AppState* s, HWND target, Rect rect, Rect nextRect, int threshold,
                int previewCount, int lookaheadDepth, double epsilon, double temperature,
                int tapMs, int keyGapMs, int dropWaitMs, Rect scoreRect, Rect againRect,
-               double learningRate, bool autoRetry, bool mathMode) {
+               double learningRate, bool autoRetry, bool mathMode, bool gpuMode) {
     auto log=[&](const std::wstring& m){Log(s,m);};
     ScopedInputTimerResolution inputTimer;
     if (!inputTimer.Active())
