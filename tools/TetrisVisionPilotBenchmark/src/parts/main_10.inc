@@ -117,8 +117,8 @@ void CreateUi(AppState* s) {
     make(0,L"STATIC",L"（背景阈值）",SS_LEFT,175,130,100,24,0);
     make(0,L"STATIC",L"模式：",SS_LEFT,300,130,45,24,0);
     s->modeCombo=make(0,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_TABSTOP,350,126,215,120,ID_MODE);
-    SendMessageW(s->modeCombo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"模拟智能（学习）"));
-    SendMessageW(s->modeCombo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"纯数学穷举"));
+    SendMessageW(s->modeCombo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"CPU 多核穷举"));
+    SendMessageW(s->modeCombo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"GPU Direct3D 11 计算"));
     SendMessageW(s->modeCombo,CB_SETCURSEL,0,0);
     make(0,L"STATIC",L"NEXT块数：",SS_LEFT,580,130,65,24,0);
     s->nextCountEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"6",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,650,126,38,26,ID_NEXT_COUNT);
@@ -129,7 +129,7 @@ void CreateUi(AppState* s) {
     make(0,L"STATIC",L"间隔",SS_LEFT,914,130,35,24,0);
     s->keyGapEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,948,126,38,26,ID_KEY_GAP);
     make(0,L"STATIC",L"落稳",SS_LEFT,992,130,35,24,0);
-    s->dropWaitEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"190",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,1027,126,48,26,ID_DROP_WAIT);
+    s->dropWaitEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"5",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,1027,126,48,26,ID_DROP_WAIT);
     s->nextStatusLabel=make(0,L"STATIC",L"NEXT识别：尚未测试",SS_LEFT,600,176,175,24,0);
     make(0,L"BUTTON",L"测试 SCORE 识别",BS_PUSHBUTTON,785,170,125,32,ID_TEST_SCORE);
     s->scoreStatusLabel=make(0,L"STATIC",L"SCORE 识别：未测试",SS_LEFT,920,176,165,24,0);
