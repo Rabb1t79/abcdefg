@@ -138,7 +138,7 @@
                     // Do not treat an OCR miss as a restart: the playfield must also
                     // contain a newly spawned active tetromino before retry continues.
                     std::wstring boardError;
-                    const VisionResult newGame = AnalyzeStable(rect,threshold,boardError);
+                    const VisionResult newGame = AnalyzeStable(rect,threshold,boardError,2,4);
                     if (boardError.empty() && newGame.hasActive) { restarted=true; break; }
                 }
                 if(!restarted){log(L"点击 Again 后未确认新方块出现；已停止自动重试，避免在旧弹窗上重复点击。");break;}
@@ -153,20 +153,29 @@
             }
 
             std::wstring capError;
-            VisionResult vision=AnalyzeStable(rect,threshold,capError);
+            VisionResult vision=AnalyzeStable(rect,threshold,capError,2,4);
             if(!capError.empty()) { log(L"屏幕截图失败："+capError); break; }
 
-            // A hard-dropped piece should fill the ghost footprint. Compare the
-            // resulting fixed board immediately; this can confirm the action
-            // before a new active piece appears at the spawn point.
-            if (pendingActionValidation &&
-                BoardWithoutActive(vision) == pendingExpectedBoard) {
-                s->trainer.AddExperience(pendingExperience);
-                pendingActionValidation=false;
-                log(Format(L"落点锁定验证通过：实际棋盘与预测棋盘一致；%s；训练样本 +1（本局累计 %llu）。",
-                    vision.hasActive?L"已排除新活动方块":L"无需等待新方块出生",
-                    static_cast<unsigned long long>(s->trainer.Snapshot().pendingActions)));
-                PostMessageW(s->hwnd,WM_APP_TRAIN_STATS,0,0);
+            int recoveredCells=0, unexpectedCells=0;
+            Board rememberedVisionBoard=marathonMemory.Reconcile(vision,recoveredCells,unexpectedCells);
+            if (marathonMemory.ShouldReportRecovery(recoveredCells)) {
+                log(Format(L"透明砖块记忆恢复 %d 格；当前固定砖块记忆 %d 格；本局已记录 %llu 次落块。",
+                    recoveredCells,marathonMemory.RememberedCells(),
+                    static_cast<unsigned long long>(marathonMemory.HistoryCount())));
+            }
+            if (unexpectedCells>0) {
+                log(Format(L"视觉棋盘出现 %d 个记忆中不存在的新增格；与预测状态不一致，为避免错误硬降已停止。",
+                    unexpectedCells));
+                break;
+            }
+            if (pendingActionValidation && vision.hasActive) {
+                if (rememberedVisionBoard==pendingExpectedBoard) {
+                    pendingActionValidation=false;
+                    log(L"落点锁定验证通过：记忆棋盘与预测一致；即使透明砖块暂时不可见，也已由历史状态补全。");
+                } else {
+                    log(L"记忆棋盘与上一落点预测不一致；可能存在输入偏差或识别异常，停止继续落块。");
+                    break;
+                }
             }
 
             if(!vision.hasActive) {
@@ -176,11 +185,18 @@
             noPieceSince=GetTickCount();
             Candidate piece=vision.active;
             SleepCheck(s->stop,25); if(s->stop.load())break;
-            VisionResult check=AnalyzeStable(rect,threshold,capError);
+            VisionResult check=AnalyzeStable(rect,threshold,capError,2,4);
             if(!capError.empty()) { log(L"复核截图失败："+capError); break; }
             if(!check.hasActive || check.active.name!=piece.name || check.active.rotation!=piece.rotation || check.active.minX!=piece.minX) continue;
             piece=check.active;
-            Board board=BoardWithoutActive(check);
+            int checkRecovered=0, checkUnexpected=0;
+            Board board=marathonMemory.Reconcile(check,checkRecovered,checkUnexpected);
+            if (marathonMemory.ShouldReportRecovery(checkRecovered))
+                log(Format(L"复核时通过马拉松记忆补全透明砖块 %d 格。",checkRecovered));
+            if (checkUnexpected>0) {
+                log(Format(L"二次复核发现 %d 个超出记忆棋盘的格子；停止以避免误降。",checkUnexpected));
+                break;
+            }
             if (calibrationPending) {
                 InputCalibrationResult calibration{};
                 std::wstring calibrationSummary;
@@ -200,7 +216,7 @@
                 if (!calibrationSummary.empty()) log(L"开局输入校准："+calibrationSummary);
                 calibrationPending=false;
                 if (s->stop.load()) break;
-                VisionResult afterCalibration=AnalyzeStable(rect,threshold,capError);
+                VisionResult afterCalibration=AnalyzeStable(rect,threshold,capError,2,4);
                 if (!capError.empty()) { log(L"输入校准后复核截图失败："+capError); break; }
                 if (!afterCalibration.hasActive ||
                     afterCalibration.active.name!=piece.name ||
@@ -211,18 +227,18 @@
                 }
                 check=std::move(afterCalibration);
                 piece=check.active;
-                board=BoardWithoutActive(check);
+                int afterCalRecovered=0, afterCalUnexpected=0;
+                board=marathonMemory.Reconcile(check,afterCalRecovered,afterCalUnexpected);
+                if(afterCalUnexpected>0) { log(L"校准后棋盘与马拉松记忆不一致；停止本次操作。"); break; }
             }
             if (pendingActionValidation) {
                 if (board == pendingExpectedBoard) {
-                    s->trainer.AddExperience(pendingExperience);
-                    log(Format(L"落点验证通过：实际棋盘与预测棋盘一致；训练样本 +1（本局累计 %llu）。",
-                        static_cast<unsigned long long>(s->trainer.Snapshot().pendingActions)));
+                    pendingActionValidation=false;
+                    log(L"当前棋盘复核通过；马拉松状态记忆与预测一致。");
                 } else {
-                    log(L"落点验证未通过：实际棋盘与预测棋盘不一致；本次动作不加入训练，避免错误归因。");
+                    log(L"当前棋盘与上一落点预测不一致；停止自动操作以保护后续决策。");
+                    break;
                 }
-                pendingActionValidation=false;
-                PostMessageW(s->hwnd,WM_APP_TRAIN_STATS,0,0);
             }
 
             NextQueueResult queue;
@@ -293,7 +309,7 @@
             if(rotateSteps>0) {
                 SleepCheck(s->stop,55);
                 if(s->stop.load())break;
-                VisionResult rotated=AnalyzeStable(rect,threshold,capError);
+                VisionResult rotated=AnalyzeStable(rect,threshold,capError,2,4);
                 if(!capError.empty()) { log(L"旋转后复核截图失败："+capError); break; }
                 bool usedGhost=false;
                 if(!ReadPieceColumn(rotated,piece.name,move.rotation,currentX,usedGhost,piece.minY)) {
@@ -318,7 +334,7 @@
             // proof that the game advanced exactly one column.
             SleepCheck(s->stop,45);
             if(s->stop.load())break;
-            VisionResult positioned=AnalyzeStable(rect,threshold,capError);
+            VisionResult positioned=AnalyzeStable(rect,threshold,capError,2,4);
             if(!capError.empty()) { log(L"横移后位置复核截图失败："+capError); break; }
             int observedX=0;
             bool usedGhost=false;
@@ -343,7 +359,7 @@
                 if(s->stop.load())break;
                 SleepCheck(s->stop,45);
                 if(s->stop.load())break;
-                VisionResult corrected=AnalyzeStable(rect,threshold,capError);
+                VisionResult corrected=AnalyzeStable(rect,threshold,capError,2,4);
                 if(!capError.empty()) { log(L"位置纠正后复核截图失败："+capError); break; }
                 int correctedX=0;
                 bool correctedByGhost=false;
