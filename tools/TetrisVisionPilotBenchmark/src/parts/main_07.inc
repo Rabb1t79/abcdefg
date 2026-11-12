@@ -114,15 +114,8 @@
             if (detectedGameOver) {
                 log(L"检测到 GAME OVER，正在结算本局。");
                 if (pendingMemoryCommit) {
-                    const double endToEndMs = std::chrono::duration<double, std::milli>(
-                        std::chrono::steady_clock::now() - pendingMemoryDecisionStart).count();
-                    marathonMemory.Commit(pendingExpectedBoard, pendingMemoryPiece,
-                        pendingMemoryRotation, pendingMemoryX, pendingMemoryLines,
-                        pendingMemoryMultiEvents, pendingMemoryComputeMs,
-                        pendingMemoryInputMs, endToEndMs, pendingSourceBoard,
-                        pendingMemoryCandidateChecks, pendingMemoryBackendCode);
                     pendingMemoryCommit = false;
-                    log(L"GAME OVER 前最后一次硬降已写入马拉松记忆档案。");
+                    log(L"GAME OVER 发生在下一块出生验证之前；最后一步未得到确认，因此不写入已确认的马拉松记忆。");
                 }
                 if (pendingActionValidation) {
                     log(L"最后一次硬降未等到下一块棋盘验证；该动作不计入训练样本。");

@@ -76,10 +76,10 @@ void StartBot(AppState* s) {
     EnableWindow(s->startButton,FALSE);EnableWindow(s->stopButton,TRUE);SetWindowTextW(s->statusLabel,L"状态：运行中（F8 紧急停止）");
     Rect rect=s->boardRect, nextRect=s->nextRect;int threshold=ReadThreshold(s);
     const int previewCount=static_cast<int>(ReadDoubleEdit(s->nextCountEdit,6,1,10));
-    const int lookaheadDepth=static_cast<int>(ReadDoubleEdit(s->lookaheadEdit,4,1,6));
-    const double epsilon=ReadDoubleEdit(s->epsilonEdit,5.0,0.0,60.0)/100.0;
-    const double temperature=ReadDoubleEdit(s->temperatureEdit,0.40,0.05,5.0);
-    const double learningRate=ReadDoubleEdit(s->learningRateEdit,0.08,0.001,0.50);
+    const int lookaheadDepth=2;
+    constexpr double epsilon=0.05;
+    constexpr double temperature=0.40;
+    constexpr double learningRate=0.08;
     const int tapMs=static_cast<int>(ReadDoubleEdit(s->keyHoldEdit,1,1,4));
     int keyGapMs=static_cast<int>(ReadDoubleEdit(s->keyGapEdit,0,0,2));
     if (tapMs + keyGapMs > 6) {
