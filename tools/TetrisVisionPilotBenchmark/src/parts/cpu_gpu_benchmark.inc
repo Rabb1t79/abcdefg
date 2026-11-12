@@ -649,8 +649,14 @@ private:
 
     void AppendSessionMarker(const char* marker) {
         if (path_.empty()) return;
-        std::ofstream output{std::filesystem::path(path_), std::ios::out | std::ios::app};
-        if (output) output << "# " << marker << '\n';
+        const std::filesystem::path filePath(path_);
+        const bool writeHeader = !std::filesystem::exists(filePath) ||
+            std::filesystem::file_size(filePath) == 0;
+        std::ofstream output{filePath, std::ios::out | std::ios::app};
+        if (!output) return;
+        if (writeHeader)
+            output << "sequence,piece,rotation,x,cleared_lines,multi_clear_events,compute_ms,input_ms,end_to_end_ms,board_hash,source_board_hash,backend_code,candidate_checks,rows_hex\n";
+        output << "# " << marker << '\n';
     }
 
     Board board_{};
