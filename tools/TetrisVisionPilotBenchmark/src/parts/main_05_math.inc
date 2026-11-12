@@ -3,6 +3,8 @@
 // and the declared objective; it is not a proof of whole-game global optimality.
 struct ExhaustiveEvaluation {
     int placed{};
+    int firstMultiClear{};
+    int firstMultiClearLines{};
     int multiClearEvents{};
     int multiClearLines{};
     int lines{};
@@ -36,7 +38,9 @@ struct ExhaustiveDecision {
 
 bool BetterExhaustive(const ExhaustiveEvaluation& a, const ExhaustiveEvaluation& b) {
     if (a.placed != b.placed) return a.placed > b.placed;
-    // Give explicit preference to one placement clearing two or more rows.
+    // Prefer an immediate multi-line clear before optimizing future clears.
+    if (a.firstMultiClear != b.firstMultiClear) return a.firstMultiClear > b.firstMultiClear;
+    if (a.firstMultiClearLines != b.firstMultiClearLines) return a.firstMultiClearLines > b.firstMultiClearLines;
     if (a.multiClearEvents != b.multiClearEvents) return a.multiClearEvents > b.multiClearEvents;
     if (a.multiClearLines != b.multiClearLines) return a.multiClearLines > b.multiClearLines;
     if (a.lines != b.lines) return a.lines > b.lines;
@@ -55,10 +59,13 @@ bool BetterExhaustive(const ExhaustiveEvaluation& a, const ExhaustiveEvaluation&
 }
 
 ExhaustiveEvaluation EvaluateExhaustiveBoard(const Board& board, int placed, int lines,
-                                               int multiClearEvents, int multiClearLines) {
+                                               int multiClearEvents, int multiClearLines,
+                                               int firstLines) {
     const Features f = ExtractFeatures(board, 0);
     ExhaustiveEvaluation e;
     e.placed = placed;
+    e.firstMultiClear = firstLines >= 2 ? 1 : 0;
+    e.firstMultiClearLines = firstLines >= 2 ? firstLines : 0;
     e.multiClearEvents = multiClearEvents;
     e.multiClearLines = multiClearLines;
     e.lines = lines;
@@ -89,7 +96,7 @@ void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
                       ExhaustiveSearchState& best, std::uint64_t& nodes) {
     if (depth >= sequence.size()) {
         ExhaustiveEvaluation evaluation = EvaluateExhaustiveBoard(
-            board, placed, totalLines, multiClearEvents, multiClearLines);
+            board, placed, totalLines, multiClearEvents, multiClearLines, firstLines);
         evaluation.rotationTaps = rotationTaps;
         evaluation.horizontalTaps = horizontalTaps;
         evaluation.keyTaps = rotationTaps + horizontalTaps;
@@ -110,7 +117,7 @@ void ExhaustiveSearch(const Board& board, const std::vector<char>& sequence,
     if (actions.empty()) {
         if (depth == 0) return; // No legal move for the current piece is a top-out.
         ExhaustiveEvaluation evaluation = EvaluateExhaustiveBoard(
-            board, placed, totalLines, multiClearEvents, multiClearLines);
+            board, placed, totalLines, multiClearEvents, multiClearLines, firstLines);
         evaluation.rotationTaps = rotationTaps;
         evaluation.horizontalTaps = horizontalTaps;
         evaluation.keyTaps = rotationTaps + horizontalTaps;

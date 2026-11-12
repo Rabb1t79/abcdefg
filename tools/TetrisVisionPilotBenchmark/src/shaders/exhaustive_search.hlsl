@@ -25,6 +25,8 @@ struct Shape {
 };
 struct Eval {
     int placed;
+    int firstMultiClear;
+    int firstMultiClearLines;
     int multiClearEvents;
     int multiClearLines;
     int lines;
@@ -169,6 +171,8 @@ void ExpandCS(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID
 Eval Evaluate(Node node) {
     Eval e;
     e.placed = node.placed;
+    e.firstMultiClear = node.firstLines >= 2 ? 1 : 0;
+    e.firstMultiClearLines = node.firstLines >= 2 ? node.firstLines : 0;
     e.multiClearEvents = node.multiClearEvents;
     e.multiClearLines = node.multiClearLines;
     e.lines = node.lines;
@@ -235,6 +239,8 @@ Eval Evaluate(Node node) {
 
 bool Better(Eval a, Eval b) {
     if (a.placed != b.placed) return a.placed > b.placed;
+    if (a.firstMultiClear != b.firstMultiClear) return a.firstMultiClear > b.firstMultiClear;
+    if (a.firstMultiClearLines != b.firstMultiClearLines) return a.firstMultiClearLines > b.firstMultiClearLines;
     if (a.multiClearEvents != b.multiClearEvents) return a.multiClearEvents > b.multiClearEvents;
     if (a.multiClearLines != b.multiClearLines) return a.multiClearLines > b.multiClearLines;
     if (a.lines != b.lines) return a.lines > b.lines;
