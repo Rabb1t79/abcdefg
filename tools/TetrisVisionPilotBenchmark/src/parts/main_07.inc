@@ -320,12 +320,12 @@
             decision.expectedBoard = exhaustive.expectedBoard;
             decision.predictedLines = exhaustive.predictedLines;
             decision.searchedNextPieces = exhaustive.searchedNextPieces;
-            log(Format(L"%s 搜索完成：候选节点 %llu；纯计算 %.3f ms；CPU 线程 %u；设备 %s；前瞻当前方块 + %d NEXT；多行清除计划 %d 次（%d 行）；目标旋转 %d、列 %d。",
+            log(Format(L"%s 搜索完成：候选节点 %llu；纯计算 %.3f ms；CPU 线程 %u；设备 %s；前瞻当前方块 + %d NEXT；首步立即消行 %d；前瞻内多行清除计划 %d 次（%d 行）；目标旋转 %d、列 %d。",
                 backendInfo.backend.c_str(),
                 static_cast<unsigned long long>(exhaustive.nodes),backendInfo.computeMs,
                 backendInfo.cpuThreads,backendInfo.device.empty()?L"CPU":backendInfo.device.c_str(),
-                exhaustive.searchedNextPieces,exhaustive.multiClearEvents,exhaustive.multiClearLines,
-                move.rotation,move.x));
+                exhaustive.searchedNextPieces,exhaustive.predictedLines,
+                exhaustive.multiClearEvents,exhaustive.multiClearLines,move.rotation,move.x));
             if (gpuMode && backendInfo.initializationMs > 0.0)
                 log(Format(L"GPU 冷启动初始化另计：%.3f ms；不计入稳态搜索耗时。",backendInfo.initializationMs));
             const auto inputStarted = std::chrono::steady_clock::now();

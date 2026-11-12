@@ -147,7 +147,7 @@ void CreateUi(AppState* s) {
     s->scoreEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0",ES_AUTOHSCROLL|ES_NUMBER|ES_READONLY,125,280,90,27,ID_SCORE);
     make(0,L"BUTTON",L"打开性能日志",BS_PUSHBUTTON,230,278,135,32,ID_SUBMIT_SCORE);
     make(0,L"BUTTON",L"打开马拉松记忆",BS_PUSHBUTTON,375,278,145,32,ID_RESET_MODEL);
-    make(0,L"STATIC",L"搜索目标：优先能放置更多方块，再优先累计 2 行及以上的消除事件，随后比较棋盘安全特征与输入步数。",SS_LEFT,20,322,1040,24,0);
+    make(0,L"STATIC",L"搜索目标：优先放置更多方块；其后优先当前这一步立即消除 2 行以上，再比较前瞻内累计多行消除与棋盘安全特征。",SS_LEFT,20,322,1040,24,0);
     s->learningRateEdit=nullptr;
     s->epsilonEdit=nullptr;
     s->temperatureEdit=nullptr;
