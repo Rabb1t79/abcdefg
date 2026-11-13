@@ -14,15 +14,15 @@
 #include <dxgi.h>
 #include <dwmapi.h>
 #include <windows.foundation.h>
+#include <unknwn.h>
+// The Direct3D11 interop header references the projected
+// Windows::Foundation namespace, so make the projection visible first.
+#include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
 #include <windows.graphics.capture.h>
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
-#include <unknwn.h>
-// The projected Foundation header brings in the C++/WinRT base declarations
-// in the correct order. Including winrt/base.h directly first causes the
-// Windows.Foundation namespace error seen with the Windows 10.0.26100 SDK.
-#include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Graphics.Capture.h>
 #include <winrt/Windows.Graphics.DirectX.h>
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
