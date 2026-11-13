@@ -590,8 +590,9 @@ public:
         return recoveredCells > 0;
     }
 
-    bool Commit(const Board& expectedBoard, char piece, int rotation, int x,
-                int clearedLines, int multiClearEvents, double computeMs,
+    bool Commit(const Board& expectedBoard, char piece, int rotation,
+                int tokenRotationPhase, int x, int clearedLines,
+                int multiClearEvents, double computeMs,
                 double inputMs, double endToEndMs, const Board& sourceBoard,
                 std::uint64_t candidateChecks, int backendCode, int scoreSnapshot,
                 std::string& tokenLabelOut, std::uint32_t& instanceIdOut,
@@ -615,6 +616,10 @@ public:
             return false;
         }
 
+        if (tokenRotationPhase < 0 || tokenRotationPhase > 3) {
+            error = L"旋转相位必须是 0 到 3；拒绝写入不明确的形状令牌。";
+            return false;
+        }
         const std::vector<Cell>& shape = rotationIt->second[static_cast<size_t>(rotation)];
         int maxY = 0;
         for (const Cell& cell : shape) maxY = (std::max)(maxY, cell.y);
@@ -668,7 +673,7 @@ public:
             return false;
         }
 
-        const auto token = BuildShapeToken(piece, rotation);
+        const auto token = BuildShapeToken(piece, tokenRotationPhase);
         if (token.second == 0) {
             error = L"当前方块无法映射到已定义的形状令牌。";
             return false;
@@ -680,7 +685,8 @@ public:
         record.piece = piece;
         record.tokenLabel = token.first;
         record.tokenId = token.second;
-        record.rotation = rotation;
+        record.rotation = rotation; // normalized cell geometry used by the solver
+        record.tokenRotationPhase = tokenRotationPhase; // actual clockwise phase tracked from spawn
         record.x = x;
         record.landingY = landingY;
         record.clearedLines = actualCleared;
@@ -698,7 +704,8 @@ public:
         line << "P," << sessionId_ << ',' << record.sequence << ','
              << record.instanceId << ',' << record.piece << ','
              << record.tokenLabel << ',' << record.tokenId << ','
-             << record.rotation << ',' << record.x << ',' << record.landingY << ','
+             << record.rotation << ',' << record.tokenRotationPhase << ','
+             << record.x << ',' << record.landingY << ','
              << record.clearedLines << ',' << record.multiClearEvents << ','
              << std::fixed << std::setprecision(3)
              << record.computeMs << ',' << record.inputMs << ',' << record.endToEndMs << ','
@@ -732,6 +739,7 @@ private:
         std::string tokenLabel;
         int tokenId{};
         int rotation{};
+        int tokenRotationPhase{};
         int x{};
         int landingY{};
         int clearedLines{};
@@ -747,7 +755,7 @@ private:
     };
 
     static constexpr const char* kJournalHeader =
-        "TETRIS_VISION_PILOT_MARATHON_MEMORY_V2";
+        "TETRIS_VISION_PILOT_MARATHON_MEMORY_V3";
 
     static std::pair<std::string, int> BuildShapeToken(char piece, int rotation) {
         const int orientation = ((rotation % 4) + 4) % 4;
@@ -915,12 +923,12 @@ private:
                     ++validEvents;
                     continue;
                 }
-                if (fields[0] == "P" && fields.size() >= 22) {
+                if (fields[0] == "P" && fields.size() >= 23) {
                     if (std::stoull(fields[1]) != sessionId_) continue;
                     Board decodedBoard{};
                     OwnerGrid decodedOwners{};
-                    if (!DecodeRows(fields[20], decodedBoard) ||
-                        !DecodeOwners(fields[21], decodedOwners)) continue;
+                    if (!DecodeRows(fields[21], decodedBoard) ||
+                        !DecodeOwners(fields[22], decodedOwners)) continue;
 
                     MarathonMoveRecord record;
                     record.sequence = std::stoull(fields[2]);
@@ -929,18 +937,24 @@ private:
                     record.tokenLabel = fields[5];
                     record.tokenId = std::stoi(fields[6]);
                     record.rotation = std::stoi(fields[7]);
-                    record.x = std::stoi(fields[8]);
-                    record.landingY = std::stoi(fields[9]);
-                    record.clearedLines = std::stoi(fields[10]);
-                    record.multiClearEvents = std::stoi(fields[11]);
-                    record.computeMs = std::stod(fields[12]);
-                    record.inputMs = std::stod(fields[13]);
-                    record.endToEndMs = std::stod(fields[14]);
-                    record.backendCode = std::stoi(fields[15]);
-                    record.candidateChecks = std::stoull(fields[16]);
-                    record.scoreSnapshot = std::stoi(fields[17]);
-                    record.boardHash = std::stoull(fields[18], nullptr, 16);
-                    record.sourceBoardHash = std::stoull(fields[19], nullptr, 16);
+                    record.tokenRotationPhase = std::stoi(fields[8]);
+                    record.x = std::stoi(fields[9]);
+                    record.landingY = std::stoi(fields[10]);
+                    record.clearedLines = std::stoi(fields[11]);
+                    record.multiClearEvents = std::stoi(fields[12]);
+                    record.computeMs = std::stod(fields[13]);
+                    record.inputMs = std::stod(fields[14]);
+                    record.endToEndMs = std::stod(fields[15]);
+                    record.backendCode = std::stoi(fields[16]);
+                    record.candidateChecks = std::stoull(fields[17]);
+                    record.scoreSnapshot = std::stoi(fields[18]);
+                    record.boardHash = std::stoull(fields[19], nullptr, 16);
+                    record.sourceBoardHash = std::stoull(fields[20], nullptr, 16);
+                    if (record.tokenRotationPhase < 0 || record.tokenRotationPhase > 3)
+                        continue;
+                    const auto expectedToken = BuildShapeToken(record.piece, record.tokenRotationPhase);
+                    if (expectedToken.first != record.tokenLabel ||
+                        expectedToken.second != record.tokenId) continue;
                     if (HashBoard(decodedBoard) != record.boardHash) continue;
                     bool ownershipValid = true;
                     std::uint32_t maximumOwner = 0;

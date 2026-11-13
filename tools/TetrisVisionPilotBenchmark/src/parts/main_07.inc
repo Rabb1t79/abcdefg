@@ -24,7 +24,7 @@
         MarathonBoardMemory marathonMemory;
         std::wstring memoryPath=s->configPath;
         const size_t memorySlash=memoryPath.find_last_of(L"\\/");
-        memoryPath=(memorySlash==std::wstring::npos?L".\\":memoryPath.substr(0,memorySlash+1))+L"TetrisVisionPilotBenchmark-marathon-memory-v2.csv";
+        memoryPath=(memorySlash==std::wstring::npos?L".\\":memoryPath.substr(0,memorySlash+1))+L"TetrisVisionPilotBenchmark-marathon-memory-v3.csv";
         marathonMemory.SetPath(memoryPath);
         if (!marathonMemory.Ready())
             throw std::runtime_error(WideToUtf8(marathonMemory.LoadStatus()));
@@ -68,7 +68,10 @@
         Board pendingSourceBoard{};
         char pendingMemoryPiece{};
         char pendingMemoryNextPiece{};
-        int pendingMemoryRotation{}, pendingMemoryX{}, pendingMemoryMinY{};
+        int pendingMemoryRotation{}, pendingMemoryTokenRotationPhase{}, pendingMemoryX{}, pendingMemoryMinY{};
+        char trackedPieceForPhase{};
+        int trackedRotationPhase{};
+        bool trackedRotationPhaseInitialized=false;
         int pendingMemoryLines{}, pendingMemoryMultiEvents{};
         double pendingMemoryComputeMs{}, pendingMemoryInputMs{};
         std::uint64_t pendingMemoryCandidateChecks{};
@@ -221,7 +224,8 @@
                 std::uint32_t memoryInstance = 0;
                 std::wstring memoryCommitError;
                 if (!marathonMemory.Commit(pendingExpectedBoard, pendingMemoryPiece,
-                    pendingMemoryRotation, pendingMemoryX, pendingMemoryLines,
+                    pendingMemoryRotation, pendingMemoryTokenRotationPhase,
+                    pendingMemoryX, pendingMemoryLines,
                     pendingMemoryMultiEvents, pendingMemoryComputeMs,
                     pendingMemoryInputMs, endToEndMs, pendingSourceBoard,
                     pendingMemoryCandidateChecks, pendingMemoryBackendCode, latestScore,
@@ -231,6 +235,10 @@
                 }
                 pendingMemoryCommit = false;
                 pendingActionValidation = true;
+                // A confirmed NEXT spawn resets the per-piece clockwise phase.
+                trackedPieceForPhase = vision.active.name;
+                trackedRotationPhase = vision.active.rotation;
+                trackedRotationPhaseInitialized = true;
                 const std::wstring memoryTokenWide(memoryToken.begin(), memoryToken.end());
                 log(Format(L"马拉松记忆已确认：实例 #%u；形状令牌 %s；当前固定格 %d；本次消行 %d；纯计算 %.3f ms；输入链路 %.3f ms；端到端 %.3f ms。",
                     memoryInstance,memoryTokenWide.c_str(),marathonMemory.RememberedCells(),pendingMemoryLines,
@@ -274,6 +282,14 @@
             if(!capError.empty()) { log(L"复核截图失败："+capError); break; }
             if(!check.hasActive || check.active.name!=piece.name || check.active.rotation!=piece.rotation || check.active.minX!=piece.minX) continue;
             piece=check.active;
+            if (!trackedRotationPhaseInitialized || trackedPieceForPhase != piece.name) {
+                // At first attachment, initialize from the currently visible
+                // geometry. For exact 180-degree phase on symmetric pieces,
+                // start a fresh game at spawn; later pieces are tracked from spawn.
+                trackedPieceForPhase = piece.name;
+                trackedRotationPhase = piece.rotation;
+                trackedRotationPhaseInitialized = true;
+            }
             int checkRecovered=0, checkUnexpected=0;
             Board board=marathonMemory.Reconcile(check,checkRecovered,checkUnexpected);
             if (!marathonMemory.Ready()) {
@@ -393,6 +409,7 @@
                 if (kickOutcome==WallKickAttemptOutcome::Applied) {
                     currentX=kickedX;
                     rotatedWithWallKick=true;
+                    trackedRotationPhase = (trackedRotationPhase + 1) % 4;
                     rotateSteps=0;
                     log(kickMessage);
                 } else if (kickOutcome==WallKickAttemptOutcome::FailedAndRestored) {
@@ -419,6 +436,9 @@
                 }
                 if(usedGhost) log(Format(L"旋转复核：Ghost 确认 %c 型、旋转 %d、落点列 %d。",
                     piece.name,move.rotation,currentX));
+                // The visible geometry confirmed the requested turn count.
+                // Keep the full 0..3 phase even for 180-degree symmetric pieces.
+                trackedRotationPhase = (trackedRotationPhase + rotateSteps) % 4;
             }
 
             int delta=move.x-currentX;
@@ -485,6 +505,7 @@
             pendingMemoryPiece = piece.name;
             pendingMemoryNextPiece = queue.pieces.empty() ? 0 : queue.pieces.front();
             pendingMemoryRotation = move.rotation;
+            pendingMemoryTokenRotationPhase = trackedRotationPhase;
             pendingMemoryX = move.x;
             pendingMemoryMinY = positioned.hasActive ? positioned.active.minY : piece.minY;
             pendingMemoryLines = decision.predictedLines;
