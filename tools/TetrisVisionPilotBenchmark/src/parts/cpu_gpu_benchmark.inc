@@ -620,6 +620,12 @@ public:
             error = L"旋转相位必须是 0 到 3；拒绝写入不明确的形状令牌。";
             return false;
         }
+        const int phaseGeometry = tokenRotationPhase %
+            static_cast<int>(rotationIt->second.size());
+        if (rotation != phaseGeometry) {
+            error = L"实际旋转相位与可见几何朝向不一致；拒绝写入可能错误的令牌。";
+            return false;
+        }
         const std::vector<Cell>& shape = rotationIt->second[static_cast<size_t>(rotation)];
         int maxY = 0;
         for (const Cell& cell : shape) maxY = (std::max)(maxY, cell.y);
@@ -955,7 +961,15 @@ private:
                     const auto expectedToken = BuildShapeToken(record.piece, record.tokenRotationPhase);
                     if (expectedToken.first != record.tokenLabel ||
                         expectedToken.second != record.tokenId) continue;
-                    if (HashBoard(decodedBoard) != record.boardHash) continue;
+                    const auto rotationIt = g_rotations.find(record.piece);
+                    if (rotationIt == g_rotations.end() || rotationIt->second.empty() ||
+                        record.rotation != record.tokenRotationPhase %
+                            static_cast<int>(rotationIt->second.size())) continue;
+                    if (sequence_ == (std::numeric_limits<std::uint64_t>::max)() ||
+                        record.sequence != sequence_ + 1 ||
+                        record.instanceId != nextInstance_) continue;
+                    if (!initialized_ || HashBoard(board_) != record.sourceBoardHash ||
+                        HashBoard(decodedBoard) != record.boardHash) continue;
                     bool ownershipValid = true;
                     std::uint32_t maximumOwner = 0;
                     for (int y = 0; y < ROWS; ++y) {

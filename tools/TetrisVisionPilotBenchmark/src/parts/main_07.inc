@@ -289,6 +289,20 @@
                 trackedPieceForPhase = piece.name;
                 trackedRotationPhase = piece.rotation;
                 trackedRotationPhaseInitialized = true;
+            } else {
+                const auto phaseShapeIt = g_rotations.find(piece.name);
+                if (phaseShapeIt == g_rotations.end() || phaseShapeIt->second.empty()) {
+                    log(L"当前方块缺少旋转模板；不能可靠维护形状令牌，已停止。");
+                    break;
+                }
+                const int phaseGeometry = trackedRotationPhase %
+                    static_cast<int>(phaseShapeIt->second.size());
+                if (phaseGeometry != piece.rotation) {
+                    // An external/manual turn or a missed input invalidated our
+                    // phase counter. Rebase to the visible geometry and log it.
+                    trackedRotationPhase = piece.rotation;
+                    log(L"旋转相位与当前可见轮廓不一致；已按可见朝向重新校准本块相位。");
+                }
             }
             int checkRecovered=0, checkUnexpected=0;
             Board board=marathonMemory.Reconcile(check,checkRecovered,checkUnexpected);
