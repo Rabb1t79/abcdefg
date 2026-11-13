@@ -18,7 +18,10 @@
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
-#include <winrt/base.h>
+#include <unknwn.h>
+// The projected Foundation header brings in the C++/WinRT base declarations
+// in the correct order. Including winrt/base.h directly first causes the
+// Windows.Foundation namespace error seen with the Windows 10.0.26100 SDK.
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Graphics.Capture.h>
 #include <winrt/Windows.Graphics.DirectX.h>
