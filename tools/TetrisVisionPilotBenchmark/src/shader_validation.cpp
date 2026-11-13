@@ -3,6 +3,7 @@
 #include <d3dcompiler.h>
 
 #include <cstdio>
+#include <cwchar>
 #include <cstring>
 
 int wmain(int argc, wchar_t* argv[]) {
