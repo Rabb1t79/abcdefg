@@ -129,9 +129,10 @@ void ExpandCS(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID
                             if (placedRows[readRow] == MASK) ++cleared;
                             else compact[writeRow--] = placedRows[readRow];
                         }
-                        [unroll] for (int row = 0; row < ROWS; ++row) {
-                            child.rows[row] = compact[row];
-                            child.firstRows[row] = gDepth == 0 ? compact[row] : parent.firstRows[row];
+                        [unroll] for (int rowCopy = 0; rowCopy < ROWS; ++rowCopy) {
+                            child.rows[rowCopy] = compact[rowCopy];
+                            child.firstRows[rowCopy] = gDepth == 0
+                                ? compact[rowCopy] : parent.firstRows[rowCopy];
                         }
                         child.placed = parent.placed + 1;
                         child.lines = parent.lines + cleared;
@@ -176,52 +177,74 @@ Eval Evaluate(Node node) {
     e.multiClearEvents = node.multiClearEvents;
     e.multiClearLines = node.multiClearLines;
     e.lines = node.lines;
-    int heights[COLS];
+
+    // Pad the height vector with wall sentinels. This avoids expressions such
+    // as heights[x - 1] at x == 0 inside a ternary: FXC still diagnoses those
+    // constant-folded branches as out-of-bounds array accesses.
+    int heights[COLS + 2];
+    heights[0] = ROWS;
+    heights[COLS + 1] = ROWS;
     int aggregate = 0;
     int holes = 0;
     int maximum = 0;
-    [unroll] for (int x = 0; x < COLS; ++x) {
-        int first = ROWS;
-        for (int y = 0; y < ROWS; ++y) {
-            if ((node.rows[y] & (1u << x)) != 0) { first = y; break; }
+
+    [unroll] for (int heightCol = 0; heightCol < COLS; ++heightCol) {
+        int firstOccupiedRow = ROWS;
+        for (int scanRow = 0; scanRow < ROWS; ++scanRow) {
+            if ((node.rows[scanRow] & (1u << heightCol)) != 0) {
+                firstOccupiedRow = scanRow;
+                break;
+            }
         }
-        heights[x] = ROWS - first;
-        aggregate += heights[x];
-        maximum = max(maximum, heights[x]);
-        if (first < ROWS) {
-            for (int y = first; y < ROWS; ++y)
-                if ((node.rows[y] & (1u << x)) == 0) ++holes;
+        const int columnHeight = ROWS - firstOccupiedRow;
+        heights[heightCol + 1] = columnHeight;
+        aggregate += columnHeight;
+        maximum = max(maximum, columnHeight);
+        if (firstOccupiedRow < ROWS) {
+            for (int holeRow = firstOccupiedRow; holeRow < ROWS; ++holeRow) {
+                if ((node.rows[holeRow] & (1u << heightCol)) == 0) ++holes;
+            }
         }
     }
+
     int bumpiness = 0;
-    [unroll] for (int x = 0; x < COLS - 1; ++x) bumpiness += abs(heights[x] - heights[x + 1]);
+    [unroll] for (int bumpCol = 0; bumpCol < COLS - 1; ++bumpCol) {
+        bumpiness += abs(heights[bumpCol + 1] - heights[bumpCol + 2]);
+    }
+
     int wells = 0;
-    [unroll] for (int x = 0; x < COLS; ++x) {
-        int left = x == 0 ? ROWS : heights[x - 1];
-        int right = x == COLS - 1 ? ROWS : heights[x + 1];
-        int floorHeight = min(left, right);
-        if (floorHeight > heights[x]) wells += floorHeight - heights[x];
+    [unroll] for (int wellCol = 0; wellCol < COLS; ++wellCol) {
+        const int leftHeight = heights[wellCol];
+        const int centerHeight = heights[wellCol + 1];
+        const int rightHeight = heights[wellCol + 2];
+        const int floorHeight = min(leftHeight, rightHeight);
+        if (floorHeight > centerHeight) wells += floorHeight - centerHeight;
     }
+
     int rowTransitions = 0;
-    for (int y = 0; y < ROWS; ++y) {
-        int previous = 1;
-        for (int x = 0; x < COLS; ++x) {
-            int current = (node.rows[y] & (1u << x)) != 0 ? 1 : 0;
-            if (current != previous) ++rowTransitions;
-            previous = current;
+    for (int transitionRow = 0; transitionRow < ROWS; ++transitionRow) {
+        int previousCell = 1;
+        for (int rowCol = 0; rowCol < COLS; ++rowCol) {
+            const int currentCell =
+                (node.rows[transitionRow] & (1u << rowCol)) != 0 ? 1 : 0;
+            if (currentCell != previousCell) ++rowTransitions;
+            previousCell = currentCell;
         }
-        if (previous == 0) ++rowTransitions;
+        if (previousCell == 0) ++rowTransitions;
     }
+
     int colTransitions = 0;
-    [unroll] for (int x = 0; x < COLS; ++x) {
-        int previous = 1;
-        for (int y = 0; y < ROWS; ++y) {
-            int current = (node.rows[y] & (1u << x)) != 0 ? 1 : 0;
-            if (current != previous) ++colTransitions;
-            previous = current;
+    [unroll] for (int transitionCol = 0; transitionCol < COLS; ++transitionCol) {
+        int previousCell = 1;
+        for (int colRow = 0; colRow < ROWS; ++colRow) {
+            const int currentCell =
+                (node.rows[colRow] & (1u << transitionCol)) != 0 ? 1 : 0;
+            if (currentCell != previousCell) ++colTransitions;
+            previousCell = currentCell;
         }
-        if (previous == 0) ++colTransitions;
+        if (previousCell == 0) ++colTransitions;
     }
+
     e.holes = holes;
     e.maxHeight = maximum;
     e.aggregateHeight = aggregate;
