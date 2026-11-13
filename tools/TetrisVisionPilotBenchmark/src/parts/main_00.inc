@@ -106,7 +106,6 @@ constexpr int ID_MODE = 1030;
 constexpr int ID_AUTO_LOCATE = 1031;
 constexpr int ID_NEW_SESSION = 1032;
 constexpr int ID_AUTO_RETRY_BUTTON = 1033;
-constexpr int ID_NEW_SESSION = 1032;
 constexpr int HOTKEY_STOP = 1;
 constexpr UINT WM_APP_SCORE_RECORDED = WM_APP + 6;
 
