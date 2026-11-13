@@ -39,6 +39,15 @@ jobs:
       - name: Build
         run: cmake --build build/tetris-vision-pilot-benchmark --config Release --parallel
 
+      - name: Validate GPU compute shaders
+        shell: pwsh
+        run: |
+          $validator = "build/tetris-vision-pilot-benchmark/Release/TetrisShaderValidation.exe"
+          $shader = "tools/TetrisVisionPilotBenchmark/src/shaders/exhaustive_search.hlsl"
+          if (!(Test-Path $validator)) { throw "Shader validation tool is missing: $validator" }
+          & $validator $shader
+          if ($LASTEXITCODE -ne 0) { throw "GPU compute shader validation failed." }
+
       - name: Verify executable and runtime assets
         shell: pwsh
         run: |

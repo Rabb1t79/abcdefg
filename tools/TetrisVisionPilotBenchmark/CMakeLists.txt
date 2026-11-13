@@ -8,6 +8,12 @@ endif()
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 add_executable(TetrisVisionPilotBenchmark WIN32 src/main.cpp)
+
+# Compile both compute-shader entry points during CI so runtime FXC errors
+# are caught before a Windows package is published.
+add_executable(TetrisShaderValidation src/shader_validation.cpp)
+target_compile_features(TetrisShaderValidation PRIVATE cxx_std_17)
+target_link_libraries(TetrisShaderValidation PRIVATE d3dcompiler)
 target_compile_features(TetrisVisionPilotBenchmark PRIVATE cxx_std_17)
 find_package(Tesseract CONFIG REQUIRED)
 target_link_libraries(TetrisVisionPilotBenchmark PRIVATE user32 gdi32 comctl32 winmm d3d11 dxgi dwmapi windowsapp d3dcompiler shell32 Tesseract::libtesseract)
@@ -21,4 +27,8 @@ add_custom_command(TARGET TetrisVisionPilotBenchmark POST_BUILD
         "$<TARGET_FILE_DIR:TetrisVisionPilotBenchmark>/shaders")
 if(MSVC)
     target_compile_options(TetrisVisionPilotBenchmark PRIVATE /W4 /utf-8 /permissive- /EHsc)
+endif()
+
+if(MSVC)
+    target_compile_options(TetrisShaderValidation PRIVATE /W4 /utf-8 /permissive- /EHsc)
 endif()
