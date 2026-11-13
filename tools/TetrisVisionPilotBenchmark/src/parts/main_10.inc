@@ -28,8 +28,8 @@ void StartBot(AppState* s) {
         AppendLog(s,L"未启动自动控制："+message);
         SetWindowTextW(s->statusLabel,L"状态：未启动（查看运行日志）");
     };
-    const bool autoRetry=SendMessageW(s->autoRetryCheck,BM_GETCHECK,0,0)==BST_CHECKED;
-    const bool newMemorySession=SendMessageW(s->newSessionCheck,BM_GETCHECK,0,0)==BST_CHECKED;
+    const bool autoRetry=s->autoRetryEnabled;
+    const bool newMemorySession=s->resetMemoryOnNextStart;
     const bool gpuMode=SendMessageW(s->modeCombo,CB_GETCURSEL,0,0)==1;
     const bool mathMode=true; // Benchmark build never updates training weights.
     if(s->worker.joinable())s->worker.join();
@@ -48,7 +48,7 @@ void StartBot(AppState* s) {
     const bool boardRegionValid=IsCaptureRegionInsideClient(target,s->boardRect);
     const bool nextRegionValid=IsCaptureRegionInsideClient(target,s->nextRect);
     const bool scoreRegionValid=IsCaptureRegionInsideClient(target,s->scoreRect);
-    if (!boardRegionValid || !nextRegionValid || !scoreRegionValid) {
+    if (!boardRegionValid || !nextRegionValid || !scoreRegionValid || IsLegacyAutoBoardRect(s->boardRect)) {
         AppendLog(s,L"发现识别区域缺失、失效或超出当前窗口，自动重新定位棋盘、NEXT 和 SCORE。");
         AutoLocateRegions(s);
         NormalizeCaptureRegion(s->boardRect,target);
@@ -85,19 +85,18 @@ void StartBot(AppState* s) {
     constexpr double epsilon=0.05;
     constexpr double temperature=0.40;
     constexpr double learningRate=0.08;
-    const int tapMs=static_cast<int>(ReadDoubleEdit(s->keyHoldEdit,1,1,4));
-    int keyGapMs=static_cast<int>(ReadDoubleEdit(s->keyGapEdit,0,0,2));
-    if (tapMs + keyGapMs > 6) {
-        keyGapMs=(std::max)(0,6-tapMs);
-        SetWindowTextW(s->keyGapEdit,Format(L"%d",keyGapMs).c_str());
-    }
-    const int dropWaitMs=static_cast<int>(ReadDoubleEdit(s->dropWaitEdit,5,0,40));
+    constexpr int tapMs=2;
+    constexpr int keyGapMs=0;
+    constexpr int dropWaitMs=0;
     SaveConfig(s);
     try {
         s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,
             lookaheadDepth,epsilon,temperature,tapMs,keyGapMs,dropWaitMs,
             s->scoreRect,s->againRect,learningRate,autoRetry,mathMode,gpuMode,newMemorySession);
-        if (newMemorySession) SendMessageW(s->newSessionCheck,BM_SETCHECK,BST_UNCHECKED,0);
+        if (newMemorySession) {
+            s->resetMemoryOnNextStart=false;
+            SetWindowTextW(s->newSessionButton,L"新局重置记忆");
+        }
     } catch(...) {
         s->running.store(false);
         EnableWindow(s->startButton,TRUE);
@@ -113,74 +112,79 @@ void StopBot(AppState* s) {
 
 void CreateUi(AppState* s) {
     HFONT font=static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-    auto make=[&](DWORD ex,const wchar_t* cls,const wchar_t* text,DWORD style,int x,int y,int w,int h,int id){
-        HWND c=CreateWindowExW(ex,cls,text,WS_CHILD|WS_VISIBLE|style,x,y,w,h,s->hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),g_instance,nullptr);
-        if(c)SendMessageW(c,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);return c;};
-    make(0,L"STATIC",L"Tetris Vision Pilot  |  CPU / GPU 硬件穷举对照测试",SS_LEFT,20,14,760,30,0);
-    make(0,L"STATIC",L"游戏窗口：",SS_LEFT,20,58,90,24,0);
-    s->combo=make(0,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_VSCROLL|WS_TABSTOP,105,54,550,240,ID_WINDOW);
-    make(0,L"BUTTON",L"刷新窗口",BS_PUSHBUTTON,665,53,105,28,ID_REFRESH);
-    make(0,L"BUTTON",L"框选棋盘区域",BS_PUSHBUTTON,780,53,150,28,ID_SELECT);
-    make(0,L"BUTTON",L"自动定位全部",BS_PUSHBUTTON,935,53,140,28,ID_AUTO_LOCATE);
-    s->regionLabel=make(0,L"STATIC",L"棋盘区域：尚未选择",SS_LEFT,20,95,360,24,ID_REGION);
-    make(0,L"BUTTON",L"框选 NEXT 区域",BS_PUSHBUTTON,390,92,125,28,ID_SELECT_NEXT);
-    s->nextRegionLabel=make(0,L"STATIC",L"NEXT区域：尚未选择",SS_LEFT,530,95,235,24,0);
-    make(0,L"BUTTON",L"框选 SCORE 数字",BS_PUSHBUTTON,780,92,130,28,ID_SELECT_SCORE);
-    s->scoreRegionLabel=make(0,L"STATIC",L"SCORE区域：未选择",SS_LEFT,920,95,155,24,0);
-    make(0,L"STATIC",L"颜色差阈值：",SS_LEFT,20,130,90,24,0);
-    s->thresholdEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"48",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,110,126,55,26,ID_THRESHOLD);
-    make(0,L"STATIC",L"（背景阈值）",SS_LEFT,175,130,100,24,0);
-    make(0,L"STATIC",L"模式：",SS_LEFT,300,130,45,24,0);
-    s->modeCombo=make(0,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_TABSTOP,350,126,215,120,ID_MODE);
-    SendMessageW(s->modeCombo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"CPU 多核穷举"));
-    SendMessageW(s->modeCombo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"GPU Direct3D 11 计算"));
-    SendMessageW(s->modeCombo,CB_SETCURSEL,0,0);
-    make(0,L"STATIC",L"NEXT块数：",SS_LEFT,580,130,65,24,0);
-    s->nextCountEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"6",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,650,126,38,26,ID_NEXT_COUNT);
-    make(0,L"STATIC",L"前瞻NEXT：",SS_LEFT,715,130,65,24,0);
-    s->lookaheadEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"2",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,785,126,38,26,ID_LOOKAHEAD);
-    make(0,L"STATIC",L"点按",SS_LEFT,835,130,35,24,0);
-    s->keyHoldEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"1",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,870,126,38,26,ID_KEY_HOLD);
-    make(0,L"STATIC",L"间隔",SS_LEFT,914,130,35,24,0);
-    s->keyGapEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,948,126,38,26,ID_KEY_GAP);
-    make(0,L"STATIC",L"落稳",SS_LEFT,992,130,35,24,0);
-    s->dropWaitEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"5",ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,1027,126,48,26,ID_DROP_WAIT);
-    s->nextStatusLabel=make(0,L"STATIC",L"NEXT识别：尚未测试",SS_LEFT,600,176,175,24,0);
-    make(0,L"BUTTON",L"测试 SCORE 识别",BS_PUSHBUTTON,785,170,125,32,ID_TEST_SCORE);
-    s->scoreStatusLabel=make(0,L"STATIC",L"SCORE 识别：未测试",SS_LEFT,920,176,165,24,0);
-    make(0,L"BUTTON",L"测试识别",BS_PUSHBUTTON,20,170,115,34,ID_TEST);
-    s->startButton=make(0,L"BUTTON",L"开始自动落块",BS_PUSHBUTTON,145,170,145,34,ID_START);
-    s->stopButton=make(0,L"BUTTON",L"停止",BS_PUSHBUTTON,300,170,90,34,ID_STOP);EnableWindow(s->stopButton,FALSE);
-    s->statusLabel=make(0,L"STATIC",L"状态：就绪",SS_LEFT,410,176,175,24,ID_STATUS);
-    make(0,L"STATIC",L"按键：← 左移　→ 右移　↑ 旋转　Space 硬降　｜　F8 停止",SS_LEFT,20,215,550,24,ID_HELP);
-    s->againRegionButton=make(0,L"BUTTON",L"框选 Again 按钮",BS_PUSHBUTTON|WS_TABSTOP,580,212,145,27,ID_SELECT_AGAIN);
-    s->autoRetryCheck=make(0,L"BUTTON",L"Game Over 后自动重开",BS_AUTOCHECKBOX|WS_TABSTOP,735,212,215,27,ID_AUTO_RETRY);
-    SendMessageW(s->autoRetryCheck,BM_SETCHECK,BST_CHECKED,0);
-    s->newSessionCheck=make(0,L"BUTTON",L"新局重置记忆",BS_AUTOCHECKBOX|WS_TABSTOP,955,212,120,27,ID_NEW_SESSION);
+    auto make=[&](DWORD ex,const wchar_t* cls,const wchar_t* text,DWORD style,
+                  int x,int y,int w,int h,int id){
+        HWND c=CreateWindowExW(ex,cls,text,WS_CHILD|WS_VISIBLE|style,x,y,w,h,
+            s->hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),g_instance,nullptr);
+        if(c) SendMessageW(c,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
+        return c;
+    };
+    make(0,L"STATIC",L"Tetris Vision Pilot",SS_LEFT,20,12,400,28,0);
+    make(0,L"STATIC",L"游戏窗口",SS_LEFT,20,48,80,24,0);
+    s->combo=make(0,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_VSCROLL|WS_TABSTOP,
+        105,44,470,240,ID_WINDOW);
+    make(0,L"BUTTON",L"刷新",BS_PUSHBUTTON,585,43,90,28,ID_REFRESH);
+    make(0,L"BUTTON",L"框选棋盘",BS_PUSHBUTTON,690,43,125,28,ID_SELECT);
+    make(0,L"BUTTON",L"自动定位",BS_PUSHBUTTON,830,43,125,28,ID_AUTO_LOCATE);
 
-    make(0,L"STATIC",L"性能指标：搜索耗时、输入链路、端到端耗时、计划多行消除次数；1 秒目标按实测记录，不作固定保证。",SS_LEFT,20,252,1040,22,0);
-    make(0,L"STATIC",L"最近完成分数：",SS_LEFT,20,284,100,24,0);
-    s->scoreEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0",ES_AUTOHSCROLL|ES_NUMBER|ES_READONLY,125,280,90,27,ID_SCORE);
-    make(0,L"BUTTON",L"打开性能日志",BS_PUSHBUTTON,230,278,135,32,ID_SUBMIT_SCORE);
-    make(0,L"BUTTON",L"打开马拉松记忆",BS_PUSHBUTTON,375,278,145,32,ID_RESET_MODEL);
-    make(0,L"STATIC",L"搜索目标：优先放置更多方块；其后优先当前这一步立即消除 2 行以上，再比较前瞻内累计多行消除与棋盘安全特征。",SS_LEFT,20,322,1040,24,0);
+    s->regionLabel=make(0,L"STATIC",L"棋盘：未设置",SS_LEFT,20,82,340,24,ID_REGION);
+    make(0,L"BUTTON",L"框选 NEXT",BS_PUSHBUTTON,370,78,120,28,ID_SELECT_NEXT);
+    s->nextRegionLabel=make(0,L"STATIC",L"NEXT：未设置",SS_LEFT,505,82,225,24,0);
+    make(0,L"BUTTON",L"框选 SCORE",BS_PUSHBUTTON,745,78,120,28,ID_SELECT_SCORE);
+    s->scoreRegionLabel=make(0,L"STATIC",L"SCORE：未设置",SS_LEFT,880,82,195,24,0);
+
+    make(0,L"STATIC",L"识别阈值",SS_LEFT,20,118,75,24,0);
+    s->thresholdEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"48",
+        ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,100,114,48,26,ID_THRESHOLD);
+    make(0,L"STATIC",L"模式",SS_LEFT,175,118,40,24,0);
+    s->modeCombo=make(0,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_TABSTOP,
+        220,114,190,120,ID_MODE);
+    SendMessageW(s->modeCombo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"CPU 多核"));
+    SendMessageW(s->modeCombo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"GPU D3D11"));
+    SendMessageW(s->modeCombo,CB_SETCURSEL,0,0);
+    make(0,L"STATIC",L"NEXT 数量",SS_LEFT,435,118,65,24,0);
+    s->nextCountEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"6",
+        ES_AUTOHSCROLL|ES_NUMBER|WS_TABSTOP,505,114,42,26,ID_NEXT_COUNT);
+    s->nextStatusLabel=make(0,L"STATIC",L"NEXT：未测试",SS_LEFT,565,118,205,24,0);
+    make(0,L"BUTTON",L"测试 SCORE",BS_PUSHBUTTON,785,110,110,30,ID_TEST_SCORE);
+    s->scoreStatusLabel=make(0,L"STATIC",L"SCORE：未测试",SS_LEFT,910,118,165,24,0);
+
+    make(0,L"BUTTON",L"测试识别",BS_PUSHBUTTON,20,158,110,34,ID_TEST);
+    s->startButton=make(0,L"BUTTON",L"开始自动落块",BS_PUSHBUTTON,140,158,140,34,ID_START);
+    s->stopButton=make(0,L"BUTTON",L"停止",BS_PUSHBUTTON,290,158,80,34,ID_STOP);
+    EnableWindow(s->stopButton,FALSE);
+    s->statusLabel=make(0,L"STATIC",L"就绪",SS_LEFT,385,164,150,24,ID_STATUS);
+    s->againRegionButton=make(0,L"BUTTON",L"设置 Again 区域",
+        BS_PUSHBUTTON|WS_TABSTOP,550,158,140,30,ID_SELECT_AGAIN);
+    s->autoRetryButton=make(0,L"BUTTON",L"自动重开：开",
+        BS_PUSHBUTTON|WS_TABSTOP,705,158,115,30,ID_AUTO_RETRY_BUTTON);
+    s->newSessionButton=make(0,L"BUTTON",L"新局重置记忆",
+        BS_PUSHBUTTON|WS_TABSTOP,835,158,140,30,ID_NEW_SESSION);
+
+    make(0,L"STATIC",L"本局分数",SS_LEFT,20,207,80,24,0);
+    s->scoreEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"0",
+        ES_AUTOHSCROLL|ES_NUMBER|ES_READONLY,105,203,90,27,ID_SCORE);
+    make(0,L"BUTTON",L"打开性能日志",BS_PUSHBUTTON,215,201,130,32,ID_SUBMIT_SCORE);
+    make(0,L"BUTTON",L"打开马拉松记忆",BS_PUSHBUTTON,355,201,145,32,ID_RESET_MODEL);
+
+    make(0,L"STATIC",L"运行日志",SS_LEFT,20,244,400,22,0);
+    make(0,L"STATIC",L"棋盘预览",SS_LEFT,805,244,260,22,0);
+    s->logEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"",
+        ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL|WS_VSCROLL|WS_HSCROLL,
+        20,268,760,500,ID_LOG);
+    s->preview=CreateWindowExW(WS_EX_CLIENTEDGE,L"TetrisPreview",L"",
+        WS_CHILD|WS_VISIBLE,805,268,245,500,s->hwnd,
+        reinterpret_cast<HMENU>(ID_PREVIEW),g_instance,nullptr);
+    SetWindowLongPtrW(s->preview,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(s));
+
     s->learningRateEdit=nullptr;
     s->epsilonEdit=nullptr;
     s->temperatureEdit=nullptr;
-    s->trainingStatsLabel=make(0,L"STATIC",L"CPU 与 GPU 使用相同规则目标和当前方块 + 最多两个 NEXT 的三块前瞻。",SS_LEFT,20,354,1030,55,ID_TRAIN_STATS);
-    make(0,L"STATIC",L"注意：GPU 模式必须创建真实 D3D11 硬件设备，不会回退到 CPU/WARP；透明砖块记忆按确认锁定逐步更新。",SS_LEFT,20,410,1040,24,0);
+    s->trainingStatsLabel=nullptr;
 
-    make(0,L"STATIC",L"运行日志",SS_LEFT,20,443,500,22,0);
-    s->logEdit=make(WS_EX_CLIENTEDGE,L"EDIT",L"",ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL|WS_VSCROLL|WS_HSCROLL,20,468,760,410,ID_LOG);
-    make(0,L"STATIC",L"棋盘预览（绿：当前方块；蓝：已占用格）",SS_LEFT,805,443,260,22,0);
-    s->preview=CreateWindowExW(WS_EX_CLIENTEDGE,L"TetrisPreview",L"",WS_CHILD|WS_VISIBLE,805,468,245,410,s->hwnd,reinterpret_cast<HMENU>(ID_PREVIEW),g_instance,nullptr);
-    SetWindowLongPtrW(s->preview,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(s));
-    AppendLog(s,L"程序已就绪。请选择游戏窗口，分别框选棋盘和 NEXT 预览列，再测试识别。");
-    AppendLog(s,L"本程序不进行策略训练，专用于比较 CPU 多核与 GPU 硬件计算吞吐。");
-    AppendLog(s,L"请选择 CPU 多核穷举或 GPU Direct3D 11 计算；两种模式使用同一棵当前方块 + 最多两个 NEXT 的搜索树。");
-    AppendLog(s,L"马拉松棋盘记忆：锁定后更新 10×20 状态；透明砖块使用已记忆位置补全，消行后同步压缩棋盘记忆。");
-    AppendLog(s,L"输入节奏：方向键采用高精度独立点按；默认按下 1 ms、间隔 0 ms，启动时以 1–4 ms 校准；游戏实际响应仍受帧轮询限制。");
-    AppendLog(s,L"自动结算：SCORE 优先使用游戏原生数字模板，匹配不确定时回退 OCR；GAME OVER 使用 OCR 检测。识别后冻结分数，勾选自动重开时会点击你框选的 Again 按钮。");
+    AppendLog(s,L"程序已就绪。选择游戏窗口，自动定位或框选棋盘与 NEXT 后即可开始。");
+    AppendLog(s,L"方向键固定 2 ms 点按，释放间隔 0 ms；硬降按下 2 ms，之后不添加固定落稳等待。");
+    AppendLog(s,L"下一轮仍会等待新方块出生和棋盘一致性确认，确认后立即识别和搜索；失焦时暂停输入，切回后继续，F8 停止。");
 }
 
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -189,17 +193,30 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if(!s)return DefWindowProcW(hwnd,msg,wp,lp);
     switch(msg){
     case WM_CREATE:
-        CreateUi(s);LoadConfig(s);EnableWindow(s->lookaheadEdit,FALSE);UpdateRegionLabel(s);UpdateNextRegionLabel(s);UpdateAgainRegionLabel(s);UpdateTrainingStats(s);RefreshWindows(s);
+        CreateUi(s);LoadConfig(s);UpdateRegionLabel(s);UpdateNextRegionLabel(s);UpdateAgainRegionLabel(s);UpdateTrainingStats(s);RefreshWindows(s);
         if(!RegisterHotKey(hwnd,HOTKEY_STOP,MOD_NOREPEAT,VK_F8)) AppendLog(s,L"提示：F8 全局热键注册失败；请使用界面停止按钮，并避免切换窗口。");
         return 0;
     case WM_COMMAND:
         switch(LOWORD(wp)){
         case ID_REFRESH:RefreshWindows(s);return 0;
-        case ID_AUTO_LOCATE:AutoLocateRegions(s);return 0;
+        case ID_AUTO_LOCATE:AutoLocateRegions(s,true);return 0;
         case ID_NEW_SESSION:
-            AppendLog(s,SendMessageW(s->newSessionCheck,BM_GETCHECK,0,0)==BST_CHECKED
-                ? L"已选择新局记忆：下次开始时将建立新会话，不继承上次棋盘。"
-                : L"已取消新局重置：下次开始时会自动恢复上次马拉松记忆。");
+            s->resetMemoryOnNextStart=!s->resetMemoryOnNextStart;
+            SetWindowTextW(s->newSessionButton,s->resetMemoryOnNextStart
+                ? L"已选：新局重置" : L"新局重置记忆");
+            AppendLog(s,s->resetMemoryOnNextStart
+                ? L"下次启动将创建新的马拉松记忆会话；旧档案不会删除。"
+                : L"已取消新局重置；下次启动将自动恢复上次记忆。");
+            return 0;
+        case ID_AUTO_RETRY_BUTTON:
+            s->autoRetryEnabled=!s->autoRetryEnabled;
+            SetWindowTextW(s->autoRetryButton,s->autoRetryEnabled
+                ? L"自动重开：开" : L"自动重开：关");
+            WritePrivateProfileStringW(L"Automation",L"AutoRetry",
+                s->autoRetryEnabled?L"1":L"0",s->configPath.c_str());
+            AppendLog(s,s->autoRetryEnabled
+                ? L"Game Over 后自动结算并点击已设置的 Again 区域。"
+                : L"已关闭自动重开；Game Over 后等待手动处理。");
             return 0;
         case ID_SELECT:StartSelector(s,false);return 0;
         case ID_SELECT_NEXT:StartSelector(s,true);return 0;

@@ -548,9 +548,9 @@
 void UpdateAgainRegionLabel(AppState* s) {
     if (!s->againRegionButton) return;
     if (s->againRect.width > 0 && s->againRect.height > 0)
-        SetWindowTextW(s->againRegionButton, Format(L"Again区域已选择（%d×%d）",s->againRect.width,s->againRect.height).c_str());
+        SetWindowTextW(s->againRegionButton, Format(L"Again 已设置（%d×%d）",s->againRect.width,s->againRect.height).c_str());
     else
-        SetWindowTextW(s->againRegionButton,L"框选 Again 按钮");
+        SetWindowTextW(s->againRegionButton,L"设置 Again 区域");
 }
 
 void SaveConfig(AppState* s) {
@@ -579,16 +579,9 @@ void SaveConfig(AppState* s) {
     WritePrivateProfileStringW(L"Again",L"Top",Format(L"%d",s->againRect.top).c_str(),s->configPath.c_str());
     WritePrivateProfileStringW(L"Again",L"Width",Format(L"%d",s->againRect.width).c_str(),s->configPath.c_str());
     WritePrivateProfileStringW(L"Again",L"Height",Format(L"%d",s->againRect.height).c_str(),s->configPath.c_str());
-    WritePrivateProfileStringW(L"Automation",L"AutoRetry",SendMessageW(s->autoRetryCheck,BM_GETCHECK,0,0)==BST_CHECKED?L"1":L"0",s->configPath.c_str());
+    WritePrivateProfileStringW(L"Automation",L"AutoRetry",s->autoRetryEnabled?L"1":L"0",s->configPath.c_str());
     wchar_t value[64]{};
     GetWindowTextW(s->nextCountEdit,value,_countof(value)); WritePrivateProfileStringW(L"Next",L"Count",value,s->configPath.c_str());
-    GetWindowTextW(s->lookaheadEdit,value,_countof(value)); WritePrivateProfileStringW(L"Next",L"Lookahead",value,s->configPath.c_str());
-    if (s->keyHoldEdit) { GetWindowTextW(s->keyHoldEdit,value,_countof(value)); WritePrivateProfileStringW(L"Input",L"TapMs",value,s->configPath.c_str()); }
-    if (s->keyGapEdit) { GetWindowTextW(s->keyGapEdit,value,_countof(value)); WritePrivateProfileStringW(L"Input",L"TapGapMs",value,s->configPath.c_str()); }
-    if (s->dropWaitEdit) { GetWindowTextW(s->dropWaitEdit,value,_countof(value)); WritePrivateProfileStringW(L"Input",L"DropWaitMs",value,s->configPath.c_str()); }
-    if (s->learningRateEdit) { GetWindowTextW(s->learningRateEdit,value,_countof(value)); WritePrivateProfileStringW(L"Training",L"LearningRate",value,s->configPath.c_str()); }
-    if (s->epsilonEdit) { GetWindowTextW(s->epsilonEdit,value,_countof(value)); WritePrivateProfileStringW(L"Training",L"ExplorationRate",value,s->configPath.c_str()); }
-    if (s->temperatureEdit) { GetWindowTextW(s->temperatureEdit,value,_countof(value)); WritePrivateProfileStringW(L"Training",L"Temperature",value,s->configPath.c_str()); }
     if (s->modeCombo) WritePrivateProfileStringW(L"Automation",L"Mode",SendMessageW(s->modeCombo,CB_GETCURSEL,0,0)==1?L"1":L"0",s->configPath.c_str());
 }
 
@@ -618,22 +611,10 @@ void LoadConfig(AppState* s) {
     s->againRect.top=GetPrivateProfileIntW(L"Again",L"Top",0,s->configPath.c_str());
     s->againRect.width=GetPrivateProfileIntW(L"Again",L"Width",0,s->configPath.c_str());
     s->againRect.height=GetPrivateProfileIntW(L"Again",L"Height",0,s->configPath.c_str());
-    SendMessageW(s->autoRetryCheck,BM_SETCHECK,GetPrivateProfileIntW(L"Automation",L"AutoRetry",1,s->configPath.c_str())?BST_CHECKED:BST_UNCHECKED,0);
+    s->autoRetryEnabled=GetPrivateProfileIntW(L"Automation",L"AutoRetry",1,s->configPath.c_str())!=0;
+    if (s->autoRetryButton) SetWindowTextW(s->autoRetryButton,s->autoRetryEnabled?L"自动重开：开":L"自动重开：关");
     wchar_t value[64]{};
     GetPrivateProfileStringW(L"Next",L"Count",L"6",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->nextCountEdit,value);
-    GetPrivateProfileStringW(L"Next",L"Lookahead",L"4",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->lookaheadEdit,value);
-    int tapMs=GetPrivateProfileIntW(L"Input",L"TapMs",-1,s->configPath.c_str());
-    if (tapMs < 0) tapMs=GetPrivateProfileIntW(L"Input",L"KeyHoldMs",8,s->configPath.c_str());
-    if (tapMs < 4 || tapMs > 10) tapMs=8; // migrate old long-hold settings to a safe discrete tap
-    SetWindowTextW(s->keyHoldEdit,Format(L"%d",tapMs).c_str());
-    int tapGapMs=GetPrivateProfileIntW(L"Input",L"TapGapMs",-1,s->configPath.c_str());
-    if (tapGapMs < 0) tapGapMs=GetPrivateProfileIntW(L"Input",L"KeyGapMs",8,s->configPath.c_str());
-    if (tapGapMs < 0 || tapGapMs > 10) tapGapMs=8;
-    SetWindowTextW(s->keyGapEdit,Format(L"%d",tapGapMs).c_str());
-    GetPrivateProfileStringW(L"Input",L"DropWaitMs",L"190",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->dropWaitEdit,value);
-    GetPrivateProfileStringW(L"Training",L"LearningRate",L"0.08",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->learningRateEdit,value);
-    GetPrivateProfileStringW(L"Training",L"ExplorationRate",L"5",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->epsilonEdit,value);
-    GetPrivateProfileStringW(L"Training",L"Temperature",L"0.40",value,_countof(value),s->configPath.c_str()); SetWindowTextW(s->temperatureEdit,value);
     SendMessageW(s->modeCombo,CB_SETCURSEL,GetPrivateProfileIntW(L"Automation",L"Mode",0,s->configPath.c_str())==1?1:0,0);
 }
 
@@ -709,16 +690,27 @@ bool IsCaptureRegionInsideClient(HWND target, const Rect& region) {
 
 void AppendLog(AppState* s, const std::wstring& message);
 
-bool AutoLocateRegions(AppState* s) {
+bool IsLegacyAutoBoardRect(const Rect& region) {
+    if (!region.clientRelative || region.referenceClientWidth <= 0 ||
+        region.referenceClientHeight <= 0) return false;
+    const int width = region.referenceClientWidth;
+    const int height = region.referenceClientHeight;
+    return
+        std::abs(region.left - static_cast<int>(std::lround(width * 0.151))) <= 1 &&
+        std::abs(region.top - static_cast<int>(std::lround(height * 0.134))) <= 1 &&
+        std::abs(region.width - static_cast<int>(std::lround(width * 0.228))) <= 1 &&
+        std::abs(region.height - static_cast<int>(std::lround(height * 0.631))) <= 1;
+}
+
+bool AutoLocateRegions(AppState* s, bool forceAll = false) {
     HWND target = SelectedWindow(s);
     if (!target || !IsWindow(target)) {
         AppendLog(s, L"自动定位失败：请先选择正在运行的 Tetris Online 游戏窗口。");
         return false;
     }
     std::wstring captureError;
-    if (!EnsureWindowCapture(target, captureError)) {
+    if (!EnsureWindowCapture(target, captureError))
         AppendLog(s, L"窗口捕获初始化失败，尝试使用桌面截图："+captureError);
-    }
 
     RECT client{};
     if (!GetClientRect(target, &client)) {
@@ -733,30 +725,49 @@ bool AutoLocateRegions(AppState* s) {
         return false;
     }
 
-    // Tetris Online's fixed HUD layout, expressed as client-area ratios taken
-    // from the supplied 802×602 reference. The ratios survive window movement
-    // and scale proportionally when the game window is resized.
-    s->boardRect = {
-        static_cast<int>(std::lround(width * 0.151)),
-        static_cast<int>(std::lround(height * 0.134)),
-        static_cast<int>(std::lround(width * 0.228)),
-        static_cast<int>(std::lround(height * 0.631)),
-        true, width, height
-    };
-    s->nextRect = {
-        static_cast<int>(std::lround(width * 0.410)),
-        static_cast<int>(std::lround(height * 0.205)),
-        static_cast<int>(std::lround(width * 0.095)),
-        static_cast<int>(std::lround(height * 0.570)),
-        true, width, height
-    };
-    s->scoreRect = {
-        static_cast<int>(std::lround(width * 0.840)),
-        static_cast<int>(std::lround(height * 0.800)),
-        static_cast<int>(std::lround(width * 0.085)),
-        static_cast<int>(std::lround(height * 0.105)),
-        true, width, height
-    };
+    const bool locateBoard = forceAll || IsLegacyAutoBoardRect(s->boardRect) ||
+        s->boardRect.width <= 0 || !IsCaptureRegionInsideClient(target, s->boardRect);
+    const bool locateNext = forceAll || s->nextRect.width <= 0 ||
+        !IsCaptureRegionInsideClient(target, s->nextRect);
+    const bool locateScore = forceAll || s->scoreRect.width <= 0 ||
+        !IsCaptureRegionInsideClient(target, s->scoreRect);
+
+    if (locateBoard) {
+        const int oldTop = static_cast<int>(std::lround(height * 0.134));
+        const int oldHeight = static_cast<int>(std::lround(height * 0.631));
+        const int extraRow = (std::max)(1,
+            static_cast<int>(std::lround(static_cast<double>(oldHeight) / 21.0)));
+        const int oldBottom = oldTop + oldHeight;
+        const int correctedTop = oldTop + extraRow;
+        s->boardRect = {
+            static_cast<int>(std::lround(width * 0.151)),
+            correctedTop,
+            static_cast<int>(std::lround(width * 0.228)),
+            oldBottom - correctedTop,
+            true, width, height
+        };
+        AppendLog(s, Format(L"棋盘定位修正：顶部裁去约一行（%d px），底边保持不变；区域 %d×%d。",
+            extraRow, s->boardRect.width, s->boardRect.height));
+    }
+    if (locateNext) {
+        s->nextRect = {
+            static_cast<int>(std::lround(width * 0.410)),
+            static_cast<int>(std::lround(height * 0.205)),
+            static_cast<int>(std::lround(width * 0.095)),
+            static_cast<int>(std::lround(height * 0.570)),
+            true, width, height
+        };
+    }
+    if (locateScore) {
+        s->scoreRect = {
+            static_cast<int>(std::lround(width * 0.840)),
+            static_cast<int>(std::lround(height * 0.800)),
+            static_cast<int>(std::lround(width * 0.085)),
+            static_cast<int>(std::lround(height * 0.105)),
+            true, width, height
+        };
+    }
+
     UpdateRegionLabel(s);
     UpdateNextRegionLabel(s);
     SaveConfig(s);
@@ -764,16 +775,12 @@ bool AutoLocateRegions(AppState* s) {
     CapturedImage boardImage;
     std::wstring boardError;
     const bool boardCaptured = CaptureScreenRect(s->boardRect, boardImage, boardError);
-    int occupied = -1;
-    int effectiveThreshold = ReadThreshold(s);
     if (boardCaptured && boardImage.width >= 80 && boardImage.height >= 160) {
         const VisionResult board = Analyze(boardImage, ReadThreshold(s));
-        occupied = board.occupiedCount;
-        effectiveThreshold = board.usedThreshold;
-        AppendLog(s, Format(L"自动定位棋盘成功：%d×%d；占用格 %d；当前自适应颜色阈值 %d。",
-            boardImage.width, boardImage.height, occupied, effectiveThreshold));
+        AppendLog(s, Format(L"棋盘区域验证：%d×%d；占用格 %d；颜色阈值 %d。",
+            boardImage.width, boardImage.height, board.occupiedCount, board.usedThreshold));
     } else {
-        AppendLog(s, L"自动定位已计算棋盘区域，但截图验证失败："+boardError);
+        AppendLog(s, L"棋盘区域截图验证失败："+boardError);
     }
 
     const int previewCount = static_cast<int>(ReadDoubleEdit(s->nextCountEdit, 6, 1, 10));
@@ -783,13 +790,13 @@ bool AutoLocateRegions(AppState* s) {
     if (nextOk) {
         s->previewNextPieces = queue.pieces;
         s->hasNextPreview = true;
-        SetWindowTextW(s->nextStatusLabel, (L"NEXT识别： "+FormatNextQueueConfidence(queue)).c_str());
-        AppendLog(s, L"自动定位 NEXT 成功："+FormatNextQueueConfidence(queue));
+        SetWindowTextW(s->nextStatusLabel, (L"NEXT： "+FormatNextQueueConfidence(queue)).c_str());
+        AppendLog(s, L"NEXT 区域验证成功："+FormatNextQueueConfidence(queue));
     } else {
         s->hasNextPreview = false;
         s->previewNextPieces.clear();
-        SetWindowTextW(s->nextStatusLabel, L"NEXT识别：待校准");
-        AppendLog(s, L"自动定位 NEXT 区域已设置，但内容验证未通过："+nextError);
+        SetWindowTextW(s->nextStatusLabel, L"NEXT：待校准");
+        AppendLog(s, L"NEXT 区域已设置，但识别未通过："+nextError);
     }
 
     tesseract::TessBaseAPI ocr;
@@ -804,15 +811,12 @@ bool AutoLocateRegions(AppState* s) {
         scoreText, scoreError, &zeroVerified, ocrReady);
     if (ocrReady) ocr.End();
     if (scoreOk) {
-        SetWindowTextW(s->scoreStatusLabel,
-            Format(L"SCORE识别：%d（%d）", score, confidence).c_str());
-        AppendLog(s, Format(L"自动定位 SCORE 成功：当前读数 %d，置信度 %d/100。",
-            score, confidence));
+        SetWindowTextW(s->scoreStatusLabel, Format(L"SCORE：%d（%d）", score, confidence).c_str());
+        AppendLog(s, Format(L"SCORE 区域验证成功：%d 分，置信度 %d/100。", score, confidence));
     } else {
-        SetWindowTextW(s->scoreStatusLabel, L"SCORE识别：待校准");
-        AppendLog(s, L"自动定位 SCORE 区域已设置，但暂未读出可信数字："+scoreError);
+        SetWindowTextW(s->scoreStatusLabel, L"SCORE：待校准");
+        AppendLog(s, L"SCORE 区域已设置，但暂未读出可信数字："+scoreError);
     }
-
     return boardCaptured && nextOk;
 }
 
