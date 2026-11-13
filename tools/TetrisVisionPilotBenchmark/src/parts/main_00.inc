@@ -3,6 +3,9 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+// Establish the legacy global Windows::Foundation namespace before the
+// Windows.Graphics interop headers extend the global Windows namespace.
+#include <roapi.h>
 #include <mmsystem.h>
 #include <windowsx.h>
 #include <commctrl.h>
