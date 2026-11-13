@@ -17,11 +17,47 @@ private:
     bool active_{};
 };
 
-bool TapKey(HWND target, WORD vk, int pressMs, std::wstring& error) {
-    if (GetAncestor(GetForegroundWindow(), GA_ROOT) != target) {
-        error=L"游戏窗口已失去前台焦点，自动操作已停止，避免按键发到其他窗口。";
-        return false;
+bool WaitForTargetForeground(HWND target, const std::atomic<bool>& stop,
+                              std::wstring& error) {
+    bool waitReported = false;
+    bool activationAttempted = false;
+    while (!stop.load()) {
+        if (!IsWindow(target)) {
+            error = L"所选游戏窗口已关闭。";
+            return false;
+        }
+        HWND foreground = GetAncestor(GetForegroundWindow(), GA_ROOT);
+        if (foreground == target) {
+            if (waitReported)
+                PostLog(g_mainWindow, L"游戏窗口已重新获得焦点，继续自动操作。");
+            return true;
+        }
+        // Clicking this application's controls should not terminate a run.
+        // Restore the game only when our process owns the foreground; never steal
+        // focus from an unrelated application and never send keys to it.
+        if (!activationAttempted) {
+            activationAttempted = true;
+            DWORD foregroundPid = 0;
+            if (foreground) GetWindowThreadProcessId(foreground, &foregroundPid);
+            if (foregroundPid == GetCurrentProcessId()) {
+                ShowWindow(target, SW_RESTORE);
+                SetForegroundWindow(target);
+            }
+        }
+        if (!waitReported) {
+            PostLog(g_mainWindow,
+                L"游戏窗口暂时失去焦点，已暂停按键；切回游戏后会自动继续，按 F8 可停止。");
+            waitReported = true;
+        }
+        SleepCheck(stop, 25);
     }
+    error = L"用户请求停止。";
+    return false;
+}
+
+bool TapKey(HWND target, WORD vk, int pressMs,
+            const std::atomic<bool>& stop, std::wstring& error) {
+    if (!WaitForTargetForeground(target, stop, error)) return false;
     // Every call is one discrete key-down/key-up pulse. Keep the down interval
     // short enough to avoid the game's held-key auto-repeat path.
     const int boundedPressMs=(std::max)(1,(std::min)(4,pressMs));
@@ -56,7 +92,7 @@ struct AppState {
     HWND scoreRegionLabel{}, scoreStatusLabel{}, againRegionButton{};
     HWND thresholdEdit{}, logEdit{}, preview{}, startButton{}, stopButton{}, statusLabel{}, modeCombo{};
     HWND scoreEdit{}, learningRateEdit{}, epsilonEdit{}, temperatureEdit{}, trainingStatsLabel{};
-    HWND keyHoldEdit{}, keyGapEdit{}, dropWaitEdit{}, autoRetryCheck{};
+    HWND keyHoldEdit{}, keyGapEdit{}, dropWaitEdit{}, autoRetryCheck{}, newSessionCheck{};
     std::wstring tessdataPath{};
     Rect boardRect{}, nextRect{}, scoreRect{}, againRect{};
     std::vector<char> previewNextPieces;
@@ -490,11 +526,9 @@ bool IsScreenRectInsideClient(HWND target, const Rect& screenRect) {
            selected.right <= bounds.right && selected.bottom <= bounds.bottom;
 }
 
-bool ClickAgainButton(HWND target, const Rect& buttonRect, std::wstring& error) {
-    if (GetAncestor(GetForegroundWindow(), GA_ROOT) != target) {
-        error = L"游戏窗口已失去前台焦点，未点击 Again。";
-        return false;
-    }
+bool ClickAgainButton(HWND target, const Rect& buttonRect,
+                       const std::atomic<bool>& stop, std::wstring& error) {
+    if (!WaitForTargetForeground(target, stop, error)) return false;
     if (!IsScreenRectInsideClient(target, buttonRect)) {
         error = L"Again 按钮框选区域不在游戏窗口客户区内，未执行点击。请重新框选。";
         return false;
@@ -526,7 +560,8 @@ void AppendTrainingCsv(AppState* s, int score, double learningRate, double epsil
 void BotThread(AppState* s, HWND target, Rect rect, Rect nextRect, int threshold,
                int previewCount, int lookaheadDepth, double epsilon, double temperature,
                int tapMs, int keyGapMs, int dropWaitMs, Rect scoreRect, Rect againRect,
-               double learningRate, bool autoRetry, bool mathMode, bool gpuMode) {
+               double learningRate, bool autoRetry, bool mathMode, bool gpuMode,
+               bool startNewMemorySession) {
     auto log=[&](const std::wstring& m){Log(s,m);};
     ScopedInputTimerResolution inputTimer;
     if (!inputTimer.Active())

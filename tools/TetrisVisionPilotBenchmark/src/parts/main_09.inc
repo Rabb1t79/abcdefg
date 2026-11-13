@@ -180,15 +180,15 @@ void TestRecognition(AppState* s) {
             NormalizeCaptureRegion(s->scoreRect, target);
         }
     }
-    if(s->boardRect.width<=0){MessageBoxW(s->hwnd,L"自动定位失败，请尝试手动框选棋盘区域。",L"尚未找到棋盘",MB_ICONWARNING);return;}
+    if(s->boardRect.width<=0){AppendLog(s,L"自动定位失败：请使用“框选棋盘区域”手动设置。");return;}
     if(s->boardRect.width<80 || s->boardRect.height<160) {
-        MessageBoxW(s->hwnd,Format(L"棋盘区域只有 %d × %d px；10×20 棋盘至少需要 80 × 160 px。请重新框选棋盘。",
-            s->boardRect.width,s->boardRect.height).c_str(),L"棋盘区域尺寸不正确",MB_ICONWARNING);
+        AppendLog(s,Format(L"棋盘区域只有 %d × %d px；10×20 棋盘至少需要 80 × 160 px，请重新框选。",
+            s->boardRect.width,s->boardRect.height));
         return;
     }
     std::wstring error;
     VisionResult result=AnalyzeStable(s->boardRect,ReadThreshold(s),error);
-    if(!error.empty()){MessageBoxW(s->hwnd,error.c_str(),L"截图失败",MB_ICONERROR);AppendLog(s,error);return;}
+    if(!error.empty()){AppendLog(s,L"截图失败："+error);return;}
     s->previewData=result;s->hasPreview=true;InvalidateRect(s->preview,nullptr,TRUE);
     if(result.hasActive)AppendLog(s,Format(L"识别测试：占用格 %d；自适应阈值 %d；当前方块 %c 型，旋转 %d，位置列 %d、行 %d；轨迹采样 %d/3。",
         result.occupiedCount,result.usedThreshold,result.active.name,result.active.rotation,result.active.minX,result.active.minY,result.activeStableSamples));

@@ -41,7 +41,7 @@ bool RestoreCalibrationColumn(const std::atomic<bool>& stop, HWND target,
         const int direction = targetX > currentX ? 1 : -1;
         const WORD key = direction > 0 ? VK_RIGHT : VK_LEFT;
         std::wstring inputError;
-        if (!TapKey(target,key,tapMs,inputError)) { error=inputError; return false; }
+        if (!TapKey(target,key,tapMs,stop,inputError)) { error=inputError; return false; }
         SleepCheck(stop,keyGapMs);
         if (stop.load()) { error=L"用户请求停止。"; return false; }
 
@@ -105,7 +105,7 @@ CalibrationOutcome CalibrateOneDirection(const std::atomic<bool>& stop,
         triedTapMs[tapMs]=true;
         if (stop.load()) { note=L"用户请求停止。"; return CalibrationOutcome::Unsafe; }
         std::wstring inputError;
-        if (!TapKey(target,directionKey,tapMs,inputError)) {
+        if (!TapKey(target,directionKey,tapMs,stop,inputError)) {
             note=inputError;
             return CalibrationOutcome::Unsafe;
         }

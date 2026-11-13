@@ -24,12 +24,17 @@
 
 void StartBot(AppState* s) {
     if(s->running.load())return;
+    auto rejectStart=[&](const std::wstring& message) {
+        AppendLog(s,L"未启动自动控制："+message);
+        SetWindowTextW(s->statusLabel,L"状态：未启动（查看运行日志）");
+    };
     const bool autoRetry=SendMessageW(s->autoRetryCheck,BM_GETCHECK,0,0)==BST_CHECKED;
+    const bool newMemorySession=SendMessageW(s->newSessionCheck,BM_GETCHECK,0,0)==BST_CHECKED;
     const bool gpuMode=SendMessageW(s->modeCombo,CB_GETCURSEL,0,0)==1;
     const bool mathMode=true; // Benchmark build never updates training weights.
     if(s->worker.joinable())s->worker.join();
     HWND target=SelectedWindow(s);
-    if(!target||!IsWindow(target)){MessageBoxW(s->hwnd,L"请从窗口列表中选择正在运行的游戏。",L"尚未选择游戏窗口",MB_ICONWARNING);return;}
+    if(!target||!IsWindow(target)){rejectStart(L"请先从窗口列表中选择正在运行的游戏。");return;}
     std::wstring captureInitError;
     if (EnsureWindowCapture(target, captureInitError)) {
         AppendLog(s,L"已绑定游戏窗口；棋盘、NEXT 和 SCORE 区域将跟随窗口移动与缩放。");
@@ -50,28 +55,28 @@ void StartBot(AppState* s) {
         NormalizeCaptureRegion(s->nextRect,target);
         NormalizeCaptureRegion(s->scoreRect,target);
     }
-    if(s->boardRect.width<=0){MessageBoxW(s->hwnd,L"自动定位棋盘失败。请使用“框选棋盘区域”手动设置。",L"尚未找到棋盘",MB_ICONWARNING);return;}
+    if(s->boardRect.width<=0){rejectStart(L"自动定位棋盘失败，请使用“框选棋盘区域”手动设置。");return;}
     if (autoRetry) {
         if (s->scoreRect.width < 24 || s->scoreRect.height < 10) {
-            MessageBoxW(s->hwnd,L"自动定位 SCORE 失败。请手动框选 SCORE 数字区域，并通过识别测试。",L"尚未设置分数区域",MB_ICONWARNING); return;
+            rejectStart(L"自动定位 SCORE 失败；请框选 SCORE 数字区域并测试识别。"); return;
         }
         if (s->againRect.width < 70 || s->againRect.height < 22) {
-            MessageBoxW(s->hwnd,L"自动重开还需要框选 Again 按钮。请在 Game Over 画面点“框选 Again 按钮”，只框住按钮内部。",L"尚未选择 Again 按钮",MB_ICONWARNING); return;
+            rejectStart(L"自动重开需要先框选 Again 按钮内部区域。"); return;
         }
         if (!IsCaptureRegionInsideClient(target,s->scoreRect)) {
-            MessageBoxW(s->hwnd,L"SCORE 区域超出当前游戏窗口；请重新自动定位或手动框选。",L"SCORE 区域不匹配",MB_ICONWARNING); return;
+            rejectStart(L"SCORE 区域超出游戏窗口；请重新自动定位或手动框选。"); return;
         }
         if (!IsScreenRectInsideClient(target,s->againRect)) {
-            MessageBoxW(s->hwnd,L"Again 按钮区域不在所选游戏窗口内部；请重新框选 Again。",L"Again 区域不匹配",MB_ICONWARNING); return;
+            rejectStart(L"Again 按钮区域不在游戏窗口内部；请重新框选。"); return;
         }
         if (!TestScoreRecognition(s)) {
-            MessageBoxW(s->hwnd,L"SCORE 识别测试未通过。请重新自动定位或手动框选数字区域。",L"分数识别未通过",MB_ICONWARNING); return;
+            rejectStart(L"SCORE 识别测试未通过；请重新定位或手动框选数字区域。"); return;
         }
     }
     TestRecognition(s);
-    if(!s->hasPreview || !s->previewData.hasActive){MessageBoxW(s->hwnd,L"尚未识别到当前方块。请调整棋盘框选范围或颜色阈值，再测试一次。",L"识别未通过",MB_ICONWARNING);return;}
-    if(!s->hasNextPreview){MessageBoxW(s->hwnd,L"NEXT 队列识别未通过。请重新框选 NEXT 预览列、检查预览块数量，然后再次测试。",L"NEXT 识别未通过",MB_ICONWARNING);return;}
-    if(MessageBoxW(s->hwnd,L"确认棋盘框选和识别结果正确，并允许程序向游戏窗口发送 ← / → / ↑ / Space？\n\n运行中按 F8 或点击“停止”可紧急停止。",L"确认自动控制",MB_OKCANCEL|MB_ICONWARNING)!=IDOK)return;
+    if(!s->hasPreview || !s->previewData.hasActive){rejectStart(L"尚未识别到当前方块；请调整棋盘框选范围或颜色阈值后测试。");return;}
+    if(!s->hasNextPreview){rejectStart(L"NEXT 队列识别未通过；请重新框选 NEXT 预览列并测试。");return;}
+    AppendLog(s,L"识别预检通过；开始自动控制。运行中按 F8 或点击“停止”可紧急停止。");
     s->stop.store(false);s->running.store(true);
     EnableWindow(s->startButton,FALSE);EnableWindow(s->stopButton,TRUE);SetWindowTextW(s->statusLabel,L"状态：运行中（F8 紧急停止）");
     Rect rect=s->boardRect, nextRect=s->nextRect;int threshold=ReadThreshold(s);
@@ -88,8 +93,18 @@ void StartBot(AppState* s) {
     }
     const int dropWaitMs=static_cast<int>(ReadDoubleEdit(s->dropWaitEdit,5,0,40));
     SaveConfig(s);
-    try { s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,lookaheadDepth,epsilon,temperature,tapMs,keyGapMs,dropWaitMs,s->scoreRect,s->againRect,learningRate,autoRetry,mathMode,gpuMode); }
-    catch(...) { s->running.store(false);EnableWindow(s->startButton,TRUE);EnableWindow(s->stopButton,FALSE);SetWindowTextW(s->statusLabel,L"状态：启动失败");MessageBoxW(s->hwnd,L"无法创建自动控制线程。",L"启动失败",MB_ICONERROR); }
+    try {
+        s->worker=std::thread(BotThread,s,target,rect,nextRect,threshold,previewCount,
+            lookaheadDepth,epsilon,temperature,tapMs,keyGapMs,dropWaitMs,
+            s->scoreRect,s->againRect,learningRate,autoRetry,mathMode,gpuMode,newMemorySession);
+        if (newMemorySession) SendMessageW(s->newSessionCheck,BM_SETCHECK,BST_UNCHECKED,0);
+    } catch(...) {
+        s->running.store(false);
+        EnableWindow(s->startButton,TRUE);
+        EnableWindow(s->stopButton,FALSE);
+        SetWindowTextW(s->statusLabel,L"状态：启动失败（查看运行日志）");
+        AppendLog(s,L"无法创建自动控制线程。");
+    }
 }
 
 void StopBot(AppState* s) {
@@ -139,8 +154,9 @@ void CreateUi(AppState* s) {
     s->statusLabel=make(0,L"STATIC",L"状态：就绪",SS_LEFT,410,176,175,24,ID_STATUS);
     make(0,L"STATIC",L"按键：← 左移　→ 右移　↑ 旋转　Space 硬降　｜　F8 停止",SS_LEFT,20,215,550,24,ID_HELP);
     s->againRegionButton=make(0,L"BUTTON",L"框选 Again 按钮",BS_PUSHBUTTON|WS_TABSTOP,580,212,145,27,ID_SELECT_AGAIN);
-    s->autoRetryCheck=make(0,L"BUTTON",L"Game Over 后自动结算并点击 Again 重开",BS_AUTOCHECKBOX|WS_TABSTOP,735,212,340,27,ID_AUTO_RETRY);
+    s->autoRetryCheck=make(0,L"BUTTON",L"Game Over 后自动重开",BS_AUTOCHECKBOX|WS_TABSTOP,735,212,215,27,ID_AUTO_RETRY);
     SendMessageW(s->autoRetryCheck,BM_SETCHECK,BST_CHECKED,0);
+    s->newSessionCheck=make(0,L"BUTTON",L"新局重置记忆",BS_AUTOCHECKBOX|WS_TABSTOP,955,212,120,27,ID_NEW_SESSION);
 
     make(0,L"STATIC",L"性能指标：搜索耗时、输入链路、端到端耗时、计划多行消除次数；1 秒目标按实测记录，不作固定保证。",SS_LEFT,20,252,1040,22,0);
     make(0,L"STATIC",L"最近完成分数：",SS_LEFT,20,284,100,24,0);
@@ -169,7 +185,7 @@ void CreateUi(AppState* s) {
 
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     AppState* s=reinterpret_cast<AppState*>(GetWindowLongPtrW(hwnd,GWLP_USERDATA));
-    if(msg==WM_NCCREATE){auto* cs=reinterpret_cast<CREATESTRUCTW*>(lp);s=static_cast<AppState*>(cs->lpCreateParams);s->hwnd=hwnd;SetWindowLongPtrW(hwnd,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(s));}
+    if(msg==WM_NCCREATE){auto* cs=reinterpret_cast<CREATESTRUCTW*>(lp);s=static_cast<AppState*>(cs->lpCreateParams);s->hwnd=hwnd;g_mainWindow=hwnd;SetWindowLongPtrW(hwnd,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(s));}
     if(!s)return DefWindowProcW(hwnd,msg,wp,lp);
     switch(msg){
     case WM_CREATE:
@@ -180,6 +196,11 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         switch(LOWORD(wp)){
         case ID_REFRESH:RefreshWindows(s);return 0;
         case ID_AUTO_LOCATE:AutoLocateRegions(s);return 0;
+        case ID_NEW_SESSION:
+            AppendLog(s,SendMessageW(s->newSessionCheck,BM_GETCHECK,0,0)==BST_CHECKED
+                ? L"已选择新局记忆：下次开始时将建立新会话，不继承上次棋盘。"
+                : L"已取消新局重置：下次开始时会自动恢复上次马拉松记忆。");
+            return 0;
         case ID_SELECT:StartSelector(s,false);return 0;
         case ID_SELECT_NEXT:StartSelector(s,true);return 0;
         case ID_SELECT_SCORE:StartSelector(s,false,true);return 0;

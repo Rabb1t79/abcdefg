@@ -1,6 +1,9 @@
         SetForegroundWindow(target);
-        Sleep(250);
-        if(GetAncestor(GetForegroundWindow(),GA_ROOT)!=target) throw std::runtime_error("无法将游戏窗口切换到前台。请先手动点一下游戏窗口，再重新启动自动操作。");
+        std::wstring focusError;
+        if (!WaitForTargetForeground(target, s->stop, focusError))
+            throw std::runtime_error(WideToUtf8(focusError));
+        SleepCheck(s->stop, 120);
+        if (s->stop.load()) throw std::runtime_error("用户请求停止。");
         log(gpuMode ? L"GPU Direct3D 11 硬件穷举已启动。" : L"CPU 多核穷举已启动。两者使用相同规则和多行消除优先目标。");
         KickWallLearner kickLearner;
         constexpr bool benchmarkUseWallKick = true;
@@ -28,26 +31,19 @@
         marathonMemory.SetPath(memoryPath);
         if (!marathonMemory.Ready())
             throw std::runtime_error(WideToUtf8(marathonMemory.LoadStatus()));
-        if (marathonMemory.HasSavedState()) {
-            const int resumeChoice = MessageBoxW(s->hwnd,
-                L"检测到上一局的马拉松记忆档案。\n\n是：恢复上次棋盘和每格所属方块（仅当游戏仍是同一局时选择）。\n否：开始新的记忆会话，不继承旧棋盘。\n取消：停止本次启动。\n\n恢复后若画面出现记忆中不存在的新格，程序仍会停止，不会猜测。",
-                L"恢复马拉松记忆", MB_YESNOCANCEL | MB_ICONQUESTION);
-            if (resumeChoice == IDYES) {
-                log(Format(L"已从事件档案恢复：会话 %llu；已确认落块 %llu；记忆格 %d。",
-                    static_cast<unsigned long long>(marathonMemory.SessionId()),
-                    static_cast<unsigned long long>(marathonMemory.HistoryCount()),
-                    marathonMemory.RememberedCells()));
-            } else if (resumeChoice == IDNO) {
-                if (!marathonMemory.ResetForNewGame())
-                    throw std::runtime_error(WideToUtf8(marathonMemory.LoadStatus()));
-                log(L"已选择新一局：创建新的记忆会话；旧档案事件仍保留。");
-            } else {
-                throw std::runtime_error("用户取消马拉松记忆恢复；未开始自动落块。");
-            }
-        } else {
+        if (startNewMemorySession || !marathonMemory.HasSavedState()) {
             if (!marathonMemory.ResetForNewGame())
                 throw std::runtime_error(WideToUtf8(marathonMemory.LoadStatus()));
-            log(L"已建立新的马拉松记忆会话；每次确认锁定都会保存形状令牌、四格归属和棋盘快照。");
+            log(startNewMemorySession
+                ? L"已按界面选择创建新一局记忆会话；旧档案事件保留，不继承旧棋盘。"
+                : L"没有可恢复的记忆快照，已建立新的马拉松记忆会话。");
+        } else {
+            // Resume the durable state silently. The UI checkbox "新局重置记忆"
+            // provides the explicit alternative without showing a modal dialog.
+            log(Format(L"已自动恢复马拉松记忆：会话 %llu；已确认落块 %llu；记忆格 %d。",
+                static_cast<unsigned long long>(marathonMemory.SessionId()),
+                static_cast<unsigned long long>(marathonMemory.HistoryCount()),
+                marathonMemory.RememberedCells()));
         }
         tesseract::TessBaseAPI ocr;
         const std::string tessPath = WideToUtf8(s->tessdataPath);
@@ -157,7 +153,7 @@
                     break;
                 }
                 std::wstring clickError;
-                if (!ClickAgainButton(target, againRect, clickError)) { log(L"自动重试失败："+clickError); break; }
+                if (!ClickAgainButton(target, againRect, s->stop, clickError)) { if (!s->stop.load()) log(L"自动重试失败："+clickError); break; }
                 log(L"已点击 Again，正在确认 GAME OVER 弹窗已消失。");
                 bool restarted=false;
                 for(int attempt=0;attempt<25 && !s->stop.load();++attempt){
@@ -435,7 +431,7 @@
             }
             if (!rotatedWithWallKick) {
                 for(int i=0;i<rotateSteps && !s->stop.load();++i) {
-                    std::wstring err; if(!TapKey(target,VK_UP,tapMs,err)) throw std::runtime_error("旋转按键失败或焦点丢失。");
+                    std::wstring err; if(!TapKey(target,VK_UP,tapMs,s->stop,err)) { if(s->stop.load()) break; throw std::runtime_error("旋转按键发送失败："+WideToUtf8(err)); }
                     SleepCheck(s->stop,keyGapMs);
                 }
                 if(s->stop.load())break;
@@ -462,7 +458,7 @@
             WORD moveKey=delta>0?VK_RIGHT:VK_LEFT;
             for(int i=0;i<std::abs(delta) && !s->stop.load();++i) {
                 std::wstring err;
-                if(!TapKey(target,moveKey,moveKey==VK_RIGHT?rightTapMs:leftTapMs,err)) throw std::runtime_error("移动按键失败或焦点丢失。");
+                if(!TapKey(target,moveKey,moveKey==VK_RIGHT?rightTapMs:leftTapMs,s->stop,err)) { if(s->stop.load()) break; throw std::runtime_error("移动按键发送失败："+WideToUtf8(err)); }
                 SleepCheck(s->stop,keyGapMs);
             }
             if(s->stop.load())break;
@@ -490,7 +486,7 @@
                 const WORD correctionKey=correction>0?VK_RIGHT:VK_LEFT;
                 for(int i=0;i<std::abs(correction) && !s->stop.load();++i) {
                     std::wstring err;
-                    if(!TapKey(target,correctionKey,correctionKey==VK_RIGHT?rightTapMs:leftTapMs,err)) throw std::runtime_error("位置纠正按键失败或焦点丢失。");
+                    if(!TapKey(target,correctionKey,correctionKey==VK_RIGHT?rightTapMs:leftTapMs,s->stop,err)) { if(s->stop.load()) break; throw std::runtime_error("位置纠正按键发送失败："+WideToUtf8(err)); }
                     SleepCheck(s->stop,keyGapMs);
                 }
                 if(s->stop.load())break;
@@ -516,7 +512,7 @@
             log(Format(L"位置验证通过：旋转 %d、实际落点列 %d（%s）；准备硬降。",
                 move.rotation,observedX,usedGhost?L"Ghost轮廓":L"活动方块"));
             std::wstring err;
-            if(!TapKey(target,VK_SPACE,tapMs,err)) throw std::runtime_error("硬降按键失败或焦点丢失。");
+            if(!TapKey(target,VK_SPACE,tapMs,s->stop,err)) { if(s->stop.load()) break; throw std::runtime_error("硬降按键发送失败："+WideToUtf8(err)); }
             pendingExpectedBoard = decision.expectedBoard;
             pendingSourceBoard = board;
             pendingMemoryPiece = piece.name;

@@ -24,15 +24,14 @@ void OpenBenchmarkFile(AppState* s, bool memoryFile) {
     path = (slash == std::wstring::npos ? L".\\" : path.substr(0, slash + 1)) +
         (memoryFile ? L"TetrisVisionPilotBenchmark-marathon-memory-v3.csv" : L"TetrisVisionPilotBenchmark.log");
     if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        MessageBoxW(s->hwnd, memoryFile
-            ? L"马拉松记忆档案尚未生成。请先开始一局并完成至少一次锁定。"
-            : L"性能日志尚未生成。请先运行一次 CPU 或 GPU 测试。",
-            L"文件尚不存在", MB_ICONINFORMATION);
+        AppendLog(s, memoryFile
+            ? L"马拉松记忆档案尚未生成；开始一局并完成首次锁定后会自动创建。"
+            : L"性能日志尚未生成；运行一次 CPU 或 GPU 测试后会自动创建。");
         return;
     }
     const HINSTANCE result = ShellExecuteW(s->hwnd, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     if (reinterpret_cast<INT_PTR>(result) <= 32) {
-        MessageBoxW(s->hwnd, L"无法打开记录文件；请检查文件关联或权限。", L"打开失败", MB_ICONWARNING);
+        AppendLog(s, L"无法打开记录文件；请检查文件关联或权限。");
     }
 }
 
@@ -59,7 +58,7 @@ void AppendTrainingCsv(AppState* s, int score, double learningRate, double epsil
 
 void SubmitTrainingScore(AppState* s) {
     if (s->running.load()) {
-        MessageBoxW(s->hwnd, L"请先停止自动控制，或等本局结束后再提交最终分数。", L"本局仍在运行", MB_ICONINFORMATION);
+        AppendLog(s, L"当前自动控制仍在运行；本局分数会自动结算，不需要手动提交。");
         return;
     }
     wchar_t buffer[64]{};
@@ -67,7 +66,7 @@ void SubmitTrainingScore(AppState* s) {
     wchar_t* end = nullptr;
     long scoreValue = std::wcstol(buffer, &end, 10);
     if (end == buffer || scoreValue < 0 || scoreValue > 100000000) {
-        MessageBoxW(s->hwnd, L"请输入有效的本局最终分数（0–100000000）。", L"分数无效", MB_ICONWARNING);
+        AppendLog(s, L"分数输入无效；请输入 0–100000000 之间的整数。");
         return;
     }
     const double learningRate = ReadDoubleEdit(s->learningRateEdit, 0.08, 0.001, 0.50);
@@ -78,7 +77,7 @@ void SubmitTrainingScore(AppState* s) {
     std::wstring message;
     SaveCurrentEpisodeMemory(s,static_cast<int>(scoreValue));
     if (!s->trainer.SubmitScore(static_cast<int>(scoreValue), learningRate, advantage, samples, message)) {
-        MessageBoxW(s->hwnd, message.c_str(), L"暂时无法训练", MB_ICONINFORMATION);
+        AppendLog(s, L"暂时无法训练："+message);
         return;
     }
     s->trainer.Save(s->modelPath);
@@ -90,18 +89,6 @@ void SubmitTrainingScore(AppState* s) {
     UpdateTrainingStats(s);
 }
 
-void ResetTrainingModel(AppState* s) {
-    if (s->running.load()) {
-        MessageBoxW(s->hwnd, L"请先停止自动控制，再重置模型。", L"模型正在使用", MB_ICONINFORMATION);
-        return;
-    }
-    if (MessageBoxW(s->hwnd, L"这会清除已学习权重、成绩统计和未结算样本，并恢复初始策略。是否继续？",
-        L"重置训练模型", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-    s->trainer.Reset();
-    s->trainer.Save(s->modelPath);
-    UpdateTrainingStats(s);
-    AppendLog(s, L"模型已恢复初始权重；历史 CSV 不会删除。可从新的一局重新训练。");
-}
 
 void PaintPreview(HWND hwnd, AppState* s) {
     PAINTSTRUCT ps{}; HDC dc=BeginPaint(hwnd,&ps);

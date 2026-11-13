@@ -170,7 +170,7 @@ bool MoveActiveToColumnVerified(const std::atomic<bool>& stop, HWND target,
         }
         const WORD key=direction>0?VK_RIGHT:VK_LEFT;
         const int pulse=direction>0?rightTapMs:leftTapMs;
-        if (!TapKey(target,key,pulse,error)) return false;
+        if (!TapKey(target,key,pulse,stop,error)) return false;
         SleepCheck(stop,keyGapMs);
         SleepCheck(stop,35);
         if (stop.load()) { error=L"用户请求停止。"; return false; }
@@ -230,7 +230,7 @@ WallKickAttemptOutcome TryEmpiricalWallKick(const std::atomic<bool>& stop,
 
     const int beforeKickX=currentX,beforeKickY=currentY;
     std::wstring inputError;
-    if (!TapKey(target,VK_UP,rotationTapMs,inputError)) {
+    if (!TapKey(target,VK_UP,rotationTapMs,stop,inputError)) {
         logText=L"Wall Kick 旋转输入失败："+inputError;
         return WallKickAttemptOutcome::Unsafe;
     }
