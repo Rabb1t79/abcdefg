@@ -176,6 +176,9 @@
                 log(L"已确认新一局开始，重置分数缓存和透明砖块记忆。");
                 if (!marathonMemory.ResetForNewGame())
                     throw std::runtime_error(WideToUtf8(marathonMemory.LoadStatus()));
+                trackedPieceForPhase = 0;
+                trackedRotationPhase = 0;
+                trackedRotationPhaseInitialized = false;
                 pendingActionValidation=false;
                 pendingMemoryCommit=false;
                 SleepCheck(s->stop,450);
