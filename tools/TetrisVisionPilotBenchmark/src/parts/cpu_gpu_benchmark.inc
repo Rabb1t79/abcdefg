@@ -941,6 +941,17 @@ private:
                     record.scoreSnapshot = std::stoi(fields[17]);
                     record.boardHash = std::stoull(fields[18], nullptr, 16);
                     record.sourceBoardHash = std::stoull(fields[19], nullptr, 16);
+                    if (HashBoard(decodedBoard) != record.boardHash) continue;
+                    bool ownershipValid = true;
+                    std::uint32_t maximumOwner = 0;
+                    for (int y = 0; y < ROWS; ++y) {
+                        for (int x = 0; x < COLS; ++x) {
+                            if (!decodedBoard[y][x] && decodedOwners[y][x] != 0)
+                                ownershipValid = false;
+                            maximumOwner = (std::max)(maximumOwner, decodedOwners[y][x]);
+                        }
+                    }
+                    if (!ownershipValid || maximumOwner > record.instanceId) continue;
 
                     board_ = decodedBoard;
                     owners_ = decodedOwners;
@@ -1020,7 +1031,10 @@ private:
         std::wstring error;
         const std::string row = "S," + std::to_string(sessionId_) + "," +
             SerializeRows(board_) + "," + SerializeOwners(owners_);
-        if (!AppendLine(row, error)) loadError_ = error;
+        if (!AppendLine(row, error)) {
+            loadError_ = error;
+            loadStatus_ = error;
+        }
     }
 
     std::wstring path_;

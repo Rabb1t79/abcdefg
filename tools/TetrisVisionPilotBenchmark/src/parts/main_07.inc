@@ -25,7 +25,6 @@
         std::wstring memoryPath=s->configPath;
         const size_t memorySlash=memoryPath.find_last_of(L"\\/");
         memoryPath=(memorySlash==std::wstring::npos?L".\\":memoryPath.substr(0,memorySlash+1))+L"TetrisVisionPilotBenchmark-marathon-memory-v2.csv";
-        memoryPath=(memorySlash==std::wstring::npos?L".\\":memoryPath.substr(0,memorySlash+1))+L"TetrisVisionPilotBenchmark-marathon-memory-v2.csv";
         marathonMemory.SetPath(memoryPath);
         if (!marathonMemory.Ready())
             throw std::runtime_error(WideToUtf8(marathonMemory.LoadStatus()));
@@ -240,6 +239,10 @@
 
             int recoveredCells=0, unexpectedCells=0;
             Board rememberedVisionBoard=marathonMemory.Reconcile(vision,recoveredCells,unexpectedCells);
+            if (!marathonMemory.Ready()) {
+                log(L"马拉松记忆初始化/写入失败："+marathonMemory.LoadStatus()+L"；停止自动操作。");
+                break;
+            }
             if (marathonMemory.ShouldReportRecovery(recoveredCells)) {
                 log(Format(L"透明砖块记忆恢复 %d 格；当前固定砖块记忆 %d 格；本局已记录 %llu 次落块。",
                     recoveredCells,marathonMemory.RememberedCells(),
@@ -273,6 +276,10 @@
             piece=check.active;
             int checkRecovered=0, checkUnexpected=0;
             Board board=marathonMemory.Reconcile(check,checkRecovered,checkUnexpected);
+            if (!marathonMemory.Ready()) {
+                log(L"马拉松记忆校验失败："+marathonMemory.LoadStatus()+L"；停止自动操作。");
+                break;
+            }
             if (marathonMemory.ShouldReportRecovery(checkRecovered))
                 log(Format(L"复核时通过马拉松记忆补全透明砖块 %d 格。",checkRecovered));
             if (checkUnexpected>0) {
@@ -311,6 +318,10 @@
                 piece=check.active;
                 int afterCalRecovered=0, afterCalUnexpected=0;
                 board=marathonMemory.Reconcile(check,afterCalRecovered,afterCalUnexpected);
+                if (!marathonMemory.Ready()) {
+                    log(L"输入校准后的马拉松记忆写入失败："+marathonMemory.LoadStatus()+L"；停止自动操作。");
+                    break;
+                }
                 if(afterCalUnexpected>0) { log(L"校准后棋盘与马拉松记忆不一致；停止本次操作。"); break; }
             }
             if (pendingActionValidation) {
