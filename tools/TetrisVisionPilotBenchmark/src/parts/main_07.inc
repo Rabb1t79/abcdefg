@@ -24,10 +24,32 @@
         MarathonBoardMemory marathonMemory;
         std::wstring memoryPath=s->configPath;
         const size_t memorySlash=memoryPath.find_last_of(L"\\/");
-        memoryPath=(memorySlash==std::wstring::npos?L".\\":memoryPath.substr(0,memorySlash+1))+L"TetrisVisionPilotBenchmark-marathon-memory.csv";
+        memoryPath=(memorySlash==std::wstring::npos?L".\\":memoryPath.substr(0,memorySlash+1))+L"TetrisVisionPilotBenchmark-marathon-memory-v2.csv";
+        memoryPath=(memorySlash==std::wstring::npos?L".\\":memoryPath.substr(0,memorySlash+1))+L"TetrisVisionPilotBenchmark-marathon-memory-v2.csv";
         marathonMemory.SetPath(memoryPath);
-        marathonMemory.ResetForNewGame();
-        log(L"已建立本局马拉松棋盘记忆；每次确认锁定后都会保存预测棋盘、来源棋盘和性能数据。");
+        if (!marathonMemory.Ready())
+            throw std::runtime_error(WideToUtf8(marathonMemory.LoadStatus()));
+        if (marathonMemory.HasSavedState()) {
+            const int resumeChoice = MessageBoxW(s->hwnd,
+                L"检测到上一局的马拉松记忆档案。\n\n是：恢复上次棋盘和每格所属方块（仅当游戏仍是同一局时选择）。\n否：开始新的记忆会话，不继承旧棋盘。\n取消：停止本次启动。\n\n恢复后若画面出现记忆中不存在的新格，程序仍会停止，不会猜测。",
+                L"恢复马拉松记忆", MB_YESNOCANCEL | MB_ICONQUESTION);
+            if (resumeChoice == IDYES) {
+                log(Format(L"已从事件档案恢复：会话 %llu；已确认落块 %llu；记忆格 %d。",
+                    static_cast<unsigned long long>(marathonMemory.SessionId()),
+                    static_cast<unsigned long long>(marathonMemory.HistoryCount()),
+                    marathonMemory.RememberedCells()));
+            } else if (resumeChoice == IDNO) {
+                if (!marathonMemory.ResetForNewGame())
+                    throw std::runtime_error(WideToUtf8(marathonMemory.LoadStatus()));
+                log(L"已选择新一局：创建新的记忆会话；旧档案事件仍保留。");
+            } else {
+                throw std::runtime_error("用户取消马拉松记忆恢复；未开始自动落块。");
+            }
+        } else {
+            if (!marathonMemory.ResetForNewGame())
+                throw std::runtime_error(WideToUtf8(marathonMemory.LoadStatus()));
+            log(L"已建立新的马拉松记忆会话；每次确认锁定都会保存形状令牌、四格归属和棋盘快照。");
+        }
         tesseract::TessBaseAPI ocr;
         const std::string tessPath = WideToUtf8(s->tessdataPath);
         const int ocrInit = tessPath.empty() ? -1 : ocr.Init(tessPath.c_str(), "eng", tesseract::OEM_LSTM_ONLY);
@@ -150,7 +172,8 @@
                 }
                 if(!restarted){log(L"点击 Again 后未确认新方块出现；已停止自动重试，避免在旧弹窗上重复点击。");break;}
                 log(L"已确认新一局开始，重置分数缓存和透明砖块记忆。");
-                marathonMemory.ResetForNewGame();
+                if (!marathonMemory.ResetForNewGame())
+                    throw std::runtime_error(WideToUtf8(marathonMemory.LoadStatus()));
                 pendingActionValidation=false;
                 pendingMemoryCommit=false;
                 SleepCheck(s->stop,450);
@@ -195,15 +218,23 @@
 
                 const double endToEndMs = std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - pendingMemoryDecisionStart).count();
-                marathonMemory.Commit(pendingExpectedBoard, pendingMemoryPiece,
+                std::string memoryToken;
+                std::uint32_t memoryInstance = 0;
+                std::wstring memoryCommitError;
+                if (!marathonMemory.Commit(pendingExpectedBoard, pendingMemoryPiece,
                     pendingMemoryRotation, pendingMemoryX, pendingMemoryLines,
                     pendingMemoryMultiEvents, pendingMemoryComputeMs,
                     pendingMemoryInputMs, endToEndMs, pendingSourceBoard,
-                    pendingMemoryCandidateChecks, pendingMemoryBackendCode);
+                    pendingMemoryCandidateChecks, pendingMemoryBackendCode, latestScore,
+                    memoryToken, memoryInstance, memoryCommitError)) {
+                    log(L"马拉松记忆提交失败："+memoryCommitError+L"；停止自动操作，避免记忆与真实棋盘脱节。");
+                    break;
+                }
                 pendingMemoryCommit = false;
                 pendingActionValidation = true;
-                log(Format(L"马拉松记忆已确认并保存：当前固定格 %d；本次消行 %d；纯计算 %.3f ms；输入链路 %.3f ms；端到端 %.3f ms。",
-                    marathonMemory.RememberedCells(),pendingMemoryLines,
+                const std::wstring memoryTokenWide(memoryToken.begin(), memoryToken.end());
+                log(Format(L"马拉松记忆已确认：实例 #%u；形状令牌 %s；当前固定格 %d；本次消行 %d；纯计算 %.3f ms；输入链路 %.3f ms；端到端 %.3f ms。",
+                    memoryInstance,memoryTokenWide.c_str(),marathonMemory.RememberedCells(),pendingMemoryLines,
                     pendingMemoryComputeMs,pendingMemoryInputMs,endToEndMs));
             }
 

@@ -262,6 +262,14 @@ public:
         UINT inputCount = 1;
         bool useAAsInput = true;
         for (int depth = 0; depth < sequenceLength; ++depth) {
+            // Each parent produces exactly 40 action slots. Check the output
+            // capacity before dispatch; do not multiply once more after the
+            // final depth, which previously rejected the valid 64,000-leaf tree.
+            if (inputCount == 0 || inputCount > kCapacity / 40) {
+                error = L"GPU 搜索节点超过预设容量，拒绝截断搜索。";
+                return false;
+            }
+            const UINT outputCount = inputCount * 40;
             GpuParams params{};
             params.inputCount = inputCount;
             params.pieceId = pieceIds[depth];
@@ -282,10 +290,13 @@ public:
             ID3D11UnorderedAccessView* nullUav[1]{};
             context_->CSSetShaderResources(0, 2, nullSrvs);
             context_->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
-            inputCount *= 40;
+            inputCount = outputCount;
             useAAsInput = !useAAsInput;
         }
-        if (inputCount > kCapacity) { error = L"GPU 搜索节点超过预设容量，拒绝截断搜索。"; return false; }
+        if (inputCount == 0 || inputCount > kCapacity) {
+            error = L"GPU 搜索结果数量超过预设容量，拒绝截断搜索。";
+            return false;
+        }
 
         GpuParams reduceParams{};
         reduceParams.inputCount = inputCount;
@@ -492,39 +503,69 @@ private:
 };
 
 
-// Game-session board memory: once a locked mino has been observed or predicted,
-// it remains part of the model even when the game's late-marathon visual effect
-// makes its pixels faint or transparent. A lock event applies line clears to the
-// remembered board atomically, so old coordinates are never blindly retained.
+// Persistent marathon memory. Each locked piece gets a unique instance ID;
+// its four cells carry that owner ID. Row clears compact both occupancy and
+// ownership grids together, so surviving fragments retain their original owner.
 class MarathonBoardMemory {
 public:
-    void SetPath(const std::wstring& path) { path_ = path; }
+    using OwnerGrid = std::array<std::array<std::uint32_t, COLS>, ROWS>;
 
-    bool Initialized() const { return initialized_; }
+    void SetPath(const std::wstring& path) {
+        path_ = path;
+        LoadJournal();
+    }
+
+    bool Ready() const { return loadError_.empty(); }
+    const std::wstring& LoadStatus() const { return loadStatus_; }
+
+    bool HasSavedState() const {
+        return initialized_ && (historyCount_ > 0 || RememberedCells() > 0);
+    }
 
     int RememberedCells() const {
         int count = 0;
         for (int y = 0; y < ROWS; ++y)
-            for (int x = 0; x < COLS; ++x) if (board_[y][x]) ++count;
+            for (int x = 0; x < COLS; ++x)
+                if (board_[y][x]) ++count;
         return count;
     }
 
-    std::size_t HistoryCount() const { return history_.size(); }
+    std::size_t HistoryCount() const { return historyCount_; }
+    std::uint64_t SessionId() const { return sessionId_; }
 
-    void ResetForNewGame() {
+    std::uint32_t OwnerAt(int x, int y) const {
+        if (x < 0 || x >= COLS || y < 0 || y >= ROWS) return 0;
+        return owners_[y][x];
+    }
+
+    bool ResetForNewGame() {
         board_ = {};
-        confidence_ = {};
+        owners_ = {};
         initialized_ = false;
         sequence_ = 0;
+        nextInstance_ = 1;
+        historyCount_ = 0;
         lastReportedRecovery_ = -1;
         history_.clear();
-        AppendSessionMarker("NEW_GAME");
+        ++sessionId_;
+        if (sessionId_ == 0) sessionId_ = 1;
+
+        std::wstring error;
+        if (!EnsureHeader(error) ||
+            !AppendLine("N," + std::to_string(sessionId_), error)) {
+            loadError_ = error;
+            loadStatus_ = L"无法建立新一局记忆事件";
+            return false;
+        }
+        loadError_.clear();
+        loadStatus_ = L"已建立新的记忆会话";
+        return true;
     }
 
     Board Reconcile(const VisionResult& vision, int& recoveredCells, int& unexpectedCells) {
         recoveredCells = 0;
         unexpectedCells = 0;
-        if (!vision.hasActive) return board_; // never mistake an untracked active piece for fixed cells
+        if (!vision.hasActive) return board_;
 
         const Board observed = BoardWithoutActive(vision);
         if (!initialized_) {
@@ -532,23 +573,14 @@ public:
             return board_;
         }
 
-        Board merged = board_;
+        // Visible cells may confirm remembered cells, but must never silently
+        // overwrite the event-sourced board. An unremembered cell is a conflict.
         for (int y = 0; y < ROWS; ++y) {
             for (int x = 0; x < COLS; ++x) {
-                if (observed[y][x]) {
-                    if (!board_[y][x]) ++unexpectedCells;
-                    merged[y][x] = 1;
-                    confidence_[y][x] = 255;
-                } else if (board_[y][x]) {
-                    // It was previously visible or committed by a verified
-                    // lock. Keep it as a remembered transparent mino.
-                    ++recoveredCells;
-                    confidence_[y][x] = (std::max)(static_cast<unsigned char>(32),
-                        static_cast<unsigned char>(confidence_[y][x] > 1 ? confidence_[y][x] - 1 : 1));
-                }
+                if (observed[y][x] && !board_[y][x]) ++unexpectedCells;
+                else if (board_[y][x] && !observed[y][x]) ++recoveredCells;
             }
         }
-        board_ = merged;
         return board_;
     }
 
@@ -558,73 +590,150 @@ public:
         return recoveredCells > 0;
     }
 
-    void Seed(const Board& board) {
-        board_ = board;
-        initialized_ = true;
-        for (int y = 0; y < ROWS; ++y)
-            for (int x = 0; x < COLS; ++x)
-                confidence_[y][x] = board[y][x] ? 255 : 0;
-        lastReportedRecovery_ = -1;
-    }
-
-    void Commit(const Board& expectedBoard, char piece, int rotation, int x,
+    bool Commit(const Board& expectedBoard, char piece, int rotation, int x,
                 int clearedLines, int multiClearEvents, double computeMs,
                 double inputMs, double endToEndMs, const Board& sourceBoard,
-                std::uint64_t candidateChecks, int backendCode) {
-        board_ = expectedBoard;
-        initialized_ = true;
-        lastReportedRecovery_ = -1;
-        for (int y = 0; y < ROWS; ++y)
-            for (int col = 0; col < COLS; ++col)
-                confidence_[y][col] = expectedBoard[y][col] ? 255 : 0;
+                std::uint64_t candidateChecks, int backendCode, int scoreSnapshot,
+                std::string& tokenLabelOut, std::uint32_t& instanceIdOut,
+                std::wstring& error) {
+        if (!Ready()) { error = loadError_; return false; }
+
+        const auto rotationIt = g_rotations.find(piece);
+        if (rotationIt == g_rotations.end() || rotationIt->second.empty() ||
+            rotation < 0 || rotation >= static_cast<int>(rotationIt->second.size())) {
+            error = L"无法为当前方块生成形状令牌：类型或旋转编号无效。";
+            return false;
+        }
+
+        if (!initialized_) {
+            board_ = sourceBoard;
+            owners_ = {};
+            initialized_ = true;
+        }
+        if (board_ != sourceBoard) {
+            error = L"提交前的来源棋盘与记忆棋盘不一致；未写入形状或格子归属。";
+            return false;
+        }
+
+        const std::vector<Cell>& shape = rotationIt->second[static_cast<size_t>(rotation)];
+        int maxY = 0;
+        for (const Cell& cell : shape) maxY = (std::max)(maxY, cell.y);
+        int landingY = -maxY - 1;
+        while (Valid(sourceBoard, shape, x, landingY + 1)) ++landingY;
+        if (landingY < 0 || !Valid(sourceBoard, shape, x, landingY)) {
+            error = L"无法从来源棋盘复算该方块的合法落点；本次记忆提交已取消。";
+            return false;
+        }
+
+        if (nextInstance_ == 0 ||
+            nextInstance_ == (std::numeric_limits<std::uint32_t>::max)()) {
+            error = L"方块实例编号已达到安全上限；停止写入以防止归属 ID 重复。";
+            return false;
+        }
+        const std::uint32_t instanceId = nextInstance_;
+        Board placedBoard = sourceBoard;
+        OwnerGrid placedOwners = owners_;
+        for (const Cell& cell : shape) {
+            const int px = x + cell.x;
+            const int py = landingY + cell.y;
+            if (px < 0 || px >= COLS || py < 0 || py >= ROWS ||
+                placedBoard[py][px]) {
+                error = L"计算出的四格落点越界或与已有格重叠；拒绝提交。";
+                return false;
+            }
+            placedBoard[py][px] = 1;
+            placedOwners[py][px] = instanceId;
+        }
+
+        Board compactBoard{};
+        OwnerGrid compactOwners{};
+        int writeRow = ROWS - 1;
+        int actualCleared = 0;
+        for (int readRow = ROWS - 1; readRow >= 0; --readRow) {
+            bool full = true;
+            for (int col = 0; col < COLS; ++col) {
+                if (!placedBoard[readRow][col]) { full = false; break; }
+            }
+            if (full) {
+                ++actualCleared;
+            } else {
+                compactBoard[writeRow] = placedBoard[readRow];
+                compactOwners[writeRow] = placedOwners[readRow];
+                --writeRow;
+            }
+        }
+
+        if (actualCleared != clearedLines || compactBoard != expectedBoard) {
+            error = L"形状落点、消行结果与求解器预测棋盘不一致；没有写入记忆档案。";
+            return false;
+        }
+
+        const auto token = BuildShapeToken(piece, rotation);
+        if (token.second == 0) {
+            error = L"当前方块无法映射到已定义的形状令牌。";
+            return false;
+        }
 
         MarathonMoveRecord record;
-        record.sequence = ++sequence_;
+        record.sequence = sequence_ + 1;
+        record.instanceId = instanceId;
         record.piece = piece;
+        record.tokenLabel = token.first;
+        record.tokenId = token.second;
         record.rotation = rotation;
         record.x = x;
-        record.clearedLines = clearedLines;
+        record.landingY = landingY;
+        record.clearedLines = actualCleared;
         record.multiClearEvents = multiClearEvents;
         record.computeMs = computeMs;
         record.inputMs = inputMs;
         record.endToEndMs = endToEndMs;
-        record.boardHash = HashBoard(expectedBoard);
+        record.boardHash = HashBoard(compactBoard);
         record.sourceBoardHash = HashBoard(sourceBoard);
         record.candidateChecks = candidateChecks;
         record.backendCode = backendCode;
+        record.scoreSnapshot = scoreSnapshot;
+
+        std::ostringstream line;
+        line << "P," << sessionId_ << ',' << record.sequence << ','
+             << record.instanceId << ',' << record.piece << ','
+             << record.tokenLabel << ',' << record.tokenId << ','
+             << record.rotation << ',' << record.x << ',' << record.landingY << ','
+             << record.clearedLines << ',' << record.multiClearEvents << ','
+             << std::fixed << std::setprecision(3)
+             << record.computeMs << ',' << record.inputMs << ',' << record.endToEndMs << ','
+             << record.backendCode << ',' << record.candidateChecks << ','
+             << record.scoreSnapshot << ',' << Hex64(record.boardHash) << ','
+             << Hex64(record.sourceBoardHash) << ','
+             << SerializeRows(compactBoard) << ','
+             << SerializeOwners(compactOwners);
+
+        if (!AppendLine(line.str(), error)) return false;
+
+        board_ = compactBoard;
+        owners_ = compactOwners;
+        initialized_ = true;
+        sequence_ = record.sequence;
+        nextInstance_ = instanceId + 1;
+        ++historyCount_;
+        lastReportedRecovery_ = -1;
         history_.push_back(record);
         if (history_.size() > 4096) history_.erase(history_.begin());
-
-        if (!path_.empty()) {
-            const std::filesystem::path filePath(path_);
-            const bool writeHeader = !std::filesystem::exists(filePath);
-            std::ofstream output{filePath, std::ios::out | std::ios::app};
-            if (output) {
-                if (writeHeader)
-                    output << "sequence,piece,rotation,x,cleared_lines,multi_clear_events,compute_ms,input_ms,end_to_end_ms,board_hash,source_board_hash,backend_code,candidate_checks,rows_hex\n";
-                output << record.sequence << ',' << record.piece << ',' << record.rotation << ','
-                       << record.x << ',' << record.clearedLines << ',' << record.multiClearEvents << ','
-                       << std::fixed << std::setprecision(3) << record.computeMs << ','
-                       << record.inputMs << ',' << record.endToEndMs << ','
-                       << std::hex << record.boardHash << ',' << record.sourceBoardHash << std::dec << ','
-                       << record.backendCode << ',' << record.candidateChecks << ',';
-                for (int y = 0; y < ROWS; ++y) {
-                    unsigned int mask = 0;
-                    for (int col = 0; col < COLS; ++col) if (expectedBoard[y][col]) mask |= (1u << col);
-                    output << std::hex << std::setw(3) << std::setfill('0') << mask;
-                    if (y + 1 < ROWS) output << ':';
-                }
-                output << std::dec << std::setfill(' ') << '\n';
-            }
-        }
+        tokenLabelOut = record.tokenLabel;
+        instanceIdOut = instanceId;
+        return true;
     }
 
 private:
     struct MarathonMoveRecord {
         std::uint64_t sequence{};
+        std::uint32_t instanceId{};
         char piece{};
+        std::string tokenLabel;
+        int tokenId{};
         int rotation{};
         int x{};
+        int landingY{};
         int clearedLines{};
         int multiClearEvents{};
         double computeMs{};
@@ -634,36 +743,296 @@ private:
         std::uint64_t sourceBoardHash{};
         std::uint64_t candidateChecks{};
         int backendCode{};
+        int scoreSnapshot{};
     };
+
+    static constexpr const char* kJournalHeader =
+        "TETRIS_VISION_PILOT_MARATHON_MEMORY_V2";
+
+    static std::pair<std::string, int> BuildShapeToken(char piece, int rotation) {
+        const int orientation = ((rotation % 4) + 4) % 4;
+        switch (piece) {
+        case 'O': return {"S", 1};
+        case 'L': return {"L" + std::to_string(orientation + 1), 11 + orientation};
+        case 'J': return {"<L" + std::to_string(orientation + 1), 21 + orientation};
+        case 'T': return {"T" + std::to_string(orientation + 1), 31 + orientation};
+        case 'Z': return {"Z" + std::to_string(orientation + 1), 41 + orientation};
+        case 'S': return {"<Z" + std::to_string(orientation + 1), 51 + orientation};
+        case 'I': return {"I" + std::to_string(orientation + 1), 61 + orientation};
+        default: return {"?", 0};
+        }
+    }
 
     static std::uint64_t HashBoard(const Board& board) {
         std::uint64_t hash = 1469598103934665603ull;
         for (int y = 0; y < ROWS; ++y) {
             std::uint32_t rowMask = 0;
-            for (int x = 0; x < COLS; ++x) if (board[y][x]) rowMask |= (1u << x);
+            for (int x = 0; x < COLS; ++x)
+                if (board[y][x]) rowMask |= (1u << x);
             hash ^= rowMask;
             hash *= 1099511628211ull;
         }
         return hash;
     }
 
-    void AppendSessionMarker(const char* marker) {
-        if (path_.empty()) return;
-        const std::filesystem::path filePath(path_);
-        const bool writeHeader = !std::filesystem::exists(filePath) ||
-            std::filesystem::file_size(filePath) == 0;
-        std::ofstream output{filePath, std::ios::out | std::ios::app};
-        if (!output) return;
-        if (writeHeader)
-            output << "sequence,piece,rotation,x,cleared_lines,multi_clear_events,compute_ms,input_ms,end_to_end_ms,board_hash,source_board_hash,backend_code,candidate_checks,rows_hex\n";
-        output << "# " << marker << '\n';
+    static std::string Hex64(std::uint64_t value) {
+        std::ostringstream out;
+        out << std::hex << std::uppercase << std::setw(16) << std::setfill('0') << value;
+        return out.str();
     }
 
+    static std::string SerializeRows(const Board& board) {
+        std::ostringstream out;
+        for (int y = 0; y < ROWS; ++y) {
+            std::uint32_t mask = 0;
+            for (int x = 0; x < COLS; ++x)
+                if (board[y][x]) mask |= (1u << x);
+            out << std::hex << std::uppercase << std::setw(3)
+                << std::setfill('0') << mask;
+            if (y + 1 < ROWS) out << ':';
+        }
+        return out.str();
+    }
+
+    static std::string SerializeOwners(const OwnerGrid& owners) {
+        std::ostringstream out;
+        for (int y = 0; y < ROWS; ++y) {
+            for (int x = 0; x < COLS; ++x) {
+                out << std::hex << std::uppercase << std::setw(8)
+                    << std::setfill('0') << owners[y][x];
+            }
+        }
+        return out.str();
+    }
+
+    static bool DecodeRows(const std::string& encoded, Board& board) {
+        if (encoded.size() != static_cast<size_t>(ROWS) * 4 - 1) return false;
+        Board decoded{};
+        try {
+            for (int y = 0; y < ROWS; ++y) {
+                const size_t offset = static_cast<size_t>(y) * 4;
+                if (y + 1 < ROWS && encoded[offset + 3] != ':') return false;
+                const unsigned long mask = std::stoul(encoded.substr(offset, 3), nullptr, 16);
+                if (mask > ((1u << COLS) - 1u)) return false;
+                for (int x = 0; x < COLS; ++x)
+                    decoded[y][x] = (mask & (1u << x)) ? 1 : 0;
+            }
+        } catch (...) { return false; }
+        board = decoded;
+        return true;
+    }
+
+    static bool DecodeOwners(const std::string& encoded, OwnerGrid& owners) {
+        if (encoded.size() != static_cast<size_t>(ROWS) * COLS * 8) return false;
+        OwnerGrid decoded{};
+        try {
+            size_t offset = 0;
+            for (int y = 0; y < ROWS; ++y) {
+                for (int x = 0; x < COLS; ++x) {
+                    decoded[y][x] = static_cast<std::uint32_t>(
+                        std::stoul(encoded.substr(offset, 8), nullptr, 16));
+                    offset += 8;
+                }
+            }
+        } catch (...) { return false; }
+        owners = decoded;
+        return true;
+    }
+
+    static std::vector<std::string> SplitCsv(const std::string& line) {
+        std::vector<std::string> fields;
+        std::stringstream stream(line);
+        std::string field;
+        while (std::getline(stream, field, ',')) fields.push_back(field);
+        return fields;
+    }
+
+    void ClearLoadedSnapshot() {
+        board_ = {};
+        owners_ = {};
+        initialized_ = false;
+        sequence_ = 0;
+        nextInstance_ = 1;
+        historyCount_ = 0;
+        lastReportedRecovery_ = -1;
+        history_.clear();
+    }
+
+    void LoadJournal() {
+        ClearLoadedSnapshot();
+        sessionId_ = 0;
+        loadError_.clear();
+        loadStatus_ = L"没有历史记忆档案，将在开始时创建新档案。";
+        if (path_.empty()) return;
+
+        std::error_code fileError;
+        if (!std::filesystem::exists(std::filesystem::path(path_), fileError)) {
+            if (fileError) {
+                loadError_ = L"无法检查马拉松记忆档案路径。";
+                loadStatus_ = loadError_;
+            }
+            return;
+        }
+
+        std::ifstream input{std::filesystem::path(path_), std::ios::in | std::ios::binary};
+        if (!input) {
+            loadError_ = L"无法读取马拉松记忆档案。";
+            loadStatus_ = loadError_;
+            return;
+        }
+        std::string header;
+        if (!std::getline(input, header)) header.clear();
+        if (!header.empty() && header.back() == '\r') header.pop_back();
+        if (header != kJournalHeader) {
+            loadError_ = L"马拉松记忆档案版本不匹配；旧档案未被覆盖。";
+            loadStatus_ = loadError_;
+            return;
+        }
+
+        std::string line;
+        std::size_t validEvents = 0;
+        while (std::getline(input, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty()) continue;
+            const auto fields = SplitCsv(line);
+            if (fields.empty()) continue;
+            try {
+                if (fields[0] == "N" && fields.size() >= 2) {
+                    sessionId_ = std::stoull(fields[1]);
+                    ClearLoadedSnapshot();
+                    ++validEvents;
+                    continue;
+                }
+                if (fields[0] == "S" && fields.size() >= 4) {
+                    if (std::stoull(fields[1]) != sessionId_) continue;
+                    Board decodedBoard{};
+                    OwnerGrid decodedOwners{};
+                    if (!DecodeRows(fields[2], decodedBoard) ||
+                        !DecodeOwners(fields[3], decodedOwners)) continue;
+                    board_ = decodedBoard;
+                    owners_ = decodedOwners;
+                    initialized_ = true;
+                    ++validEvents;
+                    continue;
+                }
+                if (fields[0] == "P" && fields.size() >= 22) {
+                    if (std::stoull(fields[1]) != sessionId_) continue;
+                    Board decodedBoard{};
+                    OwnerGrid decodedOwners{};
+                    if (!DecodeRows(fields[20], decodedBoard) ||
+                        !DecodeOwners(fields[21], decodedOwners)) continue;
+
+                    MarathonMoveRecord record;
+                    record.sequence = std::stoull(fields[2]);
+                    record.instanceId = static_cast<std::uint32_t>(std::stoul(fields[3]));
+                    record.piece = fields[4].empty() ? 0 : fields[4][0];
+                    record.tokenLabel = fields[5];
+                    record.tokenId = std::stoi(fields[6]);
+                    record.rotation = std::stoi(fields[7]);
+                    record.x = std::stoi(fields[8]);
+                    record.landingY = std::stoi(fields[9]);
+                    record.clearedLines = std::stoi(fields[10]);
+                    record.multiClearEvents = std::stoi(fields[11]);
+                    record.computeMs = std::stod(fields[12]);
+                    record.inputMs = std::stod(fields[13]);
+                    record.endToEndMs = std::stod(fields[14]);
+                    record.backendCode = std::stoi(fields[15]);
+                    record.candidateChecks = std::stoull(fields[16]);
+                    record.scoreSnapshot = std::stoi(fields[17]);
+                    record.boardHash = std::stoull(fields[18], nullptr, 16);
+                    record.sourceBoardHash = std::stoull(fields[19], nullptr, 16);
+
+                    board_ = decodedBoard;
+                    owners_ = decodedOwners;
+                    initialized_ = true;
+                    sequence_ = (std::max)(sequence_, record.sequence);
+                    nextInstance_ = (std::max)(nextInstance_, record.instanceId + 1);
+                    ++historyCount_;
+                    history_.push_back(std::move(record));
+                    if (history_.size() > 4096) history_.erase(history_.begin());
+                    ++validEvents;
+                }
+            } catch (...) {
+                // A truncated final row is ignored. The last complete snapshot
+                // remains authoritative and can still be resumed safely.
+            }
+        }
+
+        loadStatus_ = Format(L"已读取 %llu 条有效档案事件；当前会话 %llu，已确认落块 %llu，记忆格 %d。",
+            static_cast<unsigned long long>(validEvents),
+            static_cast<unsigned long long>(sessionId_),
+            static_cast<unsigned long long>(historyCount_), RememberedCells());
+    }
+
+    bool EnsureHeader(std::wstring& error) const {
+        std::error_code ec;
+        const std::filesystem::path filePath(path_);
+        if (std::filesystem::exists(filePath, ec) && !ec &&
+            std::filesystem::file_size(filePath, ec) > 0 && !ec) {
+            std::ifstream input{filePath, std::ios::in | std::ios::binary};
+            std::string header;
+            if (!input || !std::getline(input, header)) {
+                error = L"无法检查马拉松记忆档案版本。";
+                return false;
+            }
+            if (!header.empty() && header.back() == '\r') header.pop_back();
+            if (header != kJournalHeader) {
+                error = L"马拉松记忆档案版本不匹配；拒绝追加到未知格式文件。";
+                return false;
+            }
+            return true;
+        }
+
+        std::ofstream output{filePath, std::ios::out | std::ios::binary | std::ios::trunc};
+        if (!output) {
+            error = L"无法创建马拉松记忆档案；请检查程序目录写入权限。";
+            return false;
+        }
+        output << kJournalHeader << "\r\n";
+        if (!output.good()) {
+            error = L"写入马拉松记忆档案版本头失败。";
+            return false;
+        }
+        return true;
+    }
+
+    bool AppendLine(const std::string& line, std::wstring& error) const {
+        std::ofstream output{std::filesystem::path(path_),
+            std::ios::out | std::ios::binary | std::ios::app};
+        if (!output) {
+            error = L"无法追加马拉松记忆事件；请检查文件是否被占用或目录是否可写。";
+            return false;
+        }
+        output << line << "\r\n";
+        output.flush();
+        if (!output.good()) {
+            error = L"马拉松记忆事件写入失败；未更新内存中的权威棋盘。";
+            return false;
+        }
+        return true;
+    }
+
+    void Seed(const Board& board) {
+        board_ = board;
+        owners_ = {};
+        initialized_ = true;
+        lastReportedRecovery_ = -1;
+        std::wstring error;
+        const std::string row = "S," + std::to_string(sessionId_) + "," +
+            SerializeRows(board_) + "," + SerializeOwners(owners_);
+        if (!AppendLine(row, error)) loadError_ = error;
+    }
+
+    std::wstring path_;
+    std::wstring loadError_;
+    std::wstring loadStatus_;
     Board board_{};
-    std::array<std::array<unsigned char, COLS>, ROWS> confidence_{};
+    OwnerGrid owners_{};
     bool initialized_{};
+    std::uint64_t sessionId_{};
     std::uint64_t sequence_{};
+    std::uint32_t nextInstance_{1};
+    std::size_t historyCount_{};
     int lastReportedRecovery_{-1};
     std::vector<MarathonMoveRecord> history_;
-    std::wstring path_;
 };

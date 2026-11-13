@@ -22,7 +22,7 @@ void OpenBenchmarkFile(AppState* s, bool memoryFile) {
     std::wstring path = memoryFile ? s->configPath : s->logPath;
     const size_t slash = path.find_last_of(L"\\/");
     path = (slash == std::wstring::npos ? L".\\" : path.substr(0, slash + 1)) +
-        (memoryFile ? L"TetrisVisionPilotBenchmark-marathon-memory.csv" : L"TetrisVisionPilotBenchmark.log");
+        (memoryFile ? L"TetrisVisionPilotBenchmark-marathon-memory-v2.csv" : L"TetrisVisionPilotBenchmark.log");
     if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
         MessageBoxW(s->hwnd, memoryFile
             ? L"马拉松记忆档案尚未生成。请先开始一局并完成至少一次锁定。"
