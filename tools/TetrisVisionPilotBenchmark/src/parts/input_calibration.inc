@@ -17,18 +17,42 @@ struct InputCalibrationResult {
 
 bool ReadCalibrationPiece(HWND target, const Rect& rect, int threshold,
                           char expectedPiece, int expectedRotation,
+                          int referenceX, int referenceY,
                           int& xOut, int& yOut, std::wstring& error) {
-    VisionResult vision = AnalyzeStable(rect, threshold, error, 2, 4);
+    // A 4 ms sampling interval often captures the same rendered frame twice.
+    // That makes a stationary active piece indistinguishable from settled cells.
+    VisionResult vision = AnalyzeStable(rect, threshold, error, 3, 16);
     if (!error.empty()) return false;
-    if (!vision.hasActive ||
-        vision.active.name != expectedPiece ||
-        vision.active.rotation != expectedRotation) {
-        error = L"校准期间未能稳定确认同一个活动方块；为避免位置误判，停止校准。";
-        return false;
+    if (vision.hasActive &&
+        vision.active.name == expectedPiece &&
+        vision.active.rotation == expectedRotation) {
+        xOut = vision.active.minX;
+        yOut = vision.active.minY;
+        return true;
     }
-    xOut = vision.active.minX;
-    yOut = vision.active.minY;
-    return true;
+
+    // During calibration, the piece identity and its previous location are
+    // already known. Use that narrow corridor as a safe fallback when the
+    // frame-to-frame motion tracker has not yet seen a full game-frame change.
+    const Candidate* match = nullptr;
+    int matches = 0;
+    for (const Candidate& candidate : vision.components) {
+        if (candidate.name != expectedPiece ||
+            candidate.rotation != expectedRotation ||
+            std::abs(candidate.minX - referenceX) > 1 ||
+            candidate.minY < referenceY - 1 ||
+            candidate.minY > referenceY + 5) continue;
+        match = &candidate;
+        ++matches;
+    }
+    if (matches == 1 && match) {
+        xOut = match->minX;
+        yOut = match->minY;
+        return true;
+    }
+
+    error = L"校准期间无法唯一确认原活动方块；为避免对错误方块输入，停止校准。";
+    return false;
 }
 
 bool RestoreCalibrationColumn(const std::atomic<bool>& stop, HWND target,
@@ -43,11 +67,14 @@ bool RestoreCalibrationColumn(const std::atomic<bool>& stop, HWND target,
         std::wstring inputError;
         if (!TapKey(target,key,tapMs,stop,inputError)) { error=inputError; return false; }
         SleepCheck(stop,keyGapMs);
+        // Allow at least one rendered game frame to consume the key-down before
+        // judging whether the pulse moved the tetromino.
+        SleepCheck(stop,32);
         if (stop.load()) { error=L"用户请求停止。"; return false; }
 
         int observedX=0, observedY=0;
         if (!ReadCalibrationPiece(target,rect,threshold,piece,rotation,
-                                  observedX,observedY,error)) return false;
+                                  currentX,currentY,observedX,observedY,error)) return false;
         const int delta = observedX - currentX;
         // A restoration pulse must move exactly one cell toward the saved
         // column. Any overshoot is treated as unsafe rather than guessed.
@@ -89,10 +116,7 @@ CalibrationOutcome CalibrateOneDirection(const std::atomic<bool>& stop,
 
     // Try only short, fully released pulses. Each candidate is a separate tap;
     // no candidate holds the direction key long enough to request auto-repeat.
-    const int tapCandidates[] = {
-        (std::max)(1,(std::min)(4,baseTapMs)),
-        2, 3, 4
-    };
+    const int tapCandidates[] = {2, 4, 8, 12, 16, 20, 24};
     bool triedTapMs[5]{};
     const int originalX=startPiece.minX;
     int currentX=originalX;
@@ -110,12 +134,16 @@ CalibrationOutcome CalibrateOneDirection(const std::atomic<bool>& stop,
             return CalibrationOutcome::Unsafe;
         }
         SleepCheck(stop,keyGapMs);
+        // Do not sample 4 ms after key-up: the game may not have rendered the
+        // input yet. Wait across at least one frame, then track multiple frames.
+        SleepCheck(stop,32);
         if (stop.load()) { note=L"用户请求停止。"; return CalibrationOutcome::Unsafe; }
 
         int observedX=0, observedY=0;
         std::wstring visionError;
         if (!ReadCalibrationPiece(target,rect,threshold,startPiece.name,
-                                  startPiece.rotation,observedX,observedY,visionError)) {
+                                  startPiece.rotation,currentX,currentY,
+                                  observedX,observedY,visionError)) {
             note=visionError;
             return CalibrationOutcome::Unsafe;
         }
@@ -185,7 +213,7 @@ CalibrationOutcome CalibrateOpeningInput(const std::atomic<bool>& stop,
     std::wstring captureError;
     int x=0,y=0;
     if (!ReadCalibrationPiece(target,rect,threshold,current.name,current.rotation,
-                              x,y,captureError)) {
+                              current.minX,current.minY,x,y,captureError)) {
         summary=captureError;
         return CalibrationOutcome::Unsafe;
     }

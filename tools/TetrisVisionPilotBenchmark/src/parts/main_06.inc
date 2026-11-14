@@ -60,7 +60,7 @@ bool TapKey(HWND target, WORD vk, int pressMs,
     if (!WaitForTargetForeground(target, stop, error)) return false;
     // Every call is one discrete key-down/key-up pulse. Keep the down interval
     // short enough to avoid the game's held-key auto-repeat path.
-    const int boundedPressMs=(std::max)(2,(std::min)(4,pressMs));
+    const int boundedPressMs=(std::max)(2,(std::min)(24,pressMs));
     INPUT input{};
     input.type=INPUT_KEYBOARD;
     input.ki.wVk=vk;

@@ -73,7 +73,7 @@
         std::uint64_t pendingMemoryCandidateChecks{};
         int pendingMemoryBackendCode{};
         std::chrono::steady_clock::time_point pendingMemoryDecisionStart{};
-        DWORD pendingDropTick{};
+        DWORD pendingDropTick{}, lastSpawnDiagnosticSecond{};
         DWORD lastScoreRead=0, lastGameOverRead=0;
         int latestScore=0, gameOverHits=0;
         bool hasLatestScore=false;
@@ -187,23 +187,67 @@
             }
 
             std::wstring capError;
-            VisionResult vision=AnalyzeStable(rect,threshold,capError,2,4);
+            VisionResult vision=AnalyzeStable(rect,threshold,capError,
+                pendingMemoryCommit ? 3 : 2, pendingMemoryCommit ? 16 : 4);
             if(!capError.empty()) { log(L"屏幕截图失败："+capError); break; }
 
             if (pendingMemoryCommit) {
-                const bool expectedSpawnType = pendingMemoryNextPiece == 0 ||
-                    vision.active.name == pendingMemoryNextPiece;
-                const bool newPieceAtSpawn = vision.hasActive &&
-                    expectedSpawnType && vision.active.minY <= 2 &&
-                    (vision.active.name != pendingMemoryPiece || pendingMemoryMinY > 2 ||
-                     GetTickCount() - pendingDropTick >= 80);
+                const DWORD spawnWaitMs = GetTickCount() - pendingDropTick;
+                Candidate spawnCandidate{};
+                bool spawnCandidateFound = false;
+
+                if (pendingMemoryNextPiece != 0) {
+                    if (vision.hasActive &&
+                        vision.active.name == pendingMemoryNextPiece &&
+                        vision.active.minY <= 4) {
+                        spawnCandidate = vision.active;
+                        spawnCandidateFound = true;
+                    } else {
+                        int matchingSpawnComponents = 0;
+                        for (const Candidate& candidate : vision.components) {
+                            if (candidate.name == pendingMemoryNextPiece &&
+                                candidate.minY <= 4) {
+                                spawnCandidate = candidate;
+                                ++matchingSpawnComponents;
+                            }
+                        }
+                        spawnCandidateFound = matchingSpawnComponents == 1;
+                    }
+                } else if (vision.hasActive && vision.active.minY <= 4) {
+                    spawnCandidate = vision.active;
+                    spawnCandidateFound = true;
+                }
+
+                const bool newPieceAtSpawn = spawnCandidateFound &&
+                    (spawnCandidate.name != pendingMemoryPiece || pendingMemoryMinY > 4 ||
+                     spawnWaitMs >= 80);
                 if (!newPieceAtSpawn) {
-                    if (GetTickCount() - pendingDropTick > 5000) {
-                        log(L"硬降后 5 秒内未确认 NEXT 新方块出生；未提交猜测棋盘，自动操作已停止。");
+                    const DWORD diagnosticSecond = spawnWaitMs / 1000;
+                    if (diagnosticSecond > 0 &&
+                        diagnosticSecond != lastSpawnDiagnosticSecond) {
+                        lastSpawnDiagnosticSecond = diagnosticSecond;
+                        const wchar_t activeName = vision.hasActive ? vision.active.name : L'-';
+                        const int activeY = vision.hasActive ? vision.active.minY : -1;
+                        log(Format(L"等待 NEXT 出生：已 %lu 秒；活动方块 %c（顶行 %d）；可见组件 %llu；期望 NEXT %c。",
+                            static_cast<unsigned long>(diagnosticSecond), activeName, activeY,
+                            static_cast<unsigned long long>(vision.components.size()),
+                            pendingMemoryNextPiece ? pendingMemoryNextPiece : L'-'));
+                    }
+                    if (spawnWaitMs > 8000) {
+                        log(L"硬降后 8 秒内仍未确认 NEXT 新方块出生；未提交猜测棋盘，自动操作已停止。");
                         break;
                     }
-                    SleepCheck(s->stop,8);
+                    SleepCheck(s->stop,12);
                     continue;
+                }
+
+                // If the piece classifier found the expected NEXT tetromino in
+                // the spawn corridor but the motion tracker missed its first
+                // frame, promote that unique component for this validation pass.
+                if (!vision.hasActive) {
+                    vision.active = spawnCandidate;
+                    vision.hasActive = true;
+                    vision.activeStableSamples = 1;
                 }
 
                 const Board observedFixedBoard = BoardWithoutActive(vision);
@@ -530,6 +574,7 @@
             pendingMemoryBackendCode = gpuMode ? 1 : 0;
             pendingMemoryDecisionStart = solverStart;
             pendingDropTick = GetTickCount();
+            lastSpawnDiagnosticSecond = 0;
             pendingMemoryCommit = true;
             pendingActionValidation = false;
             log(Format(L"已发送硬降；等待确认 NEXT 方块出生，再将锁定棋盘写入马拉松记忆；本次预测消行 %d。",
