@@ -122,13 +122,13 @@ std::string ToUtf8(const std::wstring& value) {
     return result;
 }
 
-const wchar_t* MachineName(USHORT machine) {
+std::wstring MachineName(USHORT machine) {
     switch (machine) {
     case IMAGE_FILE_MACHINE_I386: return L"x86";
     case IMAGE_FILE_MACHINE_AMD64: return L"x64";
     case IMAGE_FILE_MACHINE_ARM64: return L"ARM64";
     case IMAGE_FILE_MACHINE_UNKNOWN: return L"native/default";
-    default: return Format(L"machine 0x%04X", machine).c_str();
+    default: return Format(L"machine 0x%04X", machine);
     }
 }
 
