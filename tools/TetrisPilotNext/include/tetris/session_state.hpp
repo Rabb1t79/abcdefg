@@ -12,7 +12,7 @@ enum class RunnerState : std::uint8_t {
 enum class RunnerEvent : std::uint8_t {
     ProcessAttached, CalibrationStarted, CalibrationPassed, SnapshotAccepted,
     PlanReady, ActionSubmitted, StateMatched, StateMismatch, RecoverySucceeded,
-    GameOverDetected, StopRequested, Fault
+    GameOverDetected, RestartConfirmed, StopRequested, Fault
 };
 
 class SessionStateMachine {

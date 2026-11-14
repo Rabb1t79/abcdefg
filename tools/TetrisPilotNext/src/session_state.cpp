@@ -35,10 +35,14 @@ bool SessionStateMachine::Apply(RunnerEvent event) noexcept {
         state_ = RunnerState::Ready; return true;
     case RunnerEvent::GameOverDetected:
         if (s != RunnerState::Verifying && s != RunnerState::Ready &&
-            s != RunnerState::Planning) return false;
+            s != RunnerState::Planning && s != RunnerState::Executing &&
+            s != RunnerState::Recovering) return false;
         state_ = RunnerState::GameOver; return true;
+    case RunnerEvent::RestartConfirmed:
+        if (s != RunnerState::GameOver) return false;
+        state_ = RunnerState::Calibrating; return true;
     case RunnerEvent::StopRequested:
-        if (s == RunnerState::Faulted || s == RunnerState::GameOver) return false;
+        if (s == RunnerState::Faulted || s == RunnerState::Stopped) return false;
         state_ = RunnerState::Stopped; return true;
     case RunnerEvent::Fault:
         if (s == RunnerState::Stopped) return false;
