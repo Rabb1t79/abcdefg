@@ -110,6 +110,169 @@ void StopBot(AppState* s) {
     if(s->running.load()){s->stop.store(true);AppendLog(s,L"已请求停止……");SetWindowTextW(s->statusLabel,L"状态：正在停止");}
 }
 
+
+std::string ToUtf8(const std::wstring& value) {
+    if (value.empty()) return {};
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, value.data(),
+        static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (needed <= 0) return {};
+    std::string result(static_cast<size_t>(needed), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.data(),
+        static_cast<int>(value.size()), result.data(), needed, nullptr, nullptr);
+    return result;
+}
+
+const wchar_t* MachineName(USHORT machine) {
+    switch (machine) {
+    case IMAGE_FILE_MACHINE_I386: return L"x86";
+    case IMAGE_FILE_MACHINE_AMD64: return L"x64";
+    case IMAGE_FILE_MACHINE_ARM64: return L"ARM64";
+    case IMAGE_FILE_MACHINE_UNKNOWN: return L"native/default";
+    default: return Format(L"machine 0x%04X", machine).c_str();
+    }
+}
+
+void ExportClientReport(AppState* s) {
+    HWND target = SelectedWindow(s);
+    if (!target || !IsWindow(target)) {
+        AppendLog(s, L"客户端信息导出失败：请先选择正在运行的游戏窗口。");
+        return;
+    }
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(target, &pid);
+    if (!pid) {
+        AppendLog(s, L"客户端信息导出失败：无法取得目标窗口 PID。");
+        return;
+    }
+
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION |
+        PROCESS_QUERY_INFORMATION, FALSE, pid);
+    if (!process) {
+        AppendLog(s, Format(L"客户端信息导出失败：OpenProcess 错误 %lu。", GetLastError()));
+        return;
+    }
+
+    wchar_t exePath[32768]{};
+    DWORD exePathLength = static_cast<DWORD>(_countof(exePath));
+    if (!QueryFullProcessImageNameW(process, 0, exePath, &exePathLength)) {
+        CloseHandle(process);
+        AppendLog(s, Format(L"客户端信息导出失败：读取 EXE 路径错误 %lu。", GetLastError()));
+        return;
+    }
+
+    std::wstring title(512, L'\0');
+    const int titleLength = GetWindowTextW(target, title.data(),
+        static_cast<int>(title.size()));
+    if (titleLength >= 0) title.resize(static_cast<size_t>(titleLength));
+    else title.clear();
+
+    std::wostringstream report;
+    report << L"Tetris Vision Pilot - read-only client inventory\n";
+    report << L"Generated: " << GetTickCount64() << L" ms since system boot\n";
+    report << L"Window HWND: 0x" << std::hex
+        << reinterpret_cast<std::uintptr_t>(target) << std::dec << L"\n";
+    report << L"Window title: " << title << L"\n";
+    report << L"PID: " << pid << L"\n";
+    report << L"Executable: " << exePath << L"\n";
+
+    using IsWow64Process2Fn = BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*);
+    auto isWow64Process2 = reinterpret_cast<IsWow64Process2Fn>(
+        GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process2"));
+    if (isWow64Process2) {
+        USHORT processMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+        USHORT nativeMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+        if (isWow64Process2(process, &processMachine, &nativeMachine)) {
+            report << L"Process architecture: "
+                << (processMachine == IMAGE_FILE_MACHINE_UNKNOWN
+                    ? MachineName(nativeMachine) : MachineName(processMachine))
+                << L" (native " << MachineName(nativeMachine) << L")\n";
+        }
+    } else {
+        BOOL wow64 = FALSE;
+        SYSTEM_INFO systemInfo{};
+        GetNativeSystemInfo(&systemInfo);
+        if (IsWow64Process(process, &wow64)) {
+            report << L"Process architecture: "
+                << (wow64 ? L"x86 under x64" :
+                    (systemInfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64
+                        ? L"x64/native" : L"native/unknown")) << L"\n";
+        }
+    }
+
+    report << L"\n[Loaded modules]\n";
+    HANDLE snapshot = CreateToolhelp32Snapshot(
+        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    size_t moduleCount = 0;
+    if (snapshot != INVALID_HANDLE_VALUE) {
+        MODULEENTRY32W module{};
+        module.dwSize = sizeof(module);
+        if (Module32FirstW(snapshot, &module)) {
+            do {
+                report << L"Name: " << module.szModule
+                    << L" | Base: 0x" << std::hex
+                    << reinterpret_cast<std::uintptr_t>(module.modBaseAddr)
+                    << L" | Size: 0x" << module.modBaseSize << std::dec
+                    << L" | Path: " << module.szExePath << L"\n";
+                ++moduleCount;
+                module.dwSize = sizeof(module);
+            } while (Module32NextW(snapshot, &module));
+        }
+        CloseHandle(snapshot);
+    } else {
+        report << L"Module snapshot failed, error " << GetLastError() << L"\n";
+    }
+    report << L"Module count: " << moduleCount << L"\n";
+
+    report << L"\n[Committed MEM_IMAGE regions]\n";
+    SYSTEM_INFO systemInfo{};
+    GetSystemInfo(&systemInfo);
+    std::uintptr_t cursor = reinterpret_cast<std::uintptr_t>(
+        systemInfo.lpMinimumApplicationAddress);
+    const std::uintptr_t maximum = reinterpret_cast<std::uintptr_t>(
+        systemInfo.lpMaximumApplicationAddress);
+    size_t imageRegionCount = 0;
+    MEMORY_BASIC_INFORMATION mbi{};
+    while (cursor < maximum && imageRegionCount < 50000) {
+        const SIZE_T queried = VirtualQueryEx(process,
+            reinterpret_cast<LPCVOID>(cursor), &mbi, sizeof(mbi));
+        if (!queried) break;
+        const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+        const std::uintptr_t next = base + mbi.RegionSize;
+        if (mbi.State == MEM_COMMIT && mbi.Type == MEM_IMAGE) {
+            report << L"Base: 0x" << std::hex << base
+                << L" | AllocationBase: 0x"
+                << reinterpret_cast<std::uintptr_t>(mbi.AllocationBase)
+                << L" | Size: 0x" << mbi.RegionSize
+                << L" | Protect: 0x" << mbi.Protect << std::dec << L"\n";
+            ++imageRegionCount;
+        }
+        if (next <= cursor) break;
+        cursor = next;
+    }
+    report << L"Image region count: " << imageRegionCount << L"\n";
+    report << L"\nNote: this report lists process/module metadata and memory-region "
+        << L"layout only. It does not read or modify game memory.\n";
+    CloseHandle(process);
+
+    std::wstring reportPath = s->configPath;
+    const size_t slash = reportPath.find_last_of(L"\\/");
+    reportPath = (slash == std::wstring::npos ? L".\\" :
+        reportPath.substr(0, slash + 1)) + L"TetrisVisionPilotBenchmark-client-report.txt";
+    std::ofstream output(std::filesystem::path(reportPath), std::ios::binary);
+    if (!output) {
+        AppendLog(s, L"客户端信息已采集，但无法写入报告文件。");
+        return;
+    }
+    output << "\xEF\xBB\xBF" << ToUtf8(report.str());
+    output.close();
+    AppendLog(s, L"客户端信息报告已导出：" + reportPath);
+    AppendLog(s, Format(L"目标 PID %lu；枚举到 %llu 个模块、%llu 个 MEM_IMAGE 区域。"
+        L"报告只包含模块与内存区域布局，不包含内存内容。",
+        pid, static_cast<unsigned long long>(moduleCount),
+        static_cast<unsigned long long>(imageRegionCount)));
+}
+
 void CreateUi(AppState* s) {
     HFONT font=static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     auto make=[&](DWORD ex,const wchar_t* cls,const wchar_t* text,DWORD style,
@@ -126,6 +289,7 @@ void CreateUi(AppState* s) {
     make(0,L"BUTTON",L"刷新",BS_PUSHBUTTON,585,43,90,28,ID_REFRESH);
     make(0,L"BUTTON",L"框选棋盘",BS_PUSHBUTTON,690,43,125,28,ID_SELECT);
     make(0,L"BUTTON",L"自动定位",BS_PUSHBUTTON,830,43,125,28,ID_AUTO_LOCATE);
+    make(0,L"BUTTON",L"导出客户端信息",BS_PUSHBUTTON,960,43,115,28,ID_CLIENT_REPORT);
 
     s->regionLabel=make(0,L"STATIC",L"棋盘：未设置",SS_LEFT,20,82,340,24,ID_REGION);
     make(0,L"BUTTON",L"框选 NEXT",BS_PUSHBUTTON,370,78,120,28,ID_SELECT_NEXT);
@@ -199,6 +363,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND:
         switch(LOWORD(wp)){
         case ID_REFRESH:RefreshWindows(s);return 0;
+        case ID_CLIENT_REPORT:ExportClientReport(s);return 0;
         case ID_AUTO_LOCATE:AutoLocateRegions(s,true);return 0;
         case ID_NEW_SESSION:
             s->resetMemoryOnNextStart=!s->resetMemoryOnNextStart;

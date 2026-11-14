@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <tlhelp32.h>
 // Establish the legacy global Windows::Foundation namespace before the
 // Windows.Graphics interop headers extend the global Windows namespace.
 #include <roapi.h>
@@ -101,6 +102,7 @@ constexpr int ID_MODE = 1030;
 constexpr int ID_AUTO_LOCATE = 1031;
 constexpr int ID_NEW_SESSION = 1032;
 constexpr int ID_AUTO_RETRY_BUTTON = 1033;
+constexpr int ID_CLIENT_REPORT = 1034;
 constexpr int HOTKEY_STOP = 1;
 constexpr UINT WM_APP_SCORE_RECORDED = WM_APP + 6;
 
