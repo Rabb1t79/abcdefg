@@ -378,7 +378,7 @@
                 if (!calibrationSummary.empty()) log(L"开局输入校准："+calibrationSummary);
                 calibrationPending=false;
                 if (s->stop.load()) break;
-                VisionResult afterCalibration=AnalyzeStable(rect,threshold,capError,2,4);
+                VisionResult afterCalibration=AnalyzeStable(rect,threshold,capError,3,16);
                 if (!capError.empty()) { log(L"输入校准后复核截图失败："+capError); break; }
                 if (!afterCalibration.hasActive ||
                     afterCalibration.active.name!=piece.name ||

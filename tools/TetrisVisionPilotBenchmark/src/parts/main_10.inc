@@ -85,7 +85,7 @@ void StartBot(AppState* s) {
     constexpr double epsilon=0.05;
     constexpr double temperature=0.40;
     constexpr double learningRate=0.08;
-    constexpr int tapMs=2;
+    constexpr int tapMs=16;
     constexpr int keyGapMs=0;
     constexpr int dropWaitMs=0;
     SaveConfig(s);
