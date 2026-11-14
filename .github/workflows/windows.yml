@@ -9,7 +9,11 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'tools/TetrisVisionPilot/**'
+      - 'tools/TetrisVisionPilotBenchmark/**'
+      - 'tools/TetrisPilotNext/**'
       - '.github/workflows/tetris-vision-pilot.yml'
+      - '.github/workflows/tetris-cpu-gpu-benchmark.yml'
+      - '.github/workflows/tetris-pilot-next.yml'
       - '.github/workflows/windows.yml'
   pull_request:
     paths-ignore:
