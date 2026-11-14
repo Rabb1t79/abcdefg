@@ -1,0 +1,30 @@
+name: Tetris Pilot Next - Core
+
+on:
+  push:
+    branches:
+      - feat/tetris-cpu-gpu-benchmark-20261113
+    paths:
+      - "tools/TetrisPilotNext/**"
+      - ".github/workflows/tetris-pilot-next.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core-tests:
+    name: Build and test portable core
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-latest]
+    runs-on: \${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S tools/TetrisPilotNext -B build/TetrisPilotNext -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build/TetrisPilotNext --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build/TetrisPilotNext -C Release --output-on-failure
