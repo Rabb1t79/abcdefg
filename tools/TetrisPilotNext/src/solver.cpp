@@ -44,8 +44,9 @@ BoardQuality Measure(const Board& board) {
     return q;
 }
 
-bool Better(int linesA, const BoardQuality& a, int rotA, int xA,
-            int linesB, const BoardQuality& b, int rotB, int xB) {
+bool Better(int placedA, int linesA, const BoardQuality& a, int rotA, int xA,
+            int placedB, int linesB, const BoardQuality& b, int rotB, int xB) {
+    if (placedA != placedB) return placedA > placedB;
     if (linesA != linesB) return linesA > linesB;
     if (a.holes != b.holes) return a.holes < b.holes;
     if (a.maxHeight != b.maxHeight) return a.maxHeight < b.maxHeight;
@@ -123,6 +124,7 @@ std::vector<Placement> Enumerate(const Board& board, PieceKind kind,
 struct BestPath {
     bool found{};
     Placement first{};
+    int placedCount{};
     int lines{};
     Board finalBoard{};
     BoardQuality quality{};
@@ -134,30 +136,37 @@ void Search(const Board& board, const std::vector<PieceKind>& sequence,
             const PieceCatalog& catalog, int index, int depth,
             int linesSoFar, const Placement* first,
             std::size_t& visited, BestPath& best) {
-    if (index >= depth) {
-        const BoardQuality quality = Measure(board);
-        const int rotation = first ? first->rotation : 0;
-        const int x = first ? first->x : 0;
-        if (!best.found || Better(linesSoFar, quality, rotation, x,
-                                  best.lines, best.quality,
-                                  best.firstRotation, best.firstX)) {
-            best.found = true;
-            if (first) best.first = *first;
-            best.lines = linesSoFar;
-            best.finalBoard = board;
-            best.quality = quality;
-            best.firstRotation = rotation;
-            best.firstX = x;
-        }
-        return;
-    }
+    if (index >= depth) return;
 
     const auto placements = Enumerate(board, sequence[static_cast<std::size_t>(index)],
                                       catalog, visited);
     for (const Placement& placement : placements) {
         const Placement* root = first ? first : &placement;
+        const int placedCount = index + 1;
+        const int totalLines = linesSoFar + placement.linesCleared;
+        const BoardQuality quality = Measure(placement.resultingBoard);
+        const int rotation = root->rotation;
+        const int x = root->x;
+
+        // Keep the best valid prefix at every depth. If a later NEXT piece is
+        // unknown or has no legal placement, the already-valid first action
+        // remains usable rather than making the entire search report "no move".
+        if (!best.found ||
+            Better(placedCount, totalLines, quality, rotation, x,
+                   best.placedCount, best.lines, best.quality,
+                   best.firstRotation, best.firstX)) {
+            best.found = true;
+            best.first = *root;
+            best.placedCount = placedCount;
+            best.lines = totalLines;
+            best.finalBoard = placement.resultingBoard;
+            best.quality = quality;
+            best.firstRotation = rotation;
+            best.firstX = x;
+        }
+
         Search(placement.resultingBoard, sequence, catalog, index + 1, depth,
-               linesSoFar + placement.linesCleared, root, visited, best);
+               totalLines, root, visited, best);
     }
 }
 
@@ -217,7 +226,7 @@ SearchResult ExhaustiveSolver::Solve(const Board& board,
     result.found = true;
     result.firstMove = best.first;
     result.totalLinesCleared = best.lines;
-    result.depth = depth;
+    result.depth = best.placedCount;
     return result;
 }
 

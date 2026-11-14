@@ -87,6 +87,13 @@ int main() {
     CHECK(lookahead.found);
     CHECK(lookahead.depth == 2);
 
+    // A missing/unmodeled later piece must not discard a valid current move.
+    const SearchResult partial = solver.Solve(Board{},
+        {PieceKind::I, PieceKind::T}, catalog, 2);
+    CHECK(partial.found);
+    CHECK(partial.depth == 1);
+    CHECK(partial.firstMove.kind == PieceKind::I);
+
     SessionStateMachine machine;
     CHECK(machine.State() == RunnerState::Detached);
     CHECK(machine.Apply(RunnerEvent::ProcessAttached));

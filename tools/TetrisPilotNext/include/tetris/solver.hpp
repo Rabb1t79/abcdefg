@@ -21,7 +21,7 @@ struct SearchResult {
     Placement firstMove{};
     int totalLinesCleared{};
     std::size_t visitedNodes{};
-    int depth{};
+    int depth{}; // Number of pieces in the best valid search prefix.
 };
 
 class ExhaustiveSolver {
