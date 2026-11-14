@@ -28,3 +28,10 @@ jobs:
         run: cmake --build build/TetrisPilotNext --config Release --parallel
       - name: Test
         run: ctest --test-dir build/TetrisPilotNext -C Release --output-on-failure
+      - name: Upload Windows inspector
+        if: matrix.os == 'windows-2022'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TetrisPilotNext-Inspector-Windows-x64
+          if-no-files-found: error
+          path: build/TetrisPilotNext/Release/TetrisPilotNextInspector.exe

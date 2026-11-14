@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <limits>
 #include <sstream>
+#include <utility>
 
 namespace tetris::win32 {
 namespace {

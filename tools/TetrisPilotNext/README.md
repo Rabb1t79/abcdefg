@@ -39,7 +39,7 @@ This directory is a **new implementation**, not a port of old MisaMino / ZZZTOJ 
 
 ## Current scope
 
-Milestone 1 implements a deterministic multi-piece search with a client-supplied piece catalog and portable tests. Milestone 2 adds the Windows process inventory library. There is not yet a runnable controller executable: the UI and live client adapter will be added only after these contracts are stable.
+Milestone 1 implements a deterministic multi-piece search with a client-supplied piece catalog and portable tests. Milestone 2 adds the Windows process inventory library and a small runnable inspector UI. The inspector is a diagnostic utility, not yet the automated player. There is not yet a runnable controller executable: the UI and live client adapter will be added only after these contracts are stable.
 
 Build on Windows 10 with Visual Studio 2022 + CMake, or run the portable core tests on any C++17 toolchain:
 
