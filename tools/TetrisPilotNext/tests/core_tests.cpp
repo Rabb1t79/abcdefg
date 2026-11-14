@@ -1,4 +1,5 @@
 #include "tetris/domain.hpp"
+#include "tetris/game_ports.hpp"
 #include "tetris/session_state.hpp"
 #include "tetris/solver.hpp"
 
@@ -15,6 +16,29 @@ static void Check(bool condition, const char* expression) {
     }
 }
 #define CHECK(expression) Check(static_cast<bool>(expression), #expression)
+
+class TestStateSource final : public IGameStateSource {
+public:
+    SnapshotRead ReadSnapshot() override {
+        SnapshotRead result;
+        result.ok = true;
+        result.provider = "unit-test";
+        result.snapshot.phase = GamePhase::Playing;
+        result.snapshot.frameId = 42;
+        return result;
+    }
+};
+
+class TestActionSink final : public IGameActionSink {
+public:
+    ActionReceipt Dispatch(const GameAction& action) override {
+        ActionReceipt result;
+        result.submitted = action.repeat > 0;
+        result.sequence = 7;
+        result.backend = "unit-test";
+        return result;
+    }
+};
 
 static PieceCatalog MakeCatalog() {
     PieceCatalog catalog;
@@ -33,6 +57,16 @@ int main() {
     CHECK(!board.Set(-1, 0));
 
     const PieceCatalog catalog = MakeCatalog();
+
+    TestStateSource source;
+    const SnapshotRead snapshot = source.ReadSnapshot();
+    CHECK(snapshot.ok);
+    CHECK(snapshot.snapshot.phase == GamePhase::Playing);
+    CHECK(snapshot.snapshot.frameId == 42);
+    TestActionSink actionSink;
+    const ActionReceipt receipt = actionSink.Dispatch(GameAction{ActionKind::MoveLeft, 1});
+    CHECK(receipt.submitted);
+    CHECK(receipt.sequence == 7);
     ExhaustiveSolver solver;
 
     const SearchResult emptyBoard = solver.Solve(Board{}, {PieceKind::I}, catalog, 1);
