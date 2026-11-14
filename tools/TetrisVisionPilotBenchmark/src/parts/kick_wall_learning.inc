@@ -176,7 +176,7 @@ bool MoveActiveToColumnVerified(const std::atomic<bool>& stop, HWND target,
         if (stop.load()) { error=L"用户请求停止。"; return false; }
         int observedX=0,observedY=0;
         if (!ReadCalibrationPiece(target,rect,threshold,piece,rotation,
-                                  observedX,observedY,error)) return false;
+                                  currentX,currentY,observedX,observedY,error)) return false;
         if (observedX-currentX!=direction) {
             error=L"预旋转横移未能稳定移动恰好一格。";
             return false;
