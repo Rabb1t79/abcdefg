@@ -2,8 +2,11 @@
 
 #ifdef _WIN32
 #include <tlhelp32.h>
+#include <bcrypt.h>
 
 #include <algorithm>
+#include <array>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 #include <utility>
@@ -48,6 +51,110 @@ std::wstring ProcessArchitecture(HANDLE process) {
         if (info.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64) return L"ARM64/native";
     }
     return L"unknown";
+}
+
+
+bool ComputeExecutableFingerprint(const std::wstring& path,
+                                  std::uint64_t& fileSize,
+                                  std::wstring& sha256,
+                                  std::wstring& error) {
+    fileSize = 0;
+    sha256.clear();
+    error.clear();
+
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+        nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        error = L"Cannot open executable for SHA-256: " + std::to_wstring(GetLastError());
+        return false;
+    }
+
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file, &size) || size.QuadPart < 0) {
+        error = L"GetFileSizeEx failed: " + std::to_wstring(GetLastError());
+        CloseHandle(file);
+        return false;
+    }
+    fileSize = static_cast<std::uint64_t>(size.QuadPart);
+
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    std::vector<UCHAR> hashObject;
+    std::vector<UCHAR> digest;
+    bool success = false;
+
+    NTSTATUS status = BCryptOpenAlgorithmProvider(
+        &algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+    if (!BCRYPT_SUCCESS(status)) {
+        error = L"BCryptOpenAlgorithmProvider failed: " +
+            std::to_wstring(static_cast<unsigned long>(status));
+        CloseHandle(file);
+        return false;
+    }
+
+    DWORD objectLength = 0;
+    DWORD hashLength = 0;
+    DWORD resultLength = 0;
+    status = BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH,
+        reinterpret_cast<PUCHAR>(&objectLength), sizeof(objectLength),
+        &resultLength, 0);
+    if (BCRYPT_SUCCESS(status)) {
+        status = BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH,
+            reinterpret_cast<PUCHAR>(&hashLength), sizeof(hashLength),
+            &resultLength, 0);
+    }
+    if (!BCRYPT_SUCCESS(status) || objectLength == 0 || hashLength == 0) {
+        error = L"BCryptGetProperty failed: " +
+            std::to_wstring(static_cast<unsigned long>(status));
+    } else {
+        hashObject.resize(objectLength);
+        digest.resize(hashLength);
+        status = BCryptCreateHash(algorithm, &hash, hashObject.data(),
+            objectLength, nullptr, 0, 0);
+        if (!BCRYPT_SUCCESS(status)) {
+            error = L"BCryptCreateHash failed: " +
+                std::to_wstring(static_cast<unsigned long>(status));
+        } else {
+            std::array<UCHAR, 1024 * 1024> buffer{};
+            for (;;) {
+                DWORD bytesRead = 0;
+                if (!ReadFile(file, buffer.data(),
+                    static_cast<DWORD>(buffer.size()), &bytesRead, nullptr)) {
+                    error = L"ReadFile failed: " + std::to_wstring(GetLastError());
+                    break;
+                }
+                if (bytesRead == 0) {
+                    status = BCryptFinishHash(hash, digest.data(), hashLength, 0);
+                    if (!BCRYPT_SUCCESS(status)) {
+                        error = L"BCryptFinishHash failed: " +
+                            std::to_wstring(static_cast<unsigned long>(status));
+                        break;
+                    }
+                    std::wostringstream formatted;
+                    formatted << std::uppercase << std::hex << std::setfill(L'0');
+                    for (UCHAR byte : digest) {
+                        formatted << std::setw(2) << static_cast<unsigned int>(byte);
+                    }
+                    sha256 = formatted.str();
+                    success = true;
+                    break;
+                }
+                status = BCryptHashData(hash, buffer.data(), bytesRead, 0);
+                if (!BCRYPT_SUCCESS(status)) {
+                    error = L"BCryptHashData failed: " +
+                        std::to_wstring(static_cast<unsigned long>(status));
+                    break;
+                }
+            }
+        }
+    }
+
+    if (hash) BCryptDestroyHash(hash);
+    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+    CloseHandle(file);
+    return success;
 }
 
 void EnumerateModules(DWORD processId, ProcessInventory& out) {
@@ -141,6 +248,8 @@ bool InspectProcessMetadata(DWORD processId, ProcessInventory& out,
     }
 
     out.architecture = ProcessArchitecture(process);
+    ComputeExecutableFingerprint(out.executablePath, out.executableSize,
+        out.executableSha256, out.fingerprintError);
     EnumerateModules(processId, out);
     EnumerateImageRegions(process, out);
     CloseHandle(process);

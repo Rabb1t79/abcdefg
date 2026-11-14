@@ -27,6 +27,9 @@ struct ProcessInventory {
     DWORD processId{};
     std::wstring executablePath;
     std::wstring architecture;
+    std::uint64_t executableSize{};
+    std::wstring executableSha256;
+    std::wstring fingerprintError;
     std::vector<ModuleRecord> modules;
     std::vector<ImageRegionRecord> imageRegions;
     std::wstring moduleError;

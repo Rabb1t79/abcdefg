@@ -96,6 +96,11 @@ bool WriteReport(const tetris::win32::ProcessInventory& inventory,
     report << L"PID: " << inventory.processId << L"\n";
     report << L"Architecture: " << inventory.architecture << L"\n";
     report << L"Executable: " << inventory.executablePath << L"\n";
+    report << L"Executable size: " << inventory.executableSize << L" bytes\n";
+    report << L"Executable SHA-256: "
+        << (inventory.executableSha256.empty() ? L"unavailable" : inventory.executableSha256) << L"\n";
+    if (!inventory.fingerprintError.empty())
+        report << L"Fingerprint warning: " << inventory.fingerprintError << L"\n";
     report << L"\n[Modules]\n";
     for (const auto& module : inventory.modules) {
         report << L"Name: " << module.name
@@ -159,6 +164,7 @@ void InspectSelected(AppState* state) {
 
     const std::wstring message =
         L"完成：PID " + std::to_wstring(pid) +
+        L"；SHA-256 " + (inventory.executableSha256.empty() ? L"计算失败" : L"已计算") +
         L"；模块 " + std::to_wstring(inventory.modules.size()) +
         L"；映像区域 " + std::to_wstring(inventory.imageRegions.size()) +
         L"。报告已导出。";

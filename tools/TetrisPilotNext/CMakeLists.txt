@@ -19,7 +19,7 @@ endif()
 if(WIN32)
     target_sources(tetris_pilot_core PRIVATE src/win32/process_inventory.cpp)
     target_include_directories(tetris_pilot_core PUBLIC platform/win32)
-    target_link_libraries(tetris_pilot_core PUBLIC user32)
+    target_link_libraries(tetris_pilot_core PUBLIC user32 bcrypt)
 
     add_executable(TetrisPilotNextInspector WIN32 src/win32/inspector_main.cpp)
     target_link_libraries(TetrisPilotNextInspector PRIVATE tetris_pilot_core user32 comctl32 shell32)
