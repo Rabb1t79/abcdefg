@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: tetris-pilot-next-core-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   core-tests:
     name: Build and test portable core
