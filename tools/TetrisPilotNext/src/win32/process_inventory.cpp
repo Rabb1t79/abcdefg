@@ -5,7 +5,6 @@
 #include <bcrypt.h>
 
 #include <algorithm>
-#include <array>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -117,7 +116,7 @@ bool ComputeExecutableFingerprint(const std::wstring& path,
             error = L"BCryptCreateHash failed: " +
                 std::to_wstring(static_cast<unsigned long>(status));
         } else {
-            std::array<UCHAR, 1024 * 1024> buffer{};
+            std::vector<UCHAR> buffer(1024 * 1024);
             for (;;) {
                 DWORD bytesRead = 0;
                 if (!ReadFile(file, buffer.data(),
