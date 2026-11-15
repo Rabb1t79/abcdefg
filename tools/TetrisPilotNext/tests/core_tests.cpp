@@ -1,4 +1,5 @@
 #include "tetris/domain.hpp"
+#include "tetris/private_memory_policy.hpp"
 #include "tetris/client_profile.hpp"
 #include "tetris/game_ports.hpp"
 #include "tetris/session_state.hpp"
@@ -52,6 +53,17 @@ static PieceCatalog MakeCatalog() {
 }
 
 int main() {
+    CHECK(kMinimumListedPrivateRegionSize == 16ull * 1024ull);
+    CHECK(IsReadableMemoryProtection(0x02u)); // PAGE_READONLY
+    CHECK(IsReadableMemoryProtection(0x04u)); // PAGE_READWRITE
+    CHECK(IsReadableMemoryProtection(0x08u)); // PAGE_WRITECOPY
+    CHECK(IsReadableMemoryProtection(0x20u)); // PAGE_EXECUTE_READ
+    CHECK(IsReadableMemoryProtection(0x40u)); // PAGE_EXECUTE_READWRITE
+    CHECK(IsReadableMemoryProtection(0x80u)); // PAGE_EXECUTE_WRITECOPY
+    CHECK(!IsReadableMemoryProtection(0x01u)); // PAGE_NOACCESS
+    CHECK(!IsReadableMemoryProtection(0x10u)); // PAGE_EXECUTE
+    CHECK(!IsReadableMemoryProtection(0x104u)); // PAGE_GUARD | PAGE_READWRITE
+
     // The exact reported target client is accepted, including lowercase hex.
     CHECK(CheckTargetClientFingerprint(
         kTargetExecutableSize,
