@@ -8,6 +8,7 @@
 
 #include "process_inventory.hpp"
 #include "tetris/client_profile.hpp"
+#include "tetris/private_memory_policy.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -149,6 +150,28 @@ bool WriteReport(const tetris::win32::ProcessInventory& inventory,
             << std::dec << L"\n";
     }
     report << L"Image region count: " << inventory.imageRegions.size() << L"\n";
+    report << L"\\n[Readable committed MEM_PRIVATE regions >= 0x4000]\\n";
+    report << L"Committed private region count: "
+        << inventory.privateRegionCount << L"\\n";
+    report << L"Committed private bytes: "
+        << inventory.privateCommittedBytes << L"\\n";
+    report << L"Readable private region count: "
+        << inventory.readablePrivateRegionCount << L"\\n";
+    report << L"Readable private bytes: "
+        << inventory.readablePrivateBytes << L"\\n";
+    report << L"Listed readable private regions: "
+        << inventory.readablePrivateRegions.size() << L"\\n";
+    report << L"Filtered smaller readable private regions: "
+        << inventory.filteredReadablePrivateRegionCount << L"\\n";
+    report << L"Minimum listed size: "
+        << tetris::kMinimumListedPrivateRegionSize << L" bytes\\n";
+    for (const auto& region : inventory.readablePrivateRegions) {
+        report << L"Base: 0x" << std::hex << region.base
+            << L" | AllocationBase: 0x" << region.allocationBase
+            << L" | Size: 0x" << region.size
+            << L" | Protect: " << ProtectionLabel(region.protection)
+            << std::dec << L"\\n";
+    }
     if (!inventory.memoryMapError.empty())
         report << L"Memory map warning: " << inventory.memoryMapError << L"\n";
     report << L"\nThis report contains process metadata and memory-region layout only.\n";
@@ -190,11 +213,16 @@ void InspectSelected(AppState* state) {
         return;
     }
 
+    const auto fingerprintStatus = tetris::CheckTargetClientFingerprint(
+        inventory.executableSize, inventory.executableSha256,
+        inventory.architecture);
     const std::wstring message =
         L"完成：PID " + std::to_wstring(pid) +
         L"；SHA-256 " + (inventory.executableSha256.empty() ? L"计算失败" : L"已计算") +
         L"；模块 " + std::to_wstring(inventory.modules.size()) +
         L"；映像区域 " + std::to_wstring(inventory.imageRegions.size()) +
+        L"；私有区域 " + std::to_wstring(inventory.privateRegionCount) +
+        L"；候选区域 " + std::to_wstring(inventory.readablePrivateRegions.size()) +
         L"；" + FingerprintStatusText(fingerprintStatus) + L"。报告已导出。";
     SetWindowTextW(state->status, message.c_str());
     EnableWindow(state->openReportButton, TRUE);
