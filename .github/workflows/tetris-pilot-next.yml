@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: tetris-pilot-next-core-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   core-tests:
@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022, ubuntu-latest]
-    runs-on: \${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Configure
