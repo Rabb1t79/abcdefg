@@ -7,6 +7,7 @@
 #include <shellapi.h>
 
 #include "process_inventory.hpp"
+#include "tetris/client_profile.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -89,6 +90,20 @@ std::wstring ProtectionLabel(std::uint32_t protection) {
     return stream.str();
 }
 
+const wchar_t* FingerprintStatusText(tetris::ClientFingerprintStatus status) {
+    switch (status) {
+    case tetris::ClientFingerprintStatus::Match:
+        return L"匹配：已识别为支持的目标客户端";
+    case tetris::ClientFingerprintStatus::ExecutableSizeMismatch:
+        return L"不匹配：EXE 文件大小不同";
+    case tetris::ClientFingerprintStatus::ArchitectureMismatch:
+        return L"不匹配：进程架构不同";
+    case tetris::ClientFingerprintStatus::Sha256Mismatch:
+        return L"不匹配：SHA-256 不同";
+    }
+    return L"不匹配：未知指纹状态";
+}
+
 bool WriteReport(const tetris::win32::ProcessInventory& inventory,
                  const std::wstring& path) {
     std::wostringstream report;
@@ -101,6 +116,19 @@ bool WriteReport(const tetris::win32::ProcessInventory& inventory,
         << (inventory.executableSha256.empty() ? L"unavailable" : inventory.executableSha256) << L"\n";
     if (!inventory.fingerprintError.empty())
         report << L"Fingerprint warning: " << inventory.fingerprintError << L"\n";
+    const auto fingerprintStatus = tetris::CheckTargetClientFingerprint(
+        inventory.executableSize, inventory.executableSha256,
+        inventory.architecture);
+    report << L"\\n[Target client profile]\\n";
+    report << L"Expected architecture: "
+        << tetris::kTargetProcessArchitecture << L"\\n";
+    report << L"Expected executable size: "
+        << tetris::kTargetExecutableSize << L" bytes\\n";
+    report << L"Expected SHA-256: "
+        << tetris::kTargetExecutableSha256 << L"\\n";
+    report << L"Fingerprint result: "
+        << FingerprintStatusText(fingerprintStatus) << L"\\n";
+
     report << L"\n[Modules]\n";
     for (const auto& module : inventory.modules) {
         report << L"Name: " << module.name
@@ -167,7 +195,7 @@ void InspectSelected(AppState* state) {
         L"；SHA-256 " + (inventory.executableSha256.empty() ? L"计算失败" : L"已计算") +
         L"；模块 " + std::to_wstring(inventory.modules.size()) +
         L"；映像区域 " + std::to_wstring(inventory.imageRegions.size()) +
-        L"。报告已导出。";
+        L"；" + FingerprintStatusText(fingerprintStatus) + L"。报告已导出。";
     SetWindowTextW(state->status, message.c_str());
     EnableWindow(state->openReportButton, TRUE);
 }
