@@ -10,6 +10,16 @@ The working assumption is that the selected Tetris Online client is the final pu
 
 The first Windows inspector reports the executable path, size, SHA-256, process architecture, loaded module ranges, and committed image-region layout. This lets us pin future client-specific offsets and layouts to a concrete executable fingerprint. The live adapter will reject an unrecognized executable rather than silently reusing guessed offsets.
 
+The first report has now confirmed and pinned the target executable:
+
+| Field | Confirmed value |
+|---|---|
+| Process architecture | x86 on x64 |
+| Executable size | 1,654,784 bytes |
+| SHA-256 | `9951C928F15F71839CE97CCDFA29CF040EB6699C8CA54F82C7B31B0561784C42` |
+
+The installation path is intentionally not part of the identity check. The executable must match all three pinned fields (size, architecture, and SHA-256) before a future client adapter is allowed to proceed. A mismatch is a hard rejection, not a fallback to guessed offsets.
+
 The report contains executable/module metadata and virtual-memory region metadata only. It does not dump, read, or modify raw game memory.
 
 ## Design goals
@@ -25,6 +35,7 @@ The report contains executable/module metadata and virtual-memory region metadat
 ## Architecture
 
 - `domain.hpp`: 10×20 board, piece definitions, active-piece coordinates, NEXT/Hold, phase and score snapshot.
+- `client_profile.hpp`: exact allowlist for the confirmed x86 client executable; size, architecture, and SHA-256 must all match.
 - `solver.cpp`: pure deterministic search. It receives a board, known piece sequence, and exact client piece catalog. It has no Windows, capture, process, or input dependencies.
 - `game_ports.hpp`: `IGameStateSource` reads normalized snapshots; `IGameActionSink` submits actions and returns dispatch receipts.
 - `session_state.cpp`: explicit planning, execution, verification, recovery, Game Over and restart state transitions.
