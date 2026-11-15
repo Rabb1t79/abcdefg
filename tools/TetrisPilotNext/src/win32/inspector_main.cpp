@@ -119,15 +119,15 @@ bool WriteReport(const tetris::win32::ProcessInventory& inventory,
     const auto fingerprintStatus = tetris::CheckTargetClientFingerprint(
         inventory.executableSize, inventory.executableSha256,
         inventory.architecture);
-    report << L"\\n[Target client profile]\\n";
+    report << L"\n[Target client profile]\n";
     report << L"Expected architecture: "
-        << tetris::kTargetProcessArchitecture << L"\\n";
+        << tetris::kTargetProcessArchitecture << L"\n";
     report << L"Expected executable size: "
-        << tetris::kTargetExecutableSize << L" bytes\\n";
+        << tetris::kTargetExecutableSize << L" bytes\n";
     report << L"Expected SHA-256: "
-        << tetris::kTargetExecutableSha256 << L"\\n";
+        << tetris::kTargetExecutableSha256 << L"\n";
     report << L"Fingerprint result: "
-        << FingerprintStatusText(fingerprintStatus) << L"\\n";
+        << FingerprintStatusText(fingerprintStatus) << L"\n";
 
     report << L"\n[Modules]\n";
     for (const auto& module : inventory.modules) {
