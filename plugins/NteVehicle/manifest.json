@@ -1,4 +1,4 @@
-{
+﻿{
   "schemaVersion": 2,
   "id": "anomaly.nte-vehicle",
   "name": "Vehicle Control",
@@ -6,7 +6,7 @@
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "audience": "user",
-  "version": "0.11.2",
+  "version": "0.11.3",
   "entry": "plugin.dll",
   "api": {
     "major": 1,

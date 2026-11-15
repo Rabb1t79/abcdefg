@@ -4068,6 +4068,100 @@ struct Runtime : NativeAccess {
         return true;
     }
 
+    // Temporary, read-only diagnostic: dump one loaded DataTable by full object path.
+    bool DumpTableSummaryLocked(const std::wstring_view path, const std::uint32_t max_rows,
+        std::string& json) {
+        std::string path_text;
+        path_text.reserve(path.size());
+        for (const wchar_t character : path) {
+            if (character < 0 || character > 127) return false;
+            path_text.push_back(static_cast<char>(character));
+        }
+        std::uintptr_t table{};
+        if (!FindExactObjectLocked(path, table)) {
+            json = "{\"path\":\"" + DiagnosticJsonEscape(path_text) + "\",\"found\":false}";
+            return false;
+        }
+        std::uintptr_t table_class{};
+        std::uintptr_t row_struct{};
+        std::string class_name;
+        std::string row_struct_name;
+        if (!ReadPointerAt(*memory, table, layout.object_class, table_class) ||
+            !ReadReflectedObjectNameLocked(table_class, class_name) ||
+            !ReadPointerAt(*memory, table, layout.dataTable_rowStruct, row_struct) ||
+            !ReadReflectedObjectNameLocked(row_struct, row_struct_name)) {
+            json = "{\"path\":\"" + DiagnosticJsonEscape(path_text) +
+                "\",\"found\":true,\"error\":\"class or row struct unreadable\"}";
+            return false;
+        }
+        std::int32_t row_size{};
+        static_cast<void>(ReadValue(*memory, row_struct + layout.ustruct_propertiesSize, row_size));
+        std::string properties;
+        std::vector<std::pair<std::string, std::int32_t>> text_properties;
+        std::uintptr_t field{};
+        if (ReadValue(*memory, row_struct + layout.ustruct_propertyLink, field)) {
+            for (std::size_t count{}; field != 0 && count < 256; ++count) {
+                ReflectedPropertyInfo property;
+                if (!ReadReflectedPropertyLocked(field, property)) break;
+                if (!properties.empty()) properties += ',';
+                properties += "{\"name\":\"" + DiagnosticJsonEscape(property.name) +
+                    "\",\"type\":\"" + DiagnosticJsonEscape(property.type) +
+                    "\",\"offset\":" + std::to_string(property.offset) + "}";
+                if (property.type == "TextProperty" && property.offset >= 0)
+                    text_properties.emplace_back(property.name, property.offset);
+                if (property.next == field) break;
+                field = property.next;
+            }
+        }
+        std::string rows;
+        SparseMapView view{};
+        if (layout.dataTable_rowMap >= 0 &&
+            ReadSparseMapViewLocked(table + static_cast<std::uintptr_t>(layout.dataTable_rowMap), view) &&
+            view.num > 0) {
+            std::vector<std::uint8_t> elements(
+                static_cast<std::size_t>(view.num) * static_cast<std::size_t>(view.stride));
+            if (memory->Read(view.data, elements.data(), elements.size())) {
+                std::uint32_t emitted{};
+                for (std::int32_t slot = 0; slot < view.num && emitted < max_rows; ++slot) {
+                    const auto u_slot = static_cast<std::uint32_t>(slot);
+                    if ((view.flags[static_cast<std::size_t>(u_slot) / 32U] &
+                            (1U << (u_slot & 31U))) == 0) continue;
+                    const auto* element = elements.data() +
+                        static_cast<std::size_t>(slot) * static_cast<std::size_t>(view.stride);
+                    std::uint32_t key_comparison{};
+                    std::uint32_t key_number{};
+                    std::memcpy(&key_comparison, element, 4);
+                    std::memcpy(&key_number, element + 4, 4);
+                    std::uintptr_t row{};
+                    std::memcpy(&row, element + view.row_offset, sizeof(row));
+                    if (row == 0) continue;
+                    std::string key;
+                    static_cast<void>(ResolveFNameLocked(key_comparison, key_number, key));
+                    std::string values;
+                    for (const auto& entry : text_properties) {
+                        std::string text;
+                        if (!ResolveText(row + static_cast<std::uintptr_t>(entry.second), text) ||
+                            text.empty()) continue;
+                        if (!values.empty()) values += ',';
+                        values += "\"" + DiagnosticJsonEscape(entry.first) + "\":\"" +
+                            DiagnosticJsonEscape(text) + "\"";
+                    }
+                    if (!rows.empty()) rows += ',';
+                    rows += "{\"key\":\"" + DiagnosticJsonEscape(key) + "\"";
+                    if (!values.empty()) rows += "," + values;
+                    rows += '}';
+                    ++emitted;
+                }
+            }
+        }
+        json = "{\"path\":\"" + DiagnosticJsonEscape(path_text) +
+            "\",\"found\":true,\"class\":\"" + DiagnosticJsonEscape(class_name) +
+            "\",\"row_struct\":\"" + DiagnosticJsonEscape(row_struct_name) +
+            "\",\"row_size\":" + std::to_string(row_size) +
+            ",\"properties\":[" + properties + "],\"rows\":[" + rows + "]}";
+        return true;
+    }
+
     bool ExportCustomizationDiagnostics(std::string& json) {
         json.clear();
         std::scoped_lock lock(mutex);
@@ -4109,7 +4203,25 @@ struct Runtime : NativeAccess {
             json += entry.vehicle_id_valid ? "true" : "false";
             json += '}';
         }
-        json += "],\"modules\":" + modules + ",\"skins\":" + skins + '}';
+        json += "],\"modules\":" + modules + ",\"skins\":" + skins;
+        static constexpr std::array<std::wstring_view, 6> probe_paths{
+            L"/Game/DataTable/Vehicle/DT_vehicleModuleData.DT_vehicleModuleData",
+            L"/Game/DataTable/Vehicle/DT_VehicleItemData.DT_VehicleItemData",
+            L"/Game/DataTable/Item/DT_VehicleItemData.DT_VehicleItemData",
+            L"/Game/DataTable/DT_VehicleItemData.DT_VehicleItemData",
+            L"/Game/DataTable/Item/DT_ItemConfig.DT_ItemConfig",
+            L"/Game/DataTable/DT_ItemConfig.DT_ItemConfig"};
+        json += ",\"tables\":[";
+        bool first_table = true;
+        for (std::size_t index = 0; index < probe_paths.size(); ++index) {
+            std::string table_json;
+            static_cast<void>(DumpTableSummaryLocked(
+                probe_paths[index], index == 0 ? 3U : 3000U, table_json));
+            if (!first_table) json += ',';
+            json += table_json;
+            first_table = false;
+        }
+        json += "]}";
         return true;
     }
 
