@@ -1,11 +1,14 @@
 #include "tetris/domain.hpp"
 #include "tetris/private_memory_policy.hpp"
+#include "tetris/memory_snapshot.hpp"
 #include "tetris/client_profile.hpp"
 #include "tetris/game_ports.hpp"
 #include "tetris/session_state.hpp"
 #include "tetris/solver.hpp"
 
 #include <cstdlib>
+#include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <vector>
 
@@ -85,6 +88,71 @@ int main() {
         kTargetExecutableSize,
         kTargetExecutableSha256,
         L"x64") == ClientFingerprintStatus::ArchitectureMismatch);
+
+
+    // Snapshot files round-trip, compare bytes at matching virtual addresses,
+    // and reject snapshots that belong to different process instances.
+    const auto testToken = std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto temp = std::filesystem::temp_directory_path();
+    const auto beforePath = temp / ("tpn-before-" + testToken + ".tpsnap");
+    const auto afterPath = temp / ("tpn-after-" + testToken + ".tpsnap");
+    const auto mismatchPath = temp / ("tpn-mismatch-" + testToken + ".tpsnap");
+    const auto diffPath = temp / ("tpn-diff-" + testToken + ".txt");
+
+    MemorySnapshotFile snapshotBefore;
+    snapshotBefore.processId = 14120;
+    snapshotBefore.capturedAtUnixMs = 1000;
+    snapshotBefore.executableSize = 1654784;
+    snapshotBefore.architecture = "x86 on x64";
+    snapshotBefore.executableSha256 =
+        "9951C928F15F71839CE97CCDFA29CF040EB6699C8CA54F82C7B31B0561784C42";
+    snapshotBefore.eligibleBytes = 8;
+    snapshotBefore.capturedBytes = 8;
+    MemorySnapshotSpan beforeSpan;
+    beforeSpan.base = 0x1000;
+    beforeSpan.allocationBase = 0x1000;
+    beforeSpan.protection = 0x04;
+    beforeSpan.bytes = {10, 11, 12, 13, 14, 15, 16, 17};
+    snapshotBefore.spans.push_back(beforeSpan);
+
+    MemorySnapshotFile snapshotAfter = snapshotBefore;
+    snapshotAfter.capturedAtUnixMs = 2000;
+    snapshotAfter.spans[0].bytes[1] = 99;
+    snapshotAfter.spans[0].bytes[2] = 98;
+    snapshotAfter.spans[0].bytes[5] = 88;
+
+    std::string snapshotError;
+    CHECK(WriteMemorySnapshotFile(beforePath, snapshotBefore, snapshotError));
+    CHECK(WriteMemorySnapshotFile(afterPath, snapshotAfter, snapshotError));
+
+    MemorySnapshotFile roundTrip;
+    CHECK(ReadMemorySnapshotFile(beforePath, roundTrip, snapshotError));
+    CHECK(roundTrip.processId == snapshotBefore.processId);
+    CHECK(roundTrip.spans.size() == 1);
+    CHECK(roundTrip.spans[0].bytes == snapshotBefore.spans[0].bytes);
+
+    MemorySnapshotDiffSummary diffSummary;
+    CHECK(CompareMemorySnapshotFiles(
+        beforePath, afterPath, diffPath, diffSummary, snapshotError));
+    CHECK(diffSummary.comparedBytes == 8);
+    CHECK(diffSummary.changedBytes == 3);
+    CHECK(diffSummary.changedRuns == 2);
+    CHECK(diffSummary.changedPages == 1);
+    CHECK(diffSummary.changedAllocationGroups == 1);
+    CHECK(std::filesystem::file_size(diffPath) > 0);
+
+    MemorySnapshotFile otherProcess = snapshotAfter;
+    otherProcess.processId += 1;
+    CHECK(WriteMemorySnapshotFile(mismatchPath, otherProcess, snapshotError));
+    CHECK(!CompareMemorySnapshotFiles(
+        beforePath, mismatchPath, diffPath, diffSummary, snapshotError));
+    CHECK(!snapshotError.empty());
+
+    std::filesystem::remove(beforePath);
+    std::filesystem::remove(afterPath);
+    std::filesystem::remove(mismatchPath);
+    std::filesystem::remove(diffPath);
 
     Board board{};
     CHECK(board.Set(3, 19));

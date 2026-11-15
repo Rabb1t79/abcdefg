@@ -49,9 +49,16 @@ struct ProcessInventory {
     std::wstring memoryMapError;
 };
 
-// Metadata only: no raw game-memory reads or writes are performed.
+// Exports executable/module/address-space metadata without reading region contents.
 bool InspectProcessMetadata(DWORD processId, ProcessInventory& out,
                             std::wstring& error);
+
+// Reads only committed, readable MEM_PRIVATE bytes after the exact client fingerprint matches.
+bool CaptureReadablePrivateMemorySnapshot(DWORD processId,
+    const std::wstring& path, std::wstring& error);
+bool CompareSnapshotFiles(const std::wstring& beforePath,
+    const std::wstring& afterPath, const std::wstring& reportPath,
+    std::wstring& error);
 
 } // namespace tetris::win32
 #endif

@@ -1,5 +1,7 @@
 #include "process_inventory.hpp"
 #include "tetris/private_memory_policy.hpp"
+#include "tetris/client_profile.hpp"
+#include "tetris/memory_snapshot.hpp"
 
 #ifdef _WIN32
 #include <tlhelp32.h>
@@ -7,6 +9,8 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <filesystem>
+#include <vector>
 #include <limits>
 #include <sstream>
 #include <utility>
@@ -157,6 +161,29 @@ bool ComputeExecutableFingerprint(const std::wstring& path,
     return success;
 }
 
+
+std::string ToUtf8(const std::wstring& value) {
+    if (value.empty()) return {};
+    const int count = WideCharToMultiByte(CP_UTF8, 0, value.data(),
+        static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (count <= 0) return {};
+    std::string output(static_cast<std::size_t>(count), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        output.data(), count, nullptr, nullptr);
+    return output;
+}
+
+std::wstring FromUtf8(const std::string& value) {
+    if (value.empty()) return {};
+    const int count = MultiByteToWideChar(CP_UTF8, 0, value.data(),
+        static_cast<int>(value.size()), nullptr, 0);
+    if (count <= 0) return L"Snapshot operation failed.";
+    std::wstring output(static_cast<std::size_t>(count), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        output.data(), count);
+    return output;
+}
+
 void EnumerateModules(DWORD processId, ProcessInventory& out) {
     HANDLE snapshot = CreateToolhelp32Snapshot(
         TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, processId);
@@ -275,6 +302,165 @@ bool InspectProcessMetadata(DWORD processId, ProcessInventory& out,
     CloseHandle(process);
     return true;
 }
+
+
+bool CaptureReadablePrivateMemorySnapshot(DWORD processId,
+    const std::wstring& path, std::wstring& error) {
+    error.clear();
+    if (processId == 0) {
+        error = L"无效的进程 ID。";
+        return false;
+    }
+
+    HANDLE process = OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+        FALSE, processId);
+    if (!process) {
+        error = L"OpenProcess 失败：" + std::to_wstring(GetLastError());
+        return false;
+    }
+
+    auto fail = [&](const std::wstring& message) {
+        error = message;
+        CloseHandle(process);
+        return false;
+    };
+
+    std::vector<wchar_t> executablePath(32768, L'\0');
+    DWORD pathLength = static_cast<DWORD>(executablePath.size());
+    if (!QueryFullProcessImageNameW(process, 0, executablePath.data(), &pathLength))
+        return fail(L"QueryFullProcessImageNameW 失败：" + std::to_wstring(GetLastError()));
+
+    const std::wstring architecture = ProcessArchitecture(process);
+    std::uint64_t executableSize = 0;
+    std::wstring executableSha256;
+    std::wstring fingerprintError;
+    if (!ComputeExecutableFingerprint(
+        std::wstring(executablePath.data(), pathLength),
+        executableSize, executableSha256, fingerprintError)) {
+        return fail(L"无法验证客户端指纹：" + fingerprintError);
+    }
+
+    const auto fingerprint = CheckTargetClientFingerprint(
+        executableSize, executableSha256, architecture);
+    if (fingerprint != ClientFingerprintStatus::Match) {
+        return fail(L"安全拒绝：目标 EXE 大小、架构或 SHA-256 与锁定客户端不匹配。");
+    }
+
+    MemorySnapshotFile snapshot;
+    snapshot.processId = processId;
+    snapshot.executableSize = executableSize;
+    snapshot.architecture = ToUtf8(architecture);
+    snapshot.executableSha256 = ToUtf8(executableSha256);
+
+    FILETIME fileTime{};
+    GetSystemTimeAsFileTime(&fileTime);
+    ULARGE_INTEGER ticks{};
+    ticks.LowPart = fileTime.dwLowDateTime;
+    ticks.HighPart = fileTime.dwHighDateTime;
+    constexpr std::uint64_t kWindowsToUnixEpoch100ns = 116444736000000000ull;
+    if (ticks.QuadPart >= kWindowsToUnixEpoch100ns) {
+        snapshot.capturedAtUnixMs =
+            (ticks.QuadPart - kWindowsToUnixEpoch100ns) / 10000ull;
+    }
+
+    SYSTEM_INFO info{};
+    GetNativeSystemInfo(&info);
+    std::uintptr_t cursor =
+        reinterpret_cast<std::uintptr_t>(info.lpMinimumApplicationAddress);
+    const std::uintptr_t maximum =
+        reinterpret_cast<std::uintptr_t>(info.lpMaximumApplicationAddress);
+    std::size_t queryCount = 0;
+    constexpr std::size_t kMaximumQueries = 1000000;
+    constexpr std::uint64_t kReadChunkBytes = 64ull * 1024ull;
+
+    while (cursor < maximum && queryCount++ < kMaximumQueries) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        const SIZE_T queried = VirtualQueryEx(
+            process, reinterpret_cast<LPCVOID>(cursor), &mbi, sizeof(mbi));
+        if (!queried) {
+            const DWORD code = GetLastError();
+            if (code != ERROR_INVALID_PARAMETER) {
+                return fail(L"VirtualQueryEx 失败：" + std::to_wstring(code));
+            }
+            break;
+        }
+
+        const auto base = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+        const auto allocationBase =
+            reinterpret_cast<std::uintptr_t>(mbi.AllocationBase);
+        const auto next = base + mbi.RegionSize;
+
+        if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE &&
+            IsReadableMemoryProtection(static_cast<std::uint32_t>(mbi.Protect))) {
+            const auto regionSize = static_cast<std::uint64_t>(mbi.RegionSize);
+            snapshot.eligibleBytes += regionSize;
+            std::uint64_t offset = 0;
+            while (offset < regionSize) {
+                const auto remaining = regionSize - offset;
+                const auto request64 = (std::min)(remaining, kReadChunkBytes);
+                const SIZE_T request = static_cast<SIZE_T>(request64);
+                std::vector<std::uint8_t> bytes(static_cast<std::size_t>(request));
+                SIZE_T bytesRead = 0;
+                const auto address = base + static_cast<std::uintptr_t>(offset);
+                ReadProcessMemory(process, reinterpret_cast<LPCVOID>(address),
+                    bytes.data(), request, &bytesRead);
+
+                if (bytesRead > 0) {
+                    bytes.resize(static_cast<std::size_t>(bytesRead));
+                    MemorySnapshotSpan span;
+                    span.base = static_cast<std::uint64_t>(address);
+                    span.allocationBase = static_cast<std::uint64_t>(allocationBase);
+                    span.protection = static_cast<std::uint32_t>(mbi.Protect);
+                    span.bytes = std::move(bytes);
+                    snapshot.capturedBytes += static_cast<std::uint64_t>(bytesRead);
+                    snapshot.spans.push_back(std::move(span));
+                }
+                if (bytesRead < request) {
+                    snapshot.skippedBytes +=
+                        static_cast<std::uint64_t>(request - bytesRead);
+                }
+                offset += request64;
+            }
+        }
+
+        if (next <= cursor) break;
+        cursor = next;
+    }
+
+    if (queryCount >= kMaximumQueries && cursor < maximum)
+        return fail(L"VirtualQueryEx 达到安全查询上限，采集未完整完成。");
+    CloseHandle(process);
+
+    if (snapshot.spans.empty()) {
+        error = L"没有成功读取到任何可读私有内存区域。";
+        return false;
+    }
+
+    std::string writeError;
+    if (!WriteMemorySnapshotFile(std::filesystem::path(path), snapshot, writeError)) {
+        error = FromUtf8(writeError);
+        return false;
+    }
+    return true;
+}
+
+bool CompareSnapshotFiles(const std::wstring& beforePath,
+    const std::wstring& afterPath, const std::wstring& reportPath,
+    std::wstring& error) {
+    error.clear();
+    MemorySnapshotDiffSummary summary;
+    std::string compareError;
+    if (!CompareMemorySnapshotFiles(
+        std::filesystem::path(beforePath),
+        std::filesystem::path(afterPath),
+        std::filesystem::path(reportPath), summary, compareError)) {
+        error = FromUtf8(compareError);
+        return false;
+    }
+    return true;
+}
+
 
 } // namespace tetris::win32
 #endif

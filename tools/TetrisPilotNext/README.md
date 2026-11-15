@@ -20,7 +20,7 @@ The first report has now confirmed and pinned the target executable:
 
 The installation path is intentionally not part of the identity check. The executable must match all three pinned fields (size, architecture, and SHA-256) before a future client adapter is allowed to proceed. A mismatch is a hard rejection, not a fallback to guessed offsets.
 
-The report contains executable/module metadata and virtual-memory region metadata only. For `MEM_PRIVATE`, it records region metadata (base, allocation base, size, and protection) and does not read region contents. No game memory is modified.
+The metadata report contains executable/module and virtual-memory region metadata only. The separate snapshot operation performs read-only `ReadProcessMemory` calls for committed, readable `MEM_PRIVATE` regions after validating the exact client fingerprint. It never writes to or suspends the game process. Snapshot files contain raw bytes from those regions, so keep them local and do not share them publicly.
 
 ## Design goals
 
@@ -40,15 +40,16 @@ The report contains executable/module metadata and virtual-memory region metadat
 - `game_ports.hpp`: `IGameStateSource` reads normalized snapshots; `IGameActionSink` submits actions and returns dispatch receipts.
 - `session_state.cpp`: explicit planning, execution, verification, recovery, Game Over and restart state transitions.
 - `platform/win32/process_inventory.*`: fixed-client fingerprint and module/address-space inventory.
-- The inspector also counts committed `MEM_PRIVATE` regions and lists readable regions of at least 16 KiB with base, allocation base, size, and protection. Smaller readable regions are counted but omitted from the detailed list.
-- `inspector_main.cpp`: small Windows utility to select the game window and export the report.
+- The inspector counts committed `MEM_PRIVATE` regions and lists larger readable regions for the metadata report. The snapshot action separately captures **all** committed readable `MEM_PRIVATE` regions, including regions smaller than 16 KiB. It reads in 64 KiB chunks, saves successful reads in a binary `.tpsnap` file, and records unreadable/skipped byte counts. The selected process must match the exact executable size, architecture, and SHA-256 allowlist before capture.
+- `memory_snapshot.cpp`: versioned binary snapshot format, guarded loader, same-address byte comparison, and compact difference report.
+- `inspector_main.cpp`: Windows utility to select the game window, export metadata, capture snapshots, and compare two snapshots.
 
 ## Implementation sequence
 
 1. Validate the portable board model, solver and unit tests.
 2. Build the Windows inspector and collect the one target client's fingerprint.
    The report now includes a read-only inventory of larger readable private-memory regions; no region contents are read.
-3. Trace only that client's state structures and implement a narrowly scoped read-only provider.
+3. Capture and compare controlled states (menu, active piece, movement, lock/line clear, score change). Compare only snapshots from the same PID and exact executable build; inspect changed allocation groups, pages, and byte runs. Treat these as candidates, not identified game variables.\n4. Trace only that client's state structures and implement a narrowly scoped read-only provider.
 4. Compare the provider's snapshots with independent visual observations until board, active piece, NEXT, Hold, score and phase agree.
 5. Implement the input adapter and action timing/receipt logging.
 6. Connect the coordinator: read → plan → dispatch → re-read → reconcile → recover.

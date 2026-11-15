@@ -4,6 +4,9 @@
 #define NOMINMAX
 #include <windows.h>
 #include <commctrl.h>
+#include <commdlg.h>
+#include <algorithm>
+#include <cwchar>
 #include <shellapi.h>
 
 #include "process_inventory.hpp"
@@ -24,6 +27,8 @@ constexpr int kRefresh = 1002;
 constexpr int kInspect = 1003;
 constexpr int kStatus = 1004;
 constexpr int kOpenReport = 1005;
+constexpr int kCaptureSnapshot = 1006;
+constexpr int kCompareSnapshots = 1007;
 
 struct AppState {
     HWND window{};
@@ -183,6 +188,105 @@ bool WriteReport(const tetris::win32::ProcessInventory& inventory,
     return static_cast<bool>(output);
 }
 
+
+bool SelectedProcessId(AppState* state, DWORD& processId) {
+    processId = 0;
+    const LRESULT selection = SendMessageW(state->windowList, CB_GETCURSEL, 0, 0);
+    if (selection == CB_ERR) return false;
+    HWND target = reinterpret_cast<HWND>(SendMessageW(
+        state->windowList, CB_GETITEMDATA, static_cast<WPARAM>(selection), 0));
+    if (!target || !IsWindow(target)) return false;
+    GetWindowThreadProcessId(target, &processId);
+    return processId != 0;
+}
+
+bool ChooseFilePath(HWND owner, bool save, const wchar_t* filter,
+                    const wchar_t* defaultExtension, const wchar_t* suggestedName,
+                    std::wstring& path) {
+    std::vector<wchar_t> filename(32768, L'\0');
+    if (suggestedName) {
+        const auto count = (std::min)(std::wcslen(suggestedName), filename.size() - 1);
+        std::copy_n(suggestedName, count, filename.data());
+    }
+    const std::wstring initialDirectory = ExecutableFolder();
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFilter = filter;
+    dialog.lpstrFile = filename.data();
+    dialog.nMaxFile = static_cast<DWORD>(filename.size());
+    dialog.lpstrInitialDir = initialDirectory.c_str();
+    dialog.lpstrDefExt = defaultExtension;
+    dialog.Flags = OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_HIDEREADONLY |
+        (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+    const BOOL accepted = save ? GetSaveFileNameW(&dialog) : GetOpenFileNameW(&dialog);
+    if (!accepted) return false;
+    path.assign(filename.data());
+    return true;
+}
+
+void CaptureSnapshot(AppState* state) {
+    DWORD processId = 0;
+    if (!SelectedProcessId(state, processId)) {
+        SetWindowTextW(state->status, L"请先刷新并选择目标游戏窗口。");
+        return;
+    }
+
+    static const wchar_t filter[] =
+        L"TetrisPilotNext memory snapshot (*.tpsnap)\0*.tpsnap\0All files (*.*)\0*.*\0";
+    std::wstring path;
+    if (!ChooseFilePath(state->window, true, filter, L"tpsnap",
+        L"TetrisPilotNext-snapshot.tpsnap", path)) return;
+
+    SetWindowTextW(state->status,
+        L"正在采集全部可读私有内存。游戏进程不会暂停，请尽量在状态稳定时采集……");
+    UpdateWindow(state->status);
+
+    std::wstring error;
+    if (!tetris::win32::CaptureReadablePrivateMemorySnapshot(processId, path, error)) {
+        const std::wstring message = L"快照采集失败：" + error;
+        SetWindowTextW(state->status, message.c_str());
+        return;
+    }
+
+    const std::wstring message =
+        L"快照采集完成。请使用不同文件名保存不同游戏状态：" + path;
+    SetWindowTextW(state->status, message.c_str());
+}
+
+void CompareSnapshots(AppState* state) {
+    static const wchar_t filter[] =
+        L"TetrisPilotNext memory snapshot (*.tpsnap)\0*.tpsnap\0All files (*.*)\0*.*\0";
+    static const wchar_t reportFilter[] =
+        L"Text report (*.txt)\0*.txt\0All files (*.*)\0*.*\0";
+    std::wstring beforePath;
+    std::wstring afterPath;
+    std::wstring reportPath;
+
+    if (!ChooseFilePath(state->window, false, filter, L"tpsnap", nullptr, beforePath))
+        return;
+    if (!ChooseFilePath(state->window, false, filter, L"tpsnap", nullptr, afterPath))
+        return;
+    if (!ChooseFilePath(state->window, true, reportFilter, L"txt",
+        L"TetrisPilotNext-memory-diff.txt", reportPath)) return;
+
+    SetWindowTextW(state->status, L"正在比较两份快照……");
+    UpdateWindow(state->status);
+
+    std::wstring error;
+    if (!tetris::win32::CompareSnapshotFiles(
+        beforePath, afterPath, reportPath, error)) {
+        const std::wstring message = L"快照比较失败：" + error;
+        SetWindowTextW(state->status, message.c_str());
+        return;
+    }
+
+    const std::wstring message = L"差分报告已生成：" + reportPath;
+    SetWindowTextW(state->status, message.c_str());
+    ShellExecuteW(state->window, L"open", reportPath.c_str(),
+        nullptr, nullptr, SW_SHOWNORMAL);
+}
+
 void InspectSelected(AppState* state) {
     const LRESULT selection = SendMessageW(state->windowList, CB_GETCURSEL, 0, 0);
     if (selection == CB_ERR) {
@@ -255,13 +359,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         state->windowList = make(L"COMBOBOX", L"",
             CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 140, 16, 525, 240, kWindowList);
         make(L"BUTTON", L"刷新", BS_PUSHBUTTON, 680, 16, 95, 28, kRefresh);
-        make(L"BUTTON", L"导出只读进程报告",
-            BS_PUSHBUTTON, 18, 60, 180, 34, kInspect);
-        state->openReportButton = make(L"BUTTON", L"打开报告",
-            BS_PUSHBUTTON, 210, 60, 120, 34, kOpenReport);
+        make(L"BUTTON", L"导出进程报告",
+            BS_PUSHBUTTON, 18, 60, 165, 34, kInspect);
+        make(L"BUTTON", L"采集内存快照",
+            BS_PUSHBUTTON, 195, 60, 165, 34, kCaptureSnapshot);
+        make(L"BUTTON", L"比较两份快照",
+            BS_PUSHBUTTON, 372, 60, 165, 34, kCompareSnapshots);
+        state->openReportButton = make(L"BUTTON", L"打开进程报告",
+            BS_PUSHBUTTON, 549, 60, 145, 34, kOpenReport);
         EnableWindow(state->openReportButton, FALSE);
-        state->status = make(L"STATIC", L"请选择游戏窗口，然后导出客户端信息。",
-            SS_LEFT, 18, 112, 760, 48, kStatus);
+        state->status = make(L"STATIC",
+            L"报告用于检查进程布局；快照用于采集和比较游戏状态变化。",
+            SS_LEFT, 18, 112, 930, 70, kStatus);
         RefreshWindows(state);
         return 0;
     }
@@ -269,6 +378,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         switch (LOWORD(wParam)) {
         case kRefresh: RefreshWindows(state); return 0;
         case kInspect: InspectSelected(state); return 0;
+        case kCaptureSnapshot: CaptureSnapshot(state); return 0;
+        case kCompareSnapshots: CompareSnapshots(state); return 0;
         case kOpenReport:
             if (!state->reportPath.empty())
                 ShellExecuteW(hwnd, L"open", state->reportPath.c_str(),
@@ -278,7 +389,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         break;
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-        info->ptMinTrackSize = POINT{820, 210};
+        info->ptMinTrackSize = POINT{1000, 250};
         return 0;
     }
     case WM_CLOSE: DestroyWindow(hwnd); return 0;
@@ -304,9 +415,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
 
     AppState state;
     HWND window = CreateWindowExW(0, wc.lpszClassName,
-        L"Tetris Pilot Next - Client Inspector",
+        L"Tetris Pilot Next - Read-only Snapshot Inspector",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 820, 210,
+        CW_USEDEFAULT, CW_USEDEFAULT, 1000, 250,
         nullptr, nullptr, instance, &state);
     if (!window) return 1;
 
