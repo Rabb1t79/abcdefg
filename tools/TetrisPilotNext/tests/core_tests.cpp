@@ -1,4 +1,5 @@
 #include "tetris/domain.hpp"
+#include "tetris/client_profile.hpp"
 #include "tetris/game_ports.hpp"
 #include "tetris/session_state.hpp"
 #include "tetris/solver.hpp"
@@ -51,6 +52,28 @@ static PieceCatalog MakeCatalog() {
 }
 
 int main() {
+    // The exact reported target client is accepted, including lowercase hex.
+    CHECK(CheckTargetClientFingerprint(
+        kTargetExecutableSize,
+        kTargetExecutableSha256,
+        kTargetProcessArchitecture) == ClientFingerprintStatus::Match);
+    CHECK(CheckTargetClientFingerprint(
+        kTargetExecutableSize,
+        L"9951c928f15f71839ce97ccdFA29CF040eb6699c8ca54f82c7b31b0561784c42",
+        kTargetProcessArchitecture) == ClientFingerprintStatus::Match);
+    CHECK(CheckTargetClientFingerprint(
+        kTargetExecutableSize - 1,
+        kTargetExecutableSha256,
+        kTargetProcessArchitecture) == ClientFingerprintStatus::ExecutableSizeMismatch);
+    CHECK(CheckTargetClientFingerprint(
+        kTargetExecutableSize,
+        L"0000000000000000000000000000000000000000000000000000000000000000",
+        kTargetProcessArchitecture) == ClientFingerprintStatus::Sha256Mismatch);
+    CHECK(CheckTargetClientFingerprint(
+        kTargetExecutableSize,
+        kTargetExecutableSha256,
+        L"x64") == ClientFingerprintStatus::ArchitectureMismatch);
+
     Board board{};
     CHECK(board.Set(3, 19));
     CHECK(board.Occupied(3, 19));
