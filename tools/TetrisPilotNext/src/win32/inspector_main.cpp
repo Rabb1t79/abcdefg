@@ -150,27 +150,27 @@ bool WriteReport(const tetris::win32::ProcessInventory& inventory,
             << std::dec << L"\n";
     }
     report << L"Image region count: " << inventory.imageRegions.size() << L"\n";
-    report << L"\\n[Readable committed MEM_PRIVATE regions >= 0x4000]\\n";
+    report << L"\n[Readable committed MEM_PRIVATE regions >= 0x4000]\n";
     report << L"Committed private region count: "
-        << inventory.privateRegionCount << L"\\n";
+        << inventory.privateRegionCount << L"\n";
     report << L"Committed private bytes: "
-        << inventory.privateCommittedBytes << L"\\n";
+        << inventory.privateCommittedBytes << L"\n";
     report << L"Readable private region count: "
-        << inventory.readablePrivateRegionCount << L"\\n";
+        << inventory.readablePrivateRegionCount << L"\n";
     report << L"Readable private bytes: "
-        << inventory.readablePrivateBytes << L"\\n";
+        << inventory.readablePrivateBytes << L"\n";
     report << L"Listed readable private regions: "
-        << inventory.readablePrivateRegions.size() << L"\\n";
+        << inventory.readablePrivateRegions.size() << L"\n";
     report << L"Filtered smaller readable private regions: "
-        << inventory.filteredReadablePrivateRegionCount << L"\\n";
+        << inventory.filteredReadablePrivateRegionCount << L"\n";
     report << L"Minimum listed size: "
-        << tetris::kMinimumListedPrivateRegionSize << L" bytes\\n";
+        << tetris::kMinimumListedPrivateRegionSize << L" bytes\n";
     for (const auto& region : inventory.readablePrivateRegions) {
         report << L"Base: 0x" << std::hex << region.base
             << L" | AllocationBase: 0x" << region.allocationBase
             << L" | Size: 0x" << region.size
             << L" | Protect: " << ProtectionLabel(region.protection)
-            << std::dec << L"\\n";
+            << std::dec << L"\n";
     }
     if (!inventory.memoryMapError.empty())
         report << L"Memory map warning: " << inventory.memoryMapError << L"\n";
