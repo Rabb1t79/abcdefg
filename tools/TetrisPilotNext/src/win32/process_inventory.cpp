@@ -1,4 +1,5 @@
 #include "process_inventory.hpp"
+#include "tetris/private_memory_policy.hpp"
 
 #ifdef _WIN32
 #include <tlhelp32.h>
@@ -182,7 +183,7 @@ void EnumerateModules(DWORD processId, ProcessInventory& out) {
     CloseHandle(snapshot);
 }
 
-void EnumerateImageRegions(HANDLE process, ProcessInventory& out) {
+void EnumerateMemoryRegions(HANDLE process, ProcessInventory& out) {
     SYSTEM_INFO info{};
     GetNativeSystemInfo(&info);
     std::uintptr_t cursor = reinterpret_cast<std::uintptr_t>(info.lpMinimumApplicationAddress);
@@ -202,17 +203,37 @@ void EnumerateImageRegions(HANDLE process, ProcessInventory& out) {
         }
 
         const auto base = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+        const auto allocationBase = reinterpret_cast<std::uintptr_t>(mbi.AllocationBase);
         const auto next = base + mbi.RegionSize;
-        if (mbi.State == MEM_COMMIT && mbi.Type == MEM_IMAGE) {
-            out.imageRegions.push_back(ImageRegionRecord{
-                base,
-                reinterpret_cast<std::uintptr_t>(mbi.AllocationBase),
-                static_cast<std::uint64_t>(mbi.RegionSize),
-                static_cast<std::uint32_t>(mbi.Protect)
-            });
+        if (mbi.State == MEM_COMMIT) {
+            const auto size = static_cast<std::uint64_t>(mbi.RegionSize);
+            const auto protection = static_cast<std::uint32_t>(mbi.Protect);
+            if (mbi.Type == MEM_IMAGE) {
+                out.imageRegions.push_back(ImageRegionRecord{
+                    base, allocationBase, size, protection
+                });
+            } else if (mbi.Type == MEM_PRIVATE) {
+                ++out.privateRegionCount;
+                out.privateCommittedBytes += size;
+                if (tetris::IsReadableMemoryProtection(protection)) {
+                    ++out.readablePrivateRegionCount;
+                    out.readablePrivateBytes += size;
+                    if (size >= tetris::kMinimumListedPrivateRegionSize) {
+                        out.readablePrivateRegions.push_back(PrivateRegionRecord{
+                            base, allocationBase, size, protection
+                        });
+                    } else {
+                        ++out.filteredReadablePrivateRegionCount;
+                    }
+                }
+            }
         }
         if (next <= cursor) break;
         cursor = next;
+    }
+
+    if (guard >= 100000 && cursor < maximum && out.memoryMapError.empty()) {
+        out.memoryMapError = L"VirtualQueryEx safety limit reached.";
     }
 }
 
@@ -250,7 +271,7 @@ bool InspectProcessMetadata(DWORD processId, ProcessInventory& out,
     ComputeExecutableFingerprint(out.executablePath, out.executableSize,
         out.executableSha256, out.fingerprintError);
     EnumerateModules(processId, out);
-    EnumerateImageRegions(process, out);
+    EnumerateMemoryRegions(process, out);
     CloseHandle(process);
     return true;
 }
