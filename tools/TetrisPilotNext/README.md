@@ -20,7 +20,7 @@ The first report has now confirmed and pinned the target executable:
 
 The installation path is intentionally not part of the identity check. The executable must match all three pinned fields (size, architecture, and SHA-256) before a future client adapter is allowed to proceed. A mismatch is a hard rejection, not a fallback to guessed offsets.
 
-The report contains executable/module metadata and virtual-memory region metadata only. It does not dump, read, or modify raw game memory.
+The report contains executable/module metadata and virtual-memory region metadata only. For `MEM_PRIVATE`, it records region metadata (base, allocation base, size, and protection) and does not read region contents. No game memory is modified.
 
 ## Design goals
 
@@ -40,12 +40,14 @@ The report contains executable/module metadata and virtual-memory region metadat
 - `game_ports.hpp`: `IGameStateSource` reads normalized snapshots; `IGameActionSink` submits actions and returns dispatch receipts.
 - `session_state.cpp`: explicit planning, execution, verification, recovery, Game Over and restart state transitions.
 - `platform/win32/process_inventory.*`: fixed-client fingerprint and module/address-space inventory.
+- The inspector also counts committed `MEM_PRIVATE` regions and lists readable regions of at least 16 KiB with base, allocation base, size, and protection. Smaller readable regions are counted but omitted from the detailed list.
 - `inspector_main.cpp`: small Windows utility to select the game window and export the report.
 
 ## Implementation sequence
 
 1. Validate the portable board model, solver and unit tests.
 2. Build the Windows inspector and collect the one target client's fingerprint.
+   The report now includes a read-only inventory of larger readable private-memory regions; no region contents are read.
 3. Trace only that client's state structures and implement a narrowly scoped read-only provider.
 4. Compare the provider's snapshots with independent visual observations until board, active piece, NEXT, Hold, score and phase agree.
 5. Implement the input adapter and action timing/receipt logging.
