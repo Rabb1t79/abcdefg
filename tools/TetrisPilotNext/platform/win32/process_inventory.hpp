@@ -23,6 +23,13 @@ struct ImageRegionRecord {
     std::uint32_t protection{};
 };
 
+struct PrivateRegionRecord {
+    std::uintptr_t base{};
+    std::uintptr_t allocationBase{};
+    std::uint64_t size{};
+    std::uint32_t protection{};
+};
+
 struct ProcessInventory {
     DWORD processId{};
     std::wstring executablePath;
@@ -32,6 +39,12 @@ struct ProcessInventory {
     std::wstring fingerprintError;
     std::vector<ModuleRecord> modules;
     std::vector<ImageRegionRecord> imageRegions;
+    std::vector<PrivateRegionRecord> readablePrivateRegions;
+    std::uint64_t privateRegionCount{};
+    std::uint64_t privateCommittedBytes{};
+    std::uint64_t readablePrivateRegionCount{};
+    std::uint64_t readablePrivateBytes{};
+    std::uint64_t filteredReadablePrivateRegionCount{};
     std::wstring moduleError;
     std::wstring memoryMapError;
 };
