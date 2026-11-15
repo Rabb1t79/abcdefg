@@ -47,14 +47,26 @@ The metadata report contains executable/module and virtual-memory region metadat
 ## Implementation sequence
 
 1. Validate the portable board model, solver and unit tests.
-2. Build the Windows inspector and collect the one target client's fingerprint.
-   The report now includes a read-only inventory of larger readable private-memory regions; no region contents are read.
-3. Capture and compare controlled states (menu, active piece, movement, lock/line clear, score change). Compare only snapshots from the same PID and exact executable build; inspect changed allocation groups, pages, and byte runs. Treat these as candidates, not identified game variables.\n4. Trace only that client's state structures and implement a narrowly scoped read-only provider.
-4. Compare the provider's snapshots with independent visual observations until board, active piece, NEXT, Hold, score and phase agree.
-5. Implement the input adapter and action timing/receipt logging.
-6. Connect the coordinator: read → plan → dispatch → re-read → reconcile → recover.
-7. Validate complete games, score settlement, Game Over, restart and long-session stability.
-8. Add GPU search only if measurements show CPU search is an actual bottleneck.
+2. Build the Windows inspector and collect the one target client's fingerprint. The metadata report lists larger readable private-memory regions without reading their contents.
+3. Capture controlled memory snapshots at selected game states, then compare them. Compare only snapshots from the same process ID and exact executable build. Use changed allocation groups, pages and byte runs to form candidates; do not treat a changed address as an identified game variable.
+4. Trace only that client's state structures and implement a narrowly scoped read-only provider.
+5. Compare the provider's snapshots with independent visual observations until board, active piece, NEXT, Hold, score and phase agree.
+6. Implement the input adapter and action timing/receipt logging.
+7. Connect the coordinator: read → plan → dispatch → re-read → reconcile → recover.
+8. Validate complete games, score settlement, Game Over, restart and long-session stability.
+9. Add GPU search only if measurements show CPU search is an actual bottleneck.
+
+## Using memory snapshots
+
+1. Run the game and select its window in the Inspector.
+2. Choose **采集内存快照** and save a `.tpsnap` file for the current state.
+3. Change one thing at a time where practical (for example, move the active piece once, or lock a piece and change the score), then capture another file. Keep the same game process running.
+4. Choose **比较两份快照**, select the earlier and later files, and save the text difference report.
+5. Repeat with different controlled changes. Comparing menu → active game, active piece → moved piece, and before → after a score change helps separate unrelated runtime churn from state-linked candidates.
+
+The snapshot operation reads all committed, readable `MEM_PRIVATE` regions, including regions smaller than 16 KiB, using 64 KiB reads. Unreadable portions are counted as skipped. The game process is not paused, so a snapshot is a short rolling sample rather than an atomic freeze-frame; capture while the relevant state is as stable as practical.
+
+Snapshot files contain raw bytes from private process memory and may include unrelated runtime data. Keep them local and do not publish or share them. The difference report lists same-address changed bytes, their 4 KiB pages, allocation groups, and up to 1,000 contiguous changed ranges. It is a filtering aid, not proof that an address represents a board cell, piece, NEXT item, or score.
 
 ## Current scope
 
