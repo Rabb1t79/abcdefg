@@ -14,7 +14,8 @@ namespace tetris {
 namespace {
 
 constexpr std::array<char, 8> kMagic{{'T', 'P', 'N', 'S', 'N', 'A', 'P', '1'}};
-constexpr std::uint32_t kFormatVersion = 1;
+constexpr std::uint32_t kFormatVersion = 2;
+constexpr std::uint32_t kLegacyFormatVersion = 1;
 constexpr std::uint64_t kMaximumSpanCount = 1000000;
 constexpr std::uint32_t kMaximumStringLength = 4096;
 constexpr std::uint32_t kMaximumSpanBytes = 1024u * 1024u;
@@ -101,6 +102,10 @@ std::string SnapshotTime(std::uint64_t timestamp) {
     return out.str();
 }
 
+const char* RegionKindName(MemoryRegionKind kind) {
+    return kind == MemoryRegionKind::Image ? "MEM_IMAGE" : "MEM_PRIVATE";
+}
+
 } // namespace
 
 bool WriteMemorySnapshotFile(const std::filesystem::path& path,
@@ -136,7 +141,13 @@ bool WriteMemorySnapshotFile(const std::filesystem::path& path,
     std::uint64_t totalBytes = 0;
     for (const auto& span : snapshot.spans) {
         if (!ok) break;
-        if (span.bytes.empty() || span.bytes.size() > kMaximumSpanBytes ||
+        const auto kindValue = static_cast<std::uint32_t>(span.regionKind);
+        const bool validKind =
+            (span.regionKind == MemoryRegionKind::Private && span.moduleName.empty()) ||
+            (span.regionKind == MemoryRegionKind::Image && !span.moduleName.empty());
+        if (!validKind || (kindValue != static_cast<std::uint32_t>(MemoryRegionKind::Private) &&
+                           kindValue != static_cast<std::uint32_t>(MemoryRegionKind::Image)) ||
+            span.bytes.empty() || span.bytes.size() > kMaximumSpanBytes ||
             span.base > (std::numeric_limits<std::uint64_t>::max)() - span.bytes.size() ||
             totalBytes > kMaximumSnapshotBytes - span.bytes.size()) {
             error = "Snapshot contains an invalid or oversized memory span.";
@@ -146,6 +157,8 @@ bool WriteMemorySnapshotFile(const std::filesystem::path& path,
         ok = WriteU64(out, span.base) &&
             WriteU64(out, span.allocationBase) &&
             WriteU32(out, span.protection) &&
+            WriteU32(out, kindValue) &&
+            WriteString(out, span.moduleName) &&
             WriteU32(out, static_cast<std::uint32_t>(span.bytes.size())) &&
             static_cast<bool>(out.write(
                 reinterpret_cast<const char*>(span.bytes.data()),
@@ -177,7 +190,8 @@ bool ReadMemorySnapshotFile(const std::filesystem::path& path,
     std::uint32_t version = 0;
     std::uint64_t spanCount = 0;
     if (!in || magic != kMagic ||
-        !ReadU32(in, version) || version != kFormatVersion ||
+        !ReadU32(in, version) ||
+        (version != kFormatVersion && version != kLegacyFormatVersion) ||
         !ReadU32(in, snapshot.processId) ||
         !ReadU64(in, snapshot.capturedAtUnixMs) ||
         !ReadU64(in, snapshot.executableSize) ||
@@ -203,8 +217,30 @@ bool ReadMemorySnapshotFile(const std::filesystem::path& path,
         std::uint32_t dataSize = 0;
         if (!ReadU64(in, span.base) ||
             !ReadU64(in, span.allocationBase) ||
-            !ReadU32(in, span.protection) ||
-            !ReadU32(in, dataSize) ||
+            !ReadU32(in, span.protection)) {
+            error = "Snapshot contains an invalid memory-span header.";
+            return false;
+        }
+        if (version >= kFormatVersion) {
+            std::uint32_t kindValue = 0;
+            if (!ReadU32(in, kindValue) || !ReadString(in, span.moduleName) ||
+                (kindValue != static_cast<std::uint32_t>(MemoryRegionKind::Private) &&
+                 kindValue != static_cast<std::uint32_t>(MemoryRegionKind::Image))) {
+                error = "Snapshot contains an invalid memory-region type.";
+                return false;
+            }
+            span.regionKind = static_cast<MemoryRegionKind>(kindValue);
+            const bool validKind =
+                (span.regionKind == MemoryRegionKind::Private && span.moduleName.empty()) ||
+                (span.regionKind == MemoryRegionKind::Image && !span.moduleName.empty());
+            if (!validKind) {
+                error = "Snapshot memory-region metadata failed validation.";
+                return false;
+            }
+        } else {
+            span.regionKind = MemoryRegionKind::Private;
+        }
+        if (!ReadU32(in, dataSize) ||
             dataSize == 0 || dataSize > kMaximumSpanBytes ||
             span.base > (std::numeric_limits<std::uint64_t>::max)() - dataSize ||
             totalBytes > kMaximumSnapshotBytes - dataSize) {
@@ -255,7 +291,10 @@ bool CompareMemorySnapshots(const MemorySnapshotFile& before,
         std::uint64_t previousEnd = 0;
         bool first = true;
         for (const auto& span : *spans) {
-            if (span.bytes.empty() ||
+            const bool validKind =
+                (span.regionKind == MemoryRegionKind::Private && span.moduleName.empty()) ||
+                (span.regionKind == MemoryRegionKind::Image && !span.moduleName.empty());
+            if (!validKind || span.bytes.empty() ||
                 span.base > (std::numeric_limits<std::uint64_t>::max)() - span.bytes.size() ||
                 (!first && span.base < previousEnd)) {
                 error = "Snapshot contains overlapping or invalid memory spans.";
@@ -268,6 +307,7 @@ bool CompareMemorySnapshots(const MemorySnapshotFile& before,
 
     std::map<std::uint64_t, std::uint64_t> changedByPage;
     std::map<std::uint64_t, std::uint64_t> changedByAllocation;
+    std::map<std::uint64_t, std::pair<MemoryRegionKind, std::string>> allocationMetadata;
     std::vector<ChangedRun> details;
     details.reserve(kMaximumDetailedRuns);
     bool runActive = false;
@@ -283,10 +323,17 @@ bool CompareMemorySnapshots(const MemorySnapshotFile& before,
         const auto end = (std::min)(aEnd, bEnd);
 
         if (start < end) {
-            if (runActive && lastChangedAddress + 1 != start)
+            const bool sameMapping =
+                a[i].allocationBase == b[j].allocationBase &&
+                a[i].regionKind == b[j].regionKind &&
+                a[i].moduleName == b[j].moduleName;
+            if (!sameMapping) {
                 CloseRun(runActive, currentRun, details, summary);
+            } else {
+                if (runActive && lastChangedAddress + 1 != start)
+                    CloseRun(runActive, currentRun, details, summary);
 
-            for (std::uint64_t address = start; address < end; ++address) {
+                for (std::uint64_t address = start; address < end; ++address) {
                 const auto oldByte = a[i].bytes[static_cast<std::size_t>(address - a[i].base)];
                 const auto newByte = b[j].bytes[static_cast<std::size_t>(address - b[j].base)];
                 ++summary.comparedBytes;
@@ -297,7 +344,11 @@ bool CompareMemorySnapshots(const MemorySnapshotFile& before,
 
                 ++summary.changedBytes;
                 ++changedByPage[address & ~std::uint64_t{0xfff}];
-                ++changedByAllocation[a[i].allocationBase];
+                auto& allocationCount = changedByAllocation[a[i].allocationBase];
+                if (allocationCount++ == 0) {
+                    allocationMetadata.emplace(a[i].allocationBase,
+                        std::make_pair(a[i].regionKind, a[i].moduleName));
+                }
                 if (!runActive || lastChangedAddress + 1 != address) {
                     CloseRun(runActive, currentRun, details, summary);
                     runActive = true;
@@ -309,6 +360,7 @@ bool CompareMemorySnapshots(const MemorySnapshotFile& before,
                     currentRun.after.push_back(newByte);
                 }
                 lastChangedAddress = address;
+                }
             }
         } else if (runActive && lastChangedAddress + 1 != start) {
             CloseRun(runActive, currentRun, details, summary);
@@ -343,7 +395,7 @@ bool CompareMemorySnapshots(const MemorySnapshotFile& before,
         << "After captured bytes: " << after.capturedBytes << "\n"
         << "After skipped bytes: " << after.skippedBytes << "\n\n"
         << "[Difference summary]\n"
-        << "Bytes compared at the same virtual addresses: " << summary.comparedBytes << "\n"
+        << "Bytes compared at matching addresses and memory mappings: " << summary.comparedBytes << "\n"
         << "Changed bytes: " << summary.changedBytes << "\n"
         << "Changed contiguous runs: " << summary.changedRuns << "\n"
         << "Changed 4 KiB pages: " << summary.changedPages << "\n"
@@ -360,8 +412,15 @@ bool CompareMemorySnapshots(const MemorySnapshotFile& before,
         });
     for (std::size_t index = 0;
          index < allocations.size() && index < kMaximumAllocationGroups; ++index) {
+        const auto metadata = allocationMetadata.find(allocations[index].first);
         report << "AllocationBase: 0x" << std::hex << allocations[index].first
-            << std::dec << " | changed bytes: " << allocations[index].second << "\n";
+            << std::dec << " | changed bytes: " << allocations[index].second;
+        if (metadata != allocationMetadata.end()) {
+            report << " | region: " << RegionKindName(metadata->second.first);
+            if (!metadata->second.second.empty())
+                report << " | module: " << metadata->second.second;
+        }
+        report << "\n";
     }
 
     report << "\n[Most changed 4 KiB pages]\n";

@@ -25,4 +25,21 @@ inline bool IsReadableMemoryProtection(std::uint32_t protection) noexcept {
     }
 }
 
+// Dynamic game state in mapped modules normally resides on writable pages.
+// Keep read-only code and constant tables out of the extended image capture.
+inline bool IsWritableMemoryProtection(std::uint32_t protection) noexcept {
+    constexpr std::uint32_t kPageGuard = 0x100u;
+    if ((protection & kPageGuard) != 0) return false;
+
+    switch (protection & 0xFFu) {
+    case 0x04u: // PAGE_READWRITE
+    case 0x08u: // PAGE_WRITECOPY
+    case 0x40u: // PAGE_EXECUTE_READWRITE
+    case 0x80u: // PAGE_EXECUTE_WRITECOPY
+        return true;
+    default:
+        return false;
+    }
+}
+
 } // namespace tetris

@@ -14,6 +14,7 @@
 #include <limits>
 #include <sstream>
 #include <utility>
+#include <unordered_map>
 
 namespace tetris::win32 {
 namespace {
@@ -304,7 +305,7 @@ bool InspectProcessMetadata(DWORD processId, ProcessInventory& out,
 }
 
 
-bool CaptureReadablePrivateMemorySnapshot(DWORD processId,
+bool CaptureReadableGameMemorySnapshot(DWORD processId,
     const std::wstring& path, std::wstring& error) {
     error.clear();
     if (processId == 0) {
@@ -345,6 +346,42 @@ bool CaptureReadablePrivateMemorySnapshot(DWORD processId,
         executableSize, executableSha256, architecture);
     if (fingerprint != ClientFingerprintStatus::Match) {
         return fail(L"安全拒绝：目标 EXE 大小、架构或 SHA-256 与锁定客户端不匹配。");
+    }
+
+    // Include mapped writable data only from modules installed beside this exact
+    // executable. This captures game-owned globals (for example .data sections)
+    // without dumping unrelated Windows system DLLs.
+    ProcessInventory moduleInventory;
+    EnumerateModules(processId, moduleInventory);
+    if (moduleInventory.modules.empty()) {
+        return fail(L"无法枚举目标进程模块，拒绝生成不完整的游戏映像快照。");
+    }
+
+    const auto executableFullPath =
+        std::filesystem::path(std::wstring(executablePath.data(), pathLength))
+            .lexically_normal().wstring();
+    const auto executableDirectory =
+        std::filesystem::path(executableFullPath).parent_path().lexically_normal().wstring();
+    std::unordered_map<std::uintptr_t, std::string> gameModuleNames;
+    bool executableModuleFound = false;
+    for (const auto& module : moduleInventory.modules) {
+        const auto moduleDirectory =
+            std::filesystem::path(module.path).parent_path().lexically_normal().wstring();
+        if (CompareStringOrdinal(executableDirectory.c_str(), -1,
+                moduleDirectory.c_str(), -1, TRUE) != CSTR_EQUAL) {
+            continue;
+        }
+
+        gameModuleNames.emplace(module.base, ToUtf8(module.name));
+        const auto moduleFullPath =
+            std::filesystem::path(module.path).lexically_normal().wstring();
+        if (CompareStringOrdinal(moduleFullPath.c_str(), -1,
+                executableFullPath.c_str(), -1, TRUE) == CSTR_EQUAL) {
+            executableModuleFound = true;
+        }
+    }
+    if (!executableModuleFound) {
+        return fail(L"已验证 EXE 指纹，但未在模块表中找到对应的游戏 EXE 映像。");
     }
 
     MemorySnapshotFile snapshot;
@@ -391,8 +428,15 @@ bool CaptureReadablePrivateMemorySnapshot(DWORD processId,
             reinterpret_cast<std::uintptr_t>(mbi.AllocationBase);
         const auto next = base + mbi.RegionSize;
 
-        if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE &&
-            IsReadableMemoryProtection(static_cast<std::uint32_t>(mbi.Protect))) {
+        const auto protection = static_cast<std::uint32_t>(mbi.Protect);
+        const auto moduleIt = gameModuleNames.find(allocationBase);
+        const bool readable = IsReadableMemoryProtection(protection);
+        const bool privateRegion = mbi.Type == MEM_PRIVATE && readable;
+        const bool gameImageRegion = mbi.Type == MEM_IMAGE &&
+            moduleIt != gameModuleNames.end() &&
+            readable && IsWritableMemoryProtection(protection);
+
+        if (mbi.State == MEM_COMMIT && (privateRegion || gameImageRegion)) {
             const auto regionSize = static_cast<std::uint64_t>(mbi.RegionSize);
             snapshot.eligibleBytes += regionSize;
             std::uint64_t offset = 0;
@@ -411,7 +455,10 @@ bool CaptureReadablePrivateMemorySnapshot(DWORD processId,
                     MemorySnapshotSpan span;
                     span.base = static_cast<std::uint64_t>(address);
                     span.allocationBase = static_cast<std::uint64_t>(allocationBase);
-                    span.protection = static_cast<std::uint32_t>(mbi.Protect);
+                    span.protection = protection;
+                    span.regionKind = privateRegion
+                        ? MemoryRegionKind::Private : MemoryRegionKind::Image;
+                    if (gameImageRegion) span.moduleName = moduleIt->second;
                     span.bytes = std::move(bytes);
                     snapshot.capturedBytes += static_cast<std::uint64_t>(bytesRead);
                     snapshot.spans.push_back(std::move(span));

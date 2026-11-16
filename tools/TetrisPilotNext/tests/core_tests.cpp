@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <vector>
 
@@ -66,6 +67,12 @@ int main() {
     CHECK(!IsReadableMemoryProtection(0x01u)); // PAGE_NOACCESS
     CHECK(!IsReadableMemoryProtection(0x10u)); // PAGE_EXECUTE
     CHECK(!IsReadableMemoryProtection(0x104u)); // PAGE_GUARD | PAGE_READWRITE
+    CHECK(IsWritableMemoryProtection(0x04u)); // PAGE_READWRITE
+    CHECK(IsWritableMemoryProtection(0x08u)); // PAGE_WRITECOPY
+    CHECK(IsWritableMemoryProtection(0x40u)); // PAGE_EXECUTE_READWRITE
+    CHECK(IsWritableMemoryProtection(0x80u)); // PAGE_EXECUTE_WRITECOPY
+    CHECK(!IsWritableMemoryProtection(0x02u)); // PAGE_READONLY
+    CHECK(!IsWritableMemoryProtection(0x104u)); // PAGE_GUARD | PAGE_READWRITE
 
     // The exact reported target client is accepted, including lowercase hex.
     CHECK(CheckTargetClientFingerprint(
@@ -98,6 +105,7 @@ int main() {
     const auto beforePath = temp / ("tpn-before-" + testToken + ".tpsnap");
     const auto afterPath = temp / ("tpn-after-" + testToken + ".tpsnap");
     const auto mismatchPath = temp / ("tpn-mismatch-" + testToken + ".tpsnap");
+    const auto legacyPath = temp / ("tpn-legacy-" + testToken + ".tpsnap");
     const auto diffPath = temp / ("tpn-diff-" + testToken + ".txt");
 
     MemorySnapshotFile snapshotBefore;
@@ -107,8 +115,8 @@ int main() {
     snapshotBefore.architecture = "x86 on x64";
     snapshotBefore.executableSha256 =
         "9951C928F15F71839CE97CCDFA29CF040EB6699C8CA54F82C7B31B0561784C42";
-    snapshotBefore.eligibleBytes = 8;
-    snapshotBefore.capturedBytes = 8;
+    snapshotBefore.eligibleBytes = 12;
+    snapshotBefore.capturedBytes = 12;
     MemorySnapshotSpan beforeSpan;
     beforeSpan.base = 0x1000;
     beforeSpan.allocationBase = 0x1000;
@@ -116,11 +124,21 @@ int main() {
     beforeSpan.bytes = {10, 11, 12, 13, 14, 15, 16, 17};
     snapshotBefore.spans.push_back(beforeSpan);
 
+    MemorySnapshotSpan imageSpan;
+    imageSpan.base = 0x3000;
+    imageSpan.allocationBase = 0x3000;
+    imageSpan.protection = 0x04;
+    imageSpan.regionKind = MemoryRegionKind::Image;
+    imageSpan.moduleName = "tetris.exe";
+    imageSpan.bytes = {1, 2, 3, 4};
+    snapshotBefore.spans.push_back(imageSpan);
+
     MemorySnapshotFile snapshotAfter = snapshotBefore;
     snapshotAfter.capturedAtUnixMs = 2000;
     snapshotAfter.spans[0].bytes[1] = 99;
     snapshotAfter.spans[0].bytes[2] = 98;
     snapshotAfter.spans[0].bytes[5] = 88;
+    snapshotAfter.spans[1].bytes[2] = 77;
 
     std::string snapshotError;
     CHECK(WriteMemorySnapshotFile(beforePath, snapshotBefore, snapshotError));
@@ -129,18 +147,65 @@ int main() {
     MemorySnapshotFile roundTrip;
     CHECK(ReadMemorySnapshotFile(beforePath, roundTrip, snapshotError));
     CHECK(roundTrip.processId == snapshotBefore.processId);
-    CHECK(roundTrip.spans.size() == 1);
+    CHECK(roundTrip.spans.size() == 2);
     CHECK(roundTrip.spans[0].bytes == snapshotBefore.spans[0].bytes);
+    CHECK(roundTrip.spans[0].regionKind == MemoryRegionKind::Private);
+    CHECK(roundTrip.spans[1].regionKind == MemoryRegionKind::Image);
+    CHECK(roundTrip.spans[1].moduleName == "tetris.exe");
+    CHECK(roundTrip.spans[1].bytes == snapshotBefore.spans[1].bytes);
 
     MemorySnapshotDiffSummary diffSummary;
     CHECK(CompareMemorySnapshotFiles(
         beforePath, afterPath, diffPath, diffSummary, snapshotError));
-    CHECK(diffSummary.comparedBytes == 8);
-    CHECK(diffSummary.changedBytes == 3);
-    CHECK(diffSummary.changedRuns == 2);
-    CHECK(diffSummary.changedPages == 1);
-    CHECK(diffSummary.changedAllocationGroups == 1);
+    CHECK(diffSummary.comparedBytes == 12);
+    CHECK(diffSummary.changedBytes == 4);
+    CHECK(diffSummary.changedRuns == 3);
+    CHECK(diffSummary.changedPages == 2);
+    CHECK(diffSummary.changedAllocationGroups == 2);
     CHECK(std::filesystem::file_size(diffPath) > 0);
+
+    // Existing v1 snapshots contain private spans only and remain readable.
+    {
+        std::ofstream legacy(legacyPath, std::ios::binary | std::ios::trunc);
+        const char magic[8] = {'T', 'P', 'N', 'S', 'N', 'A', 'P', '1'};
+        legacy.write(magic, sizeof(magic));
+        const auto writeU32 = [&](std::uint32_t value) {
+            for (unsigned i = 0; i < 4; ++i)
+                legacy.put(static_cast<char>((value >> (i * 8)) & 0xffu));
+        };
+        const auto writeU64 = [&](std::uint64_t value) {
+            for (unsigned i = 0; i < 8; ++i)
+                legacy.put(static_cast<char>((value >> (i * 8)) & 0xffu));
+        };
+        const auto writeString = [&](const std::string& value) {
+            writeU32(static_cast<std::uint32_t>(value.size()));
+            legacy.write(value.data(), static_cast<std::streamsize>(value.size()));
+        };
+        writeU32(1); // v1
+        writeU32(14120);
+        writeU64(1500);
+        writeU64(1654784);
+        writeU64(3);
+        writeU64(3);
+        writeU64(0);
+        writeString("x86 on x64");
+        writeString("9951C928F15F71839CE97CCDFA29CF040EB6699C8CA54F82C7B31B0561784C42");
+        writeU64(1);
+        writeU64(0x5000);
+        writeU64(0x5000);
+        writeU32(0x04);
+        writeU32(3);
+        const char legacyBytes[3] = {7, 8, 9};
+        legacy.write(legacyBytes, sizeof(legacyBytes));
+        legacy.close();
+        CHECK(static_cast<bool>(legacy));
+    }
+    MemorySnapshotFile legacyRoundTrip;
+    CHECK(ReadMemorySnapshotFile(legacyPath, legacyRoundTrip, snapshotError));
+    CHECK(legacyRoundTrip.spans.size() == 1);
+    CHECK(legacyRoundTrip.spans[0].regionKind == MemoryRegionKind::Private);
+    CHECK(legacyRoundTrip.spans[0].moduleName.empty());
+    CHECK(legacyRoundTrip.spans[0].bytes == std::vector<std::uint8_t>({7, 8, 9}));
 
     MemorySnapshotFile otherProcess = snapshotAfter;
     otherProcess.processId += 1;
@@ -152,6 +217,7 @@ int main() {
     std::filesystem::remove(beforePath);
     std::filesystem::remove(afterPath);
     std::filesystem::remove(mismatchPath);
+    std::filesystem::remove(legacyPath);
     std::filesystem::remove(diffPath);
 
     Board board{};

@@ -20,7 +20,7 @@ The first report has now confirmed and pinned the target executable:
 
 The installation path is intentionally not part of the identity check. The executable must match all three pinned fields (size, architecture, and SHA-256) before a future client adapter is allowed to proceed. A mismatch is a hard rejection, not a fallback to guessed offsets.
 
-The metadata report contains executable/module and virtual-memory region metadata only. The separate snapshot operation performs read-only `ReadProcessMemory` calls for committed, readable `MEM_PRIVATE` regions after validating the exact client fingerprint. It never writes to or suspends the game process. Snapshot files contain raw bytes from those regions, so keep them local and do not share them publicly.
+The metadata report contains executable/module and virtual-memory region metadata only. The separate snapshot operation performs read-only `ReadProcessMemory` calls after validating the exact client fingerprint. It captures committed readable `MEM_PRIVATE` regions plus readable/writable `MEM_IMAGE` pages belonging only to modules installed beside the game executable. This includes the game's writable image data (such as its `.data` pages) while excluding Windows system DLL image pages. It never writes to or suspends the game process. Snapshot files contain raw bytes from process memory, so keep them local and do not share them publicly.
 
 ## Design goals
 
@@ -40,7 +40,7 @@ The metadata report contains executable/module and virtual-memory region metadat
 - `game_ports.hpp`: `IGameStateSource` reads normalized snapshots; `IGameActionSink` submits actions and returns dispatch receipts.
 - `session_state.cpp`: explicit planning, execution, verification, recovery, Game Over and restart state transitions.
 - `platform/win32/process_inventory.*`: fixed-client fingerprint and module/address-space inventory.
-- The inspector counts committed `MEM_PRIVATE` regions and lists larger readable regions for the metadata report. The snapshot action separately captures **all** committed readable `MEM_PRIVATE` regions, including regions smaller than 16 KiB. It reads in 64 KiB chunks, saves successful reads in a binary `.tpsnap` file, and records unreadable/skipped byte counts. The selected process must match the exact executable size, architecture, and SHA-256 allowlist before capture.
+- The inspector counts committed `MEM_PRIVATE` regions and lists larger readable regions for the metadata report. The snapshot action captures all committed readable `MEM_PRIVATE` regions plus readable/writable `MEM_IMAGE` pages whose module path is in the same installation directory as the verified game executable. System DLL image pages and read-only code/constant pages are excluded. Reads are made in 64 KiB chunks and unreadable/skipped byte counts are recorded. Snapshot v2 records each span's memory type and game module name; the reader remains compatible with existing v1 private-memory snapshots.
 - `memory_snapshot.cpp`: versioned binary snapshot format, guarded loader, same-address byte comparison, and compact difference report.
 - `inspector_main.cpp`: Windows utility to select the game window, export metadata, capture snapshots, and compare two snapshots.
 
@@ -64,9 +64,9 @@ The metadata report contains executable/module and virtual-memory region metadat
 4. Choose **比较两份快照**, select the earlier and later files, and save the text difference report.
 5. Repeat with different controlled changes. Comparing menu → active game, active piece → moved piece, and before → after a score change helps separate unrelated runtime churn from state-linked candidates.
 
-The snapshot operation reads all committed, readable `MEM_PRIVATE` regions, including regions smaller than 16 KiB, using 64 KiB reads. Unreadable portions are counted as skipped. The game process is not paused, so a snapshot is a short rolling sample rather than an atomic freeze-frame; capture while the relevant state is as stable as practical.
+The snapshot operation reads all committed, readable `MEM_PRIVATE` regions, including regions smaller than 16 KiB, plus readable/writable `MEM_IMAGE` pages belonging to modules beside the game executable. It excludes Windows system DLL images and read-only code/constant pages. Reads use 64 KiB chunks; unreadable portions are counted as skipped. The game process is not paused, so a snapshot is a short rolling sample rather than an atomic freeze-frame; capture while the relevant state is as stable as practical.
 
-Snapshot files contain raw bytes from private process memory and may include unrelated runtime data. Keep them local and do not publish or share them. The difference report lists same-address changed bytes, their 4 KiB pages, allocation groups, and up to 1,000 contiguous changed ranges. It is a filtering aid, not proof that an address represents a board cell, piece, NEXT item, or score.
+Snapshot files contain raw bytes from private process memory and writable game-module image pages; they may include unrelated runtime data. Keep them local and do not publish or share them. The difference report lists same-address changed bytes, their 4 KiB pages, allocation groups, and up to 1,000 contiguous changed ranges. It is a filtering aid, not proof that an address represents a board cell, piece, NEXT item, or score.
 
 ## Current scope
 

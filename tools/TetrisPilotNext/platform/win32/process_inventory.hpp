@@ -53,8 +53,9 @@ struct ProcessInventory {
 bool InspectProcessMetadata(DWORD processId, ProcessInventory& out,
                             std::wstring& error);
 
-// Reads only committed, readable MEM_PRIVATE bytes after the exact client fingerprint matches.
-bool CaptureReadablePrivateMemorySnapshot(DWORD processId,
+// Reads committed readable MEM_PRIVATE bytes plus writable MEM_IMAGE pages from modules
+// located beside the verified game executable. Never writes to or suspends the target.
+bool CaptureReadableGameMemorySnapshot(DWORD processId,
     const std::wstring& path, std::wstring& error);
 bool CompareSnapshotFiles(const std::wstring& beforePath,
     const std::wstring& afterPath, const std::wstring& reportPath,

@@ -239,11 +239,11 @@ void CaptureSnapshot(AppState* state) {
         L"TetrisPilotNext-snapshot.tpsnap", path)) return;
 
     SetWindowTextW(state->status,
-        L"正在采集全部可读私有内存。游戏进程不会暂停，请尽量在状态稳定时采集……");
+        L"正在采集可读私有内存及游戏目录内模块的可读写数据页。游戏进程不会暂停，请尽量在状态稳定时采集……");
     UpdateWindow(state->status);
 
     std::wstring error;
-    if (!tetris::win32::CaptureReadablePrivateMemorySnapshot(processId, path, error)) {
+    if (!tetris::win32::CaptureReadableGameMemorySnapshot(processId, path, error)) {
         const std::wstring message = L"快照采集失败：" + error;
         SetWindowTextW(state->status, message.c_str());
         return;

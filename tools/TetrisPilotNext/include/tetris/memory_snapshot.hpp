@@ -7,10 +7,17 @@
 
 namespace tetris {
 
+enum class MemoryRegionKind : std::uint32_t {
+    Private = 1,
+    Image = 2,
+};
+
 struct MemorySnapshotSpan {
     std::uint64_t base{};
     std::uint64_t allocationBase{};
     std::uint32_t protection{};
+    MemoryRegionKind regionKind{MemoryRegionKind::Private};
+    std::string moduleName;
     std::vector<std::uint8_t> bytes;
 };
 
