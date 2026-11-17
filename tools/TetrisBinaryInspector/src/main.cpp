@@ -6,6 +6,11 @@
 #include <bcrypt.h>
 
 #include <cstdint>
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
@@ -286,6 +291,324 @@ bool ReadRemote(HANDLE process, std::uintptr_t address, T& value) {
         &value, sizeof(T), &bytesRead) && bytesRead == sizeof(T);
 }
 
+
+bool ReadDiskFile(const std::wstring& path, std::vector<std::uint8_t>& bytes) {
+    std::ifstream input(std::filesystem::path(path), std::ios::binary);
+    if (!input) return false;
+    input.seekg(0, std::ios::end);
+    const std::streamoff size = input.tellg();
+    if (size <= 0 || size > 64 * 1024 * 1024) return false;
+    input.seekg(0, std::ios::beg);
+    bytes.resize(static_cast<std::size_t>(size));
+    input.read(reinterpret_cast<char*>(bytes.data()), size);
+    return input.good() || input.eof();
+}
+
+void AnalyzeDiskImage(const std::wstring& path) {
+    std::vector<std::uint8_t> bytes;
+    if (!ReadDiskFile(path, bytes)) {
+        Log(L"Static PE analysis: could not read the validated executable.");
+        return;
+    }
+
+    IMAGE_DOS_HEADER dos{};
+    if (bytes.size() < sizeof(dos)) {
+        Log(L"Static PE analysis: file too small for DOS header.");
+        return;
+    }
+    std::memcpy(&dos, bytes.data(), sizeof(dos));
+    if (dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < 0) {
+        Log(L"Static PE analysis: invalid DOS header.");
+        return;
+    }
+
+    const std::size_t ntOffset = static_cast<std::size_t>(dos.e_lfanew);
+    DWORD signature = 0;
+    IMAGE_FILE_HEADER fileHeader{};
+    IMAGE_OPTIONAL_HEADER32 optionalHeader{};
+    const std::size_t fileHeaderOffset = ntOffset + sizeof(DWORD);
+    const std::size_t optionalOffset = fileHeaderOffset + sizeof(IMAGE_FILE_HEADER);
+    if (ntOffset > bytes.size() || fileHeaderOffset > bytes.size() ||
+        optionalOffset > bytes.size() ||
+        sizeof(optionalHeader) > bytes.size() - optionalOffset ||
+        sizeof(fileHeader) > bytes.size() - fileHeaderOffset ||
+        sizeof(signature) > bytes.size() - ntOffset) {
+        Log(L"Static PE analysis: truncated PE headers.");
+        return;
+    }
+
+    std::memcpy(&signature, bytes.data() + ntOffset, sizeof(signature));
+    std::memcpy(&fileHeader, bytes.data() + fileHeaderOffset, sizeof(fileHeader));
+    std::memcpy(&optionalHeader, bytes.data() + optionalOffset, sizeof(optionalHeader));
+    if (signature != IMAGE_NT_SIGNATURE ||
+        fileHeader.Machine != IMAGE_FILE_MACHINE_I386 ||
+        optionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+        Log(L"Static PE analysis: target is not PE32/I386.");
+        return;
+    }
+
+    Log(L"");
+    Log(L"=== Static PE32 analysis (exact-hash file) ===");
+    Log(L"COFF TimeDateStamp: " + Hex(fileHeader.TimeDateStamp));
+    Log(L"NumberOfSections: " + std::to_wstring(fileHeader.NumberOfSections));
+    Log(L"Characteristics: " + Hex(fileHeader.Characteristics));
+    Log(L"Preferred ImageBase: " + Hex(optionalHeader.ImageBase));
+    Log(L"SectionAlignment: " + Hex(optionalHeader.SectionAlignment));
+    Log(L"FileAlignment: " + Hex(optionalHeader.FileAlignment));
+    Log(L"SizeOfHeaders: " + std::to_wstring(optionalHeader.SizeOfHeaders));
+    Log(L"Subsystem: " + std::to_wstring(optionalHeader.Subsystem));
+    Log(L"DllCharacteristics: " + Hex(optionalHeader.DllCharacteristics));
+    Log(L"BaseOfCode RVA: " + Hex(optionalHeader.BaseOfCode));
+    Log(L"BaseOfData RVA: " + Hex(optionalHeader.BaseOfData));
+    Log(L"");
+
+    const std::size_t sectionTable =
+        optionalOffset + fileHeader.SizeOfOptionalHeader;
+    if (sectionTable > bytes.size() ||
+        static_cast<std::size_t>(fileHeader.NumberOfSections) >
+            (bytes.size() - sectionTable) / sizeof(IMAGE_SECTION_HEADER)) {
+        Log(L"Static PE analysis: section table is truncated.");
+        return;
+    }
+
+    std::vector<IMAGE_SECTION_HEADER> sections(fileHeader.NumberOfSections);
+    if (!sections.empty()) {
+        std::memcpy(sections.data(), bytes.data() + sectionTable,
+                    sections.size() * sizeof(IMAGE_SECTION_HEADER));
+    }
+
+    auto rvaToOffset = [&](std::uint32_t rva, std::size_t& offset) -> bool {
+        if (rva < optionalHeader.SizeOfHeaders && rva < bytes.size()) {
+            offset = rva;
+            return true;
+        }
+        for (const auto& section : sections) {
+            const std::uint32_t span =
+                (std::max)(section.Misc.VirtualSize, section.SizeOfRawData);
+            if (rva < section.VirtualAddress ||
+                rva - section.VirtualAddress >= span) {
+                continue;
+            }
+            const std::uint32_t delta = rva - section.VirtualAddress;
+            if (delta >= section.SizeOfRawData) return false;
+            const std::uint64_t raw =
+                static_cast<std::uint64_t>(section.PointerToRawData) + delta;
+            if (raw >= bytes.size()) return false;
+            offset = static_cast<std::size_t>(raw);
+            return true;
+        }
+        return false;
+    };
+
+    Log(L"Sections:");
+    for (std::size_t i = 0; i < sections.size(); ++i) {
+        const auto& section = sections[i];
+        std::string name;
+        for (char ch : section.Name) {
+            if (ch == '\0') break;
+            name.push_back(ch);
+        }
+        Log(L"  " + std::to_wstring(i) + L" " +
+            std::wstring(name.begin(), name.end()) +
+            L" RVA=" + Hex(section.VirtualAddress) +
+            L" VSize=" + Hex(section.Misc.VirtualSize) +
+            L" Raw=" + Hex(section.PointerToRawData) +
+            L"/" + Hex(section.SizeOfRawData) +
+            L" Flags=" + Hex(section.Characteristics));
+    }
+
+    Log(L"");
+    Log(L"Imported modules and symbols:");
+    const auto& importDir = optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    std::size_t totalImports = 0;
+    if (importDir.VirtualAddress == 0 || importDir.Size == 0) {
+        Log(L"  No import directory.");
+    } else {
+        std::size_t descriptorOffset = 0;
+        if (!rvaToOffset(importDir.VirtualAddress, descriptorOffset)) {
+            Log(L"  Import directory RVA cannot be mapped to file data.");
+        } else {
+            bool descriptorsEnded = false;
+            for (std::size_t d = 0; d < 256; ++d) {
+                const std::size_t off =
+                    descriptorOffset + d * sizeof(IMAGE_IMPORT_DESCRIPTOR);
+                if (off > bytes.size() ||
+                    sizeof(IMAGE_IMPORT_DESCRIPTOR) > bytes.size() - off) break;
+                IMAGE_IMPORT_DESCRIPTOR descriptor{};
+                std::memcpy(&descriptor, bytes.data() + off, sizeof(descriptor));
+                if (descriptor.Name == 0) {
+                    descriptorsEnded = true;
+                    break;
+                }
+
+                std::size_t dllOffset = 0;
+                std::string dllName;
+                if (rvaToOffset(descriptor.Name, dllOffset)) {
+                    for (std::size_t n = 0; n < 260 &&
+                         dllOffset + n < bytes.size(); ++n) {
+                        const char ch = static_cast<char>(bytes[dllOffset + n]);
+                        if (ch == '\0') break;
+                        dllName.push_back(ch);
+                    }
+                }
+                Log(L"  DLL: " + std::wstring(dllName.begin(), dllName.end()));
+
+                const std::uint32_t thunkRva = descriptor.OriginalFirstThunk
+                    ? descriptor.OriginalFirstThunk : descriptor.FirstThunk;
+                bool thunkMapped = false;
+                std::size_t thunkOffset = 0;
+                thunkMapped = rvaToOffset(thunkRva, thunkOffset);
+                if (!thunkMapped) {
+                    Log(L"    (thunk array not file-backed)");
+                    continue;
+                }
+
+                std::size_t moduleImports = 0;
+                for (std::size_t t = 0; t < 1024; ++t) {
+                    const std::size_t itemOffset = thunkOffset + t * sizeof(std::uint32_t);
+                    if (itemOffset > bytes.size() ||
+                        sizeof(std::uint32_t) > bytes.size() - itemOffset) break;
+                    std::uint32_t thunk = 0;
+                    std::memcpy(&thunk, bytes.data() + itemOffset, sizeof(thunk));
+                    if (thunk == 0) break;
+
+                    if ((thunk & 0x80000000u) != 0) {
+                        Log(L"    Ordinal #" + std::to_wstring(thunk & 0xffffu));
+                    } else {
+                        std::size_t nameOffset = 0;
+                        std::string functionName;
+                        if (rvaToOffset(thunk, nameOffset) &&
+                            nameOffset + sizeof(WORD) < bytes.size()) {
+                            for (std::size_t n = nameOffset + sizeof(WORD);
+                                 n < bytes.size() && n - nameOffset < 512; ++n) {
+                                const char ch = static_cast<char>(bytes[n]);
+                                if (ch == '\0') break;
+                                functionName.push_back(ch);
+                            }
+                        }
+                        if (!functionName.empty()) {
+                            Log(L"    " + std::wstring(functionName.begin(), functionName.end()));
+                        } else {
+                            Log(L"    (unmapped import name RVA " + Hex(thunk) + L")");
+                        }
+                    }
+                    ++moduleImports;
+                    ++totalImports;
+                    if (totalImports >= 1200) {
+                        Log(L"  Import output capped at 1200 symbols.");
+                        break;
+                    }
+                }
+                Log(L"    Count: " + std::to_wstring(moduleImports));
+                if (totalImports >= 1200) break;
+            }
+            if (!descriptorsEnded)
+                Log(L"  WARNING: import descriptor list did not terminate within bounds.");
+        }
+    }
+    Log(L"Total imported symbols reported: " + std::to_wstring(totalImports));
+
+    Log(L"");
+    Log(L"Relevant printable ASCII strings (file offsets):");
+    const char* keywords[] = {
+        "tetris", "game", "score", "next", "piece", "block", "board",
+        "line", "level", "drop", "rotate", "marathon", "challenge",
+        "menu", "play", "grid", "combo", "hold", "start", "clear",
+        "time", "lock", "keyboard", "input", "battle"
+    };
+    std::size_t reportedStrings = 0;
+    for (std::size_t i = 0; i < bytes.size() && reportedStrings < 120;) {
+        if (bytes[i] < 0x20 || bytes[i] > 0x7e) {
+            ++i;
+            continue;
+        }
+        const std::size_t start = i;
+        while (i < bytes.size() && bytes[i] >= 0x20 && bytes[i] <= 0x7e &&
+               i - start < 256) ++i;
+        if (i - start < 5) continue;
+        std::string value(reinterpret_cast<const char*>(bytes.data() + start), i - start);
+        std::string lower = value;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+            [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        bool relevant = false;
+        for (const char* keyword : keywords) {
+            if (lower.find(keyword) != std::string::npos) {
+                relevant = true;
+                break;
+            }
+        }
+        if (!relevant) continue;
+        Log(L"  File+" + Hex(start) + L": " +
+            std::wstring(value.begin(), value.end()));
+        ++reportedStrings;
+    }
+    if (reportedStrings == 0)
+        Log(L"  No matching printable ASCII strings found.");
+    else if (reportedStrings == 120)
+        Log(L"  String output capped at 120 matches.");
+
+    Log(L"=== End static PE32 analysis ===");
+    Log(L"");
+}
+
+void EnumerateLoadedModules(DWORD pid) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(
+        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        Log(L"Loaded module enumeration failed: " + Win32Error(GetLastError()));
+        return;
+    }
+
+    Log(L"");
+    Log(L"Loaded modules (first 96):");
+    MODULEENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    std::size_t count = 0;
+    if (Module32FirstW(snapshot, &entry)) {
+        do {
+            Log(L"  " + std::wstring(entry.szModule) +
+                L" base=" + Hex(reinterpret_cast<std::uintptr_t>(entry.modBaseAddr)) +
+                L" size=" + std::to_wstring(entry.modBaseSize));
+            ++count;
+            if (count >= 96) {
+                Log(L"  Module output capped at 96 entries.");
+                break;
+            }
+        } while (Module32NextW(snapshot, &entry));
+    }
+    Log(L"Total modules reported: " + std::to_wstring(count));
+    CloseHandle(snapshot);
+}
+
+void LogImageMemoryRegions(HANDLE process, const ModuleInfo& module) {
+    Log(L"");
+    Log(L"Committed image memory regions:");
+    std::uintptr_t cursor = module.base;
+    const std::uintptr_t end = module.base + module.size;
+    std::size_t count = 0;
+    while (cursor < end && count < 96) {
+        MEMORY_BASIC_INFORMATION info{};
+        if (VirtualQueryEx(process, reinterpret_cast<LPCVOID>(cursor),
+                           &info, sizeof(info)) == 0) {
+            Log(L"  VirtualQueryEx stopped: " + Win32Error(GetLastError()));
+            break;
+        }
+        const std::uintptr_t regionBase =
+            reinterpret_cast<std::uintptr_t>(info.BaseAddress);
+        const std::uintptr_t next = regionBase + info.RegionSize;
+        if (info.State == MEM_COMMIT) {
+            Log(L"  Base=" + Hex(regionBase) +
+                L" Size=" + Hex(info.RegionSize) +
+                L" Protect=" + Hex(info.Protect) +
+                L" Type=" + Hex(info.Type));
+            ++count;
+        }
+        if (next <= cursor) break;
+        cursor = next;
+    }
+    Log(L"Committed image regions reported: " + std::to_wstring(count));
+}
+
 bool ValidateRemotePe32(HANDLE process, const ModuleInfo& module) {
     IMAGE_DOS_HEADER dos{};
     if (!ReadRemote(process, module.base, dos)) {
@@ -323,6 +646,25 @@ bool ValidateRemotePe32(HANDLE process, const ModuleInfo& module) {
     Log(L"Remote PE: PE32 / IMAGE_FILE_MACHINE_I386 confirmed.");
     Log(L"Remote PE SizeOfImage: " + std::to_wstring(optionalHeader.SizeOfImage));
     Log(L"Remote PE AddressOfEntryPoint RVA: " + Hex(optionalHeader.AddressOfEntryPoint));
+    Log(L"Remote PE Entry VA: " + Hex(module.base + optionalHeader.AddressOfEntryPoint));
+    Log(L"Remote PE ImageBase (preferred): " + Hex(optionalHeader.ImageBase));
+    Log(L"Remote PE DllCharacteristics: " + Hex(optionalHeader.DllCharacteristics));
+    std::array<std::uint8_t, 48> entryBytes{};
+    SIZE_T entryRead = 0;
+    if (ReadProcessMemory(process,
+        reinterpret_cast<LPCVOID>(module.base + optionalHeader.AddressOfEntryPoint),
+        entryBytes.data(), entryBytes.size(), &entryRead) && entryRead > 0) {
+        std::ostringstream bytesText;
+        bytesText << std::uppercase << std::hex << std::setfill('0');
+        for (std::size_t i = 0; i < entryRead; ++i) {
+            if (i) bytesText << ' ';
+            bytesText << std::setw(2) << static_cast<unsigned>(entryBytes[i]);
+        }
+        const std::string raw = bytesText.str();
+        Log(L"Remote entry bytes: " + std::wstring(raw.begin(), raw.end()));
+    } else {
+        Log(L"Remote entry bytes: unreadable (" + Win32Error(GetLastError()) + L")");
+    }
     Log(L"Remote module base: " + Hex(module.base));
     Log(L"Remote module size (Toolhelp): " + std::to_wstring(module.size));
     if (optionalHeader.SizeOfImage != module.size) {
@@ -333,7 +675,7 @@ bool ValidateRemotePe32(HANDLE process, const ModuleInfo& module) {
 }
 
 int RunInspector(DWORD requestedPid) {
-    Log(L"TetrisBinaryInspector 0.1");
+    Log(L"TetrisBinaryInspector 0.2");
     Log(L"Mode: external process, read-only.");
     Log(L"Access rights: PROCESS_QUERY_INFORMATION | PROCESS_VM_READ.");
     Log(L"No process-memory write, injection, remote thread, or code patch APIs are used.");
@@ -404,6 +746,7 @@ int RunInspector(DWORD requestedPid) {
         return 9;
     }
     Log(L"Fingerprint: EXACT MATCH to the recorded target build.");
+    AnalyzeDiskImage(imagePath);
 
     ModuleInfo module;
     if (!FindMainModule(pid, module)) {
@@ -412,8 +755,10 @@ int RunInspector(DWORD requestedPid) {
         return 10;
     }
     Log(L"Loaded module path: " + module.path);
+    EnumerateLoadedModules(pid);
 
     const bool peOk = ValidateRemotePe32(process, module);
+    if (peOk) LogImageMemoryRegions(process, module);
     CloseHandle(process);
     if (!peOk) {
         Log(L"RESULT: executable fingerprint matched, but loaded PE validation failed.");
@@ -422,12 +767,13 @@ int RunInspector(DWORD requestedPid) {
 
     Log(L"RESULT: target process and loaded x86 image validated.");
     Log(L"NOTE: no game-state addresses are guessed or scanned in this build.");
-    Log(L"Next: validate static disassembly against read-only live state samples.");
+    Log(L"Static imports, sections, relevant strings, loaded modules and image pages have been reported.");
+    Log(L"Next: map validated game-state structures from the exact image, then compare with live reads.");
     return 0;
 }
 
 int SelfTest() {
-    Log(L"TetrisBinaryInspector self-test");
+    Log(L"TetrisBinaryInspector 0.2 self-test");
     Log(sizeof(void*) == 4
         ? L"PASS: executable is compiled for 32-bit pointers."
         : L"FAIL: executable is not 32-bit.");
