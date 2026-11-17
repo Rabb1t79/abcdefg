@@ -26,7 +26,7 @@ This fingerprint is historical evidence, not proof that every current TOP instal
 7. Confirms PE32 / x86 and checks the loaded image size.
 8. Writes TetrisBinaryInspector-report.txt beside the EXE.
 
-It does not scan arbitrary process memory and does not claim to know the board, active piece, queue, score, or game-state offsets yet.
+It does not scan arbitrary process memory and does not claim to know the board, active piece, queue, score, or game-state offsets yet. The PE import/string report is static triage information, not a disassembly or proof that a particular function is used by gameplay.
 
 ## Build
 
