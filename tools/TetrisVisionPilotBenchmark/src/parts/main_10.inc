@@ -347,7 +347,7 @@ void CreateUi(AppState* s) {
     s->trainingStatsLabel=nullptr;
 
     AppendLog(s,L"程序已就绪。选择游戏窗口，自动定位或框选棋盘与 NEXT 后即可开始。");
-    AppendLog(s,L"方向键固定 2 ms 点按，释放间隔 0 ms；硬降按下 2 ms，之后不添加固定落稳等待。");
+    AppendLog(s,L"方向键默认按下 16 ms；安全出生区校准成功时可能缩短到 2–4 ms。硬降默认按下 16 ms；硬降后不加固定落稳等待，但会等待 NEXT 出生和棋盘一致性确认。");
     AppendLog(s,L"下一轮仍会等待新方块出生和棋盘一致性确认，确认后立即识别和搜索；失焦时暂停输入，切回后继续，F8 停止。");
 }
 
