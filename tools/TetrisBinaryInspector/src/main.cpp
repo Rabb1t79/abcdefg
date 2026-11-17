@@ -438,7 +438,7 @@ int SelfTest() {
         ? L"PASS: expected SHA256 constant length."
         : L"FAIL: expected SHA256 constant length.");
     return (sizeof(void*) == 4 &&
-            std::wcslen(kTargetExe) == 9 &&
+            std::wcslen(kTargetExe) == 10 &&
             std::strlen(kExpectedSha256) == 64) ? 0 : 1;
 }
 } // namespace
