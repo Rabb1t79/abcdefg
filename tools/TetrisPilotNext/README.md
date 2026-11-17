@@ -54,6 +54,8 @@ This increment adds two portable components:
 
 The rotation profile uses nominal 3×3 boxes for J/L/S/Z/T and a 4×4 box for I to calculate the geometric anchor shift when rotating normalized shapes. This is a pivot-alignment baseline, **not a verified TOP wall-kick table**. No wall-kick offsets are added. The planner only uses rotation transitions supplied in \`ReachabilityOptions\`; callers must add only offsets measured for the target client.
 
+The planner can also model natural gravity as an explicit wait edge. In live automation, a wait edge never sends a Down key: the runner waits for a visually confirmed downward move and then recomputes the remaining path from the new active-piece coordinates. This is separate from optional soft-drop input.
+
 The search cap is explicit. If \`truncated\` is true, the returned landing list is incomplete and must not be treated as exhaustive. The planner models a discrete input graph; it does not yet simulate the client's gravity timer, lock delay, DAS/ARR, or frame-level input timing.
 
 **Integration status:** this is a portable, unit-tested planning component in TetrisPilotNext. It is not yet wired to the live TOP window capture/input loop, and it does not replace the existing TetrisVisionPilotBenchmark executable. The next integration step is to feed verified visual snapshots into this planner and compare proposed paths against active-piece/Ghost feedback before enabling live dispatch.

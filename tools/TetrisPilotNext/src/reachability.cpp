@@ -166,6 +166,14 @@ ReachabilityResult ReachabilityPlanner::Enumerate(
             if (!enqueue(std::move(next))) break;
         }
 
+        if (options.allowGravitySteps &&
+            CanPlace(board, shape, current.x, current.y + 1)) {
+            next = current;
+            ++next.y;
+            next.path.push_back(MovementAction::WaitForGravity);
+            if (!enqueue(std::move(next))) break;
+        }
+
         if (rotationCount > 1) {
             const RotationTransitionRule* clockwise =
                 FindRule(options, active.kind, current.rotation, true);

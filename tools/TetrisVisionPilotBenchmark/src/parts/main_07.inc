@@ -487,6 +487,41 @@
                 }
 
                 const tetris::MovementAction action = currentPath.front();
+                if (action == tetris::MovementAction::WaitForGravity) {
+                    bool gravityObserved = false;
+                    for (int sample = 0; sample < 20 && !s->stop.load(); ++sample) {
+                        SleepCheck(s->stop, 100);
+                        if (s->stop.load()) break;
+                        VisionResult falling = AnalyzeStable(rect, threshold, capError, 2, 4);
+                        if (!capError.empty()) {
+                            log(L"等待自然重力时画面复核失败："+capError);
+                            actionStateUncertain = true;
+                            break;
+                        }
+                        if (!falling.hasActive || falling.active.name != piece.name ||
+                            falling.active.rotation != currentRotation ||
+                            falling.active.minX != currentX) {
+                            log(L"自然下落期间活动方块身份、朝向或横坐标发生意外变化；停止自动操作。");
+                            actionStateUncertain = true;
+                            break;
+                        }
+                        if (falling.active.minY > currentY) {
+                            currentY = falling.active.minY;
+                            gravityObserved = true;
+                            ++executedPathSteps;
+                            break;
+                        }
+                    }
+                    if (actionStateUncertain) break;
+                    if (!gravityObserved) {
+                        if (!s->stop.load())
+                            log(L"等待自然重力 2 秒仍未观察到方块下降；停止本次自动操作。");
+                        actionStateUncertain = true;
+                        break;
+                    }
+                    continue;
+                }
+
                 WORD key = 0;
                 int pressMs = tapMs;
                 switch (action) {

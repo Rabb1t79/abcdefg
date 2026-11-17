@@ -11,6 +11,7 @@ enum class MovementAction : std::uint8_t {
     MoveLeft,
     MoveRight,
     SoftDrop,
+    WaitForGravity,
     RotateClockwise,
     RotateCounterClockwise,
     HardDrop
@@ -29,6 +30,7 @@ struct RotationTransitionRule {
 struct ReachabilityOptions {
     std::size_t maxVisitedStates{8192};
     bool allowSoftDrop{true};
+    bool allowGravitySteps{false};
     std::vector<RotationTransitionRule> rotationTransitions;
 };
 

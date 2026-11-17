@@ -280,6 +280,27 @@ int main() {
     }
     CHECK(foundRightGap);
 
+    // Natural gravity is a wait edge, not a simulated Down-key input. This
+    // obstacle requires the O piece to fall below the wall before moving right.
+    Board gravityWall{};
+    for (int y = 0; y <= 4; ++y) CHECK(gravityWall.Set(5, y));
+    ReachabilityOptions gravityOptions = topOptions;
+    gravityOptions.allowGravitySteps = true;
+    const ReachabilityResult gravityReachable = ReachabilityPlanner{}.Enumerate(
+        gravityWall, ActivePiece{PieceKind::O, 0, 3, 0}, topCatalog, gravityOptions);
+    bool foundFallThenSlide = false;
+    for (const ReachablePlacement& landing : gravityReachable.landings) {
+        if (landing.placement.x != 4) continue;
+        bool waitedForGravity = false;
+        bool movedRight = false;
+        for (MovementAction action : landing.path) {
+            if (action == MovementAction::WaitForGravity) waitedForGravity = true;
+            if (action == MovementAction::MoveRight) movedRight = true;
+        }
+        if (waitedForGravity && movedRight) foundFallThenSlide = true;
+    }
+    CHECK(foundFallThenSlide);
+
     const ReachabilityResult invalidStart = ReachabilityPlanner{}.Enumerate(
         Board{}, ActivePiece{PieceKind::T, 0, -1, 0}, topCatalog, topOptions);
     CHECK(!invalidStart.validStart);

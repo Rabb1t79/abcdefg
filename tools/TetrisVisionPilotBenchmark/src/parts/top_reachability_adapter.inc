@@ -56,6 +56,7 @@ bool EnsureTopReachabilityProfile(std::wstring& error) {
                 g_topReachabilityOptions.rotationTransitions.end());
             // Soft drop is not calibrated. Re-plan after observing natural gravity.
             g_topReachabilityOptions.allowSoftDrop = false;
+            g_topReachabilityOptions.allowGravitySteps = true;
         }
     }
     if (!g_topReachabilityReady) {
