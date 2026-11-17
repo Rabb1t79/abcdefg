@@ -33,6 +33,30 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - name: Configure TOP SJE.JHH probe (Win32)
+        run: cmake -S tools/TopSjeJhhProbe -B .build/TopSjeJhhProbe -A Win32
+
+      - name: Build TOP SJE.JHH probe (Win32)
+        run: cmake --build .build/TopSjeJhhProbe --config Release --parallel
+
+      - name: Test TOP SJE.JHH probe
+        run: ctest --test-dir .build/TopSjeJhhProbe -C Release --output-on-failure
+
+      - name: Package TOP SJE.JHH probe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .build/top-sjejhh-staging | Out-Null
+          Copy-Item .build/TopSjeJhhProbe/Release/TopSjeJhhProbe.exe .build/top-sjejhh-staging/
+          Copy-Item tools/TopSjeJhhProbe/README.md .build/top-sjejhh-staging/
+          Compress-Archive -Path .build/top-sjejhh-staging/* -DestinationPath .build/TopSjeJhhProbe-Windows-x86.zip -Force
+
+      - name: Upload TOP SJE.JHH probe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TopSjeJhhProbe-Windows-x86
+          path: .build/TopSjeJhhProbe-Windows-x86.zip
+          if-no-files-found: error
+
       - name: Configure
         shell: pwsh
         env:
