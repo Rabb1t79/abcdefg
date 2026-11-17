@@ -285,6 +285,7 @@ int main() {
     Board gravityWall{};
     for (int y = 0; y <= 4; ++y) CHECK(gravityWall.Set(5, y));
     ReachabilityOptions gravityOptions = topOptions;
+    gravityOptions.allowSoftDrop = false;
     gravityOptions.allowGravitySteps = true;
     const ReachabilityResult gravityReachable = ReachabilityPlanner{}.Enumerate(
         gravityWall, ActivePiece{PieceKind::O, 0, 3, 0}, topCatalog, gravityOptions);
