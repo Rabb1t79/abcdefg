@@ -672,6 +672,30 @@ bool WriteVector(std::ofstream& file, const std::vector<std::uint8_t>& bytes) {
     return static_cast<bool>(file);
 }
 
+int ValidateReferenceArchive(const fs::path& archivePath) {
+    ArchiveIndex archive;
+    std::string error;
+    if (!ParseArchive(archivePath, archive, error)) {
+        std::cerr << "REFERENCE-ARCHIVE FAIL: " << error << "\\n";
+        return 1;
+    }
+    if (archive.folderId != "config" || archive.entries.empty()) {
+        std::cerr << "REFERENCE-ARCHIVE FAIL: unexpected folder id or empty index; folder="
+                  << archive.folderId << ", entries=" << archive.entries.size() << "\\n";
+        return 1;
+    }
+    std::cout << "PASS: TOP SJE.JHH reference archive parsed.\\n";
+    std::cout << "Internal folder: " << archive.folderId << "\\n";
+    std::cout << "Entries: " << archive.entries.size() << "\\n";
+    for (std::size_t i = 0; i < (std::min)(archive.entries.size(), std::size_t{12}); ++i) {
+        const auto& entry = archive.entries[i];
+        std::cout << "  " << entry.name << " offset=0x" << std::hex << entry.offset
+                  << " length=0x" << entry.length << std::dec
+                  << " encrypted=" << (entry.encrypted ? "yes" : "no") << "\\n";
+    }
+    return 0;
+}
+
 int SelfTest() {
     const std::string expected = "function Start() return 42 end\n";
     std::vector<std::uint8_t> filePlain(expected.begin(), expected.end());
@@ -752,6 +776,8 @@ int SelfTest() {
 int wmain(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
     if (argc == 2 && _wcsicmp(argv[1], L"--self-test") == 0) return SelfTest();
+    if (argc == 3 && _wcsicmp(argv[1], L"--validate-archive") == 0)
+        return ValidateReferenceArchive(fs::path(argv[2]));
 
     fs::path root;
     fs::path output;
