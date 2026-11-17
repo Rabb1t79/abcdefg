@@ -23,6 +23,8 @@ constexpr std::uint64_t kMaximumSnapshotBytes = 1024ull * 1024ull * 1024ull;
 constexpr std::size_t kMaximumDetailedRuns = 1000;
 constexpr std::size_t kMaximumPages = 100;
 constexpr std::size_t kMaximumAllocationGroups = 50;
+constexpr std::size_t kMaximumDetailedAllocationGroups = 12;
+constexpr std::size_t kMaximumRunsPerAllocation = 64;
 
 bool WriteU32(std::ostream& out, std::uint32_t value) {
     for (unsigned i = 0; i < 4; ++i)
@@ -421,6 +423,115 @@ bool CompareMemorySnapshots(const MemorySnapshotFile& before,
                 report << " | module: " << metadata->second.second;
         }
         report << "\n";
+    }
+
+    // Produce a second, allocation-focused detail pass. The original global
+    // range list is address-sorted and can be consumed by low-address noise
+    // before it reaches the most changed heaps or game image data.
+    std::vector<std::uint64_t> detailedAllocationBases;
+    for (std::size_t index = 0;
+         index < allocations.size() && index < kMaximumDetailedAllocationGroups; ++index) {
+        detailedAllocationBases.push_back(allocations[index].first);
+    }
+    std::map<std::uint64_t, std::vector<ChangedRun>> allocationDetails;
+    bool allocationRunActive = false;
+    std::uint64_t allocationRunBase = 0;
+    ChangedRun allocationRun;
+    std::uint64_t allocationLastChangedAddress = 0;
+    auto closeAllocationRun = [&]() {
+        if (!allocationRunActive) return;
+        auto& runs = allocationDetails[allocationRunBase];
+        if (runs.size() < kMaximumRunsPerAllocation)
+            runs.push_back(std::move(allocationRun));
+        allocationRun = {};
+        allocationRunActive = false;
+    };
+
+    i = 0;
+    j = 0;
+    while (i < a.size() && j < b.size()) {
+        const auto aEnd = a[i].base + static_cast<std::uint64_t>(a[i].bytes.size());
+        const auto bEnd = b[j].base + static_cast<std::uint64_t>(b[j].bytes.size());
+        const auto start = (std::max)(a[i].base, b[j].base);
+        const auto end = (std::min)(aEnd, bEnd);
+        if (start < end) {
+            const bool sameMapping =
+                a[i].allocationBase == b[j].allocationBase &&
+                a[i].regionKind == b[j].regionKind &&
+                a[i].moduleName == b[j].moduleName;
+            const bool selectedAllocation = std::find(
+                detailedAllocationBases.begin(), detailedAllocationBases.end(),
+                a[i].allocationBase) != detailedAllocationBases.end();
+            if (!sameMapping || !selectedAllocation) {
+                closeAllocationRun();
+            } else {
+                if (allocationRunActive &&
+                    allocationLastChangedAddress + 1 != start) {
+                    closeAllocationRun();
+                }
+                for (std::uint64_t address = start; address < end; ++address) {
+                    const auto oldByte =
+                        a[i].bytes[static_cast<std::size_t>(address - a[i].base)];
+                    const auto newByte =
+                        b[j].bytes[static_cast<std::size_t>(address - b[j].base)];
+                    if (oldByte == newByte) {
+                        closeAllocationRun();
+                        continue;
+                    }
+
+                    if (!allocationRunActive ||
+                        allocationRunBase != a[i].allocationBase ||
+                        allocationLastChangedAddress + 1 != address) {
+                        closeAllocationRun();
+                        allocationRunActive = true;
+                        allocationRunBase = a[i].allocationBase;
+                        allocationRun.base = address;
+                    }
+                    ++allocationRun.length;
+                    if (allocationRun.before.size() < 16) {
+                        allocationRun.before.push_back(oldByte);
+                        allocationRun.after.push_back(newByte);
+                    }
+                    allocationLastChangedAddress = address;
+                }
+            }
+        } else if (allocationRunActive &&
+                   allocationLastChangedAddress + 1 != start) {
+            closeAllocationRun();
+        }
+        if (aEnd <= bEnd) ++i;
+        if (bEnd <= aEnd) ++j;
+    }
+    closeAllocationRun();
+
+    report << "\n[Changed byte ranges grouped by largest allocations]\n";
+    for (const auto allocationBase : detailedAllocationBases) {
+        const auto count = changedByAllocation.find(allocationBase);
+        const auto metadata = allocationMetadata.find(allocationBase);
+        if (count == changedByAllocation.end()) continue;
+        report << "AllocationBase: 0x" << std::hex << allocationBase
+            << std::dec << " | changed bytes: " << count->second;
+        if (metadata != allocationMetadata.end()) {
+            report << " | region: " << RegionKindName(metadata->second.first);
+            if (!metadata->second.second.empty())
+                report << " | module: " << metadata->second.second;
+        }
+        report << "\n";
+        const auto runs = allocationDetails.find(allocationBase);
+        const std::size_t runCount = runs == allocationDetails.end()
+            ? 0 : runs->second.size();
+        if (runs != allocationDetails.end()) {
+            for (const auto& run : runs->second) {
+                report << "  Base: 0x" << std::hex << run.base << std::dec
+                    << " | length: " << run.length
+                    << " | before: " << HexBytes(run.before)
+                    << " | after: " << HexBytes(run.after) << "\n";
+            }
+        }
+        const auto allocationRunsCount = runCount;
+        if (allocationRunsCount == kMaximumRunsPerAllocation) {
+            report << "  Additional runs for this allocation may be omitted.\n";
+        }
     }
 
     report << "\n[Most changed 4 KiB pages]\n";
