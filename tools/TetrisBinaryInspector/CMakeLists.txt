@@ -1,3 +1,4 @@
+# Standalone Win32 x86 target; does not depend on the vision-player toolchain.
 cmake_minimum_required(VERSION 3.20)
 project(TetrisBinaryInspector LANGUAGES CXX)
 
