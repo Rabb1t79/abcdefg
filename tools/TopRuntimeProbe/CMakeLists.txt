@@ -9,6 +9,9 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
 endif()
 
 add_executable(TopRuntimeProbe src/main.cpp)
+set_property(TARGET TopRuntimeProbe PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
 target_compile_features(TopRuntimeProbe PRIVATE cxx_std_17)
 target_compile_definitions(TopRuntimeProbe PRIVATE
     UNICODE
