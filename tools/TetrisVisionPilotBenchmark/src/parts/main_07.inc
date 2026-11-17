@@ -553,53 +553,83 @@
                 SleepCheck(s->stop, keyGapMs);
                 if (s->stop.load()) break;
 
-                VisionResult afterAction = AnalyzeStable(rect, threshold, capError, 2, 4);
-                if (!capError.empty()) {
-                    log(L"BFS 输入后的画面复核失败："+capError);
-                    actionStateUncertain = true;
-                    break;
+                // A key pulse and the game's next rendered frame are not
+                // synchronous. Poll at a frame-sized interval instead of judging
+                // the input from two captures only 4 ms apart (often the same frame).
+                VisionResult afterAction{};
+                bool actionConfirmed = false;
+                const DWORD verifyStarted = GetTickCount();
+                int observedX = currentX;
+                int observedRotation = currentRotation;
+                while (!s->stop.load()) {
+                    capError.clear();
+                    afterAction = AnalyzeStable(rect, threshold, capError, 3, 16);
+                    if (!capError.empty()) {
+                        log(L"BFS 输入后的画面复核失败："+capError);
+                        actionStateUncertain = true;
+                        break;
+                    }
+
+                    if (afterAction.hasActive && afterAction.active.name == piece.name) {
+                        observedX = afterAction.active.minX;
+                        observedRotation = afterAction.active.rotation;
+
+                        if (action == tetris::MovementAction::MoveLeft) {
+                            const int expectedX = currentX - 1;
+                            if (observedRotation != currentRotation ||
+                                (observedX != currentX && observedX != expectedX)) {
+                                log(Format(L"左移复核失败：预期列 %d，实际列 %d；停止自动操作。",
+                                    expectedX, observedX));
+                                actionStateUncertain = true;
+                                break;
+                            }
+                            actionConfirmed = observedX == expectedX;
+                        } else if (action == tetris::MovementAction::MoveRight) {
+                            const int expectedX = currentX + 1;
+                            if (observedRotation != currentRotation ||
+                                (observedX != currentX && observedX != expectedX)) {
+                                log(Format(L"右移复核失败：预期列 %d，实际列 %d；停止自动操作。",
+                                    expectedX, observedX));
+                                actionStateUncertain = true;
+                                break;
+                            }
+                            actionConfirmed = observedX == expectedX;
+                        } else if (action == tetris::MovementAction::RotateClockwise) {
+                            const auto rotationIt = g_rotations.find(piece.name);
+                            if (rotationIt == g_rotations.end() || rotationIt->second.empty()) {
+                                log(L"旋转复核失败：缺少当前方块旋转目录。");
+                                actionStateUncertain = true;
+                                break;
+                            }
+                            const int count = static_cast<int>(rotationIt->second.size());
+                            const int expectedRotation = (currentRotation + 1) % count;
+                            if (observedRotation != currentRotation &&
+                                observedRotation != expectedRotation) {
+                                log(Format(L"顺时针旋转复核失败：预期方向索引 %d，实际索引 %d；停止自动操作。",
+                                    expectedRotation, observedRotation));
+                                actionStateUncertain = true;
+                                break;
+                            }
+                            actionConfirmed = observedRotation == expectedRotation;
+                        }
+
+                        if (actionConfirmed) break;
+                    }
+
+                    if (GetTickCount() - verifyStarted >= 350) break;
+                    SleepCheck(s->stop, 16);
                 }
-                if (!afterAction.hasActive || afterAction.active.name != piece.name) {
-                    log(L"BFS 输入后无法确认原活动方块；停止，避免按错对象。");
+                if (s->stop.load()) break;
+                if (actionStateUncertain) break;
+                if (!actionConfirmed) {
+                    log(Format(L"输入后 %lu ms 内未观察到预期位置/朝向变化；停止后续输入，不执行硬降。",
+                        static_cast<unsigned long>(GetTickCount() - verifyStarted)));
                     actionStateUncertain = true;
                     break;
                 }
 
-                const int observedX = afterAction.active.minX;
-                const int observedRotation = afterAction.active.rotation;
-                if (action == tetris::MovementAction::MoveLeft) {
-                    if (observedX != currentX - 1 ||
-                        observedRotation != currentRotation) {
-                        log(Format(L"左移复核失败：预期列 %d，实际列 %d；停止自动操作。",
-                            currentX - 1, observedX));
-                        actionStateUncertain = true;
-                        break;
-                    }
-                } else if (action == tetris::MovementAction::MoveRight) {
-                    if (observedX != currentX + 1 ||
-                        observedRotation != currentRotation) {
-                        log(Format(L"右移复核失败：预期列 %d，实际列 %d；停止自动操作。",
-                            currentX + 1, observedX));
-                        actionStateUncertain = true;
-                        break;
-                    }
-                } else if (action == tetris::MovementAction::RotateClockwise) {
-                    const auto rotationIt = g_rotations.find(piece.name);
-                    if (rotationIt == g_rotations.end() || rotationIt->second.empty()) {
-                        log(L"旋转复核失败：缺少当前方块旋转目录。");
-                        actionStateUncertain = true;
-                        break;
-                    }
-                    const int count = static_cast<int>(rotationIt->second.size());
-                    const int expectedRotation = (currentRotation + 1) % count;
-                    if (observedRotation != expectedRotation) {
-                        log(Format(L"顺时针旋转复核失败：预期方向索引 %d，实际索引 %d；停止自动操作。",
-                            expectedRotation, observedRotation));
-                        actionStateUncertain = true;
-                        break;
-                    }
+                if (action == tetris::MovementAction::RotateClockwise)
                     trackedRotationPhase = (trackedRotationPhase + 1) % 4;
-                }
 
                 // The game's own pivot/kick result is now the new bounding-box origin.
                 currentX = observedX;
