@@ -10,6 +10,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 add_executable(TetrisVisionPilotBenchmark WIN32 src/main.cpp)
 
 target_sources(TetrisVisionPilotBenchmark PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../TetrisPilotNext/src/solver.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../TetrisPilotNext/src/reachability.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../TetrisPilotNext/src/top_piece_profile.cpp")
 target_include_directories(TetrisVisionPilotBenchmark PRIVATE
