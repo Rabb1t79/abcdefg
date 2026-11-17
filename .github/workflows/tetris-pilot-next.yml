@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/tetris-cpu-gpu-benchmark-20261113
+      - feat/tetris-top-reachability-20261117
     paths:
       - "tools/TetrisPilotNext/**"
       - ".github/workflows/tetris-pilot-next.yml"

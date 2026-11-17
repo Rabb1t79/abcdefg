@@ -13,6 +13,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(tetris_pilot_core STATIC
     src/solver.cpp
+    src/reachability.cpp
+    src/top_piece_profile.cpp
     src/session_state.cpp
     src/memory_snapshot.cpp
 )

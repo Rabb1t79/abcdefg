@@ -5,6 +5,7 @@
 #include "tetris/game_ports.hpp"
 #include "tetris/session_state.hpp"
 #include "tetris/solver.hpp"
+#include "tetris/top_piece_profile.hpp"
 
 #include <cstdlib>
 #include <chrono>
@@ -226,6 +227,71 @@ int main() {
     CHECK(!board.Set(-1, 0));
 
     const PieceCatalog catalog = MakeCatalog();
+
+    // TOP visual geometry and configured nominal-pivot transitions must
+    // expose all seven piece families, including both S and Z.
+    PieceCatalog topCatalog;
+    ReachabilityOptions topOptions;
+    CHECK(ConfigureTopPieceProfile(topCatalog, topOptions));
+    const PieceKind topPieces[] = {
+        PieceKind::I, PieceKind::O, PieceKind::T, PieceKind::S,
+        PieceKind::Z, PieceKind::J, PieceKind::L
+    };
+    const std::size_t expectedRotations[] = {2, 1, 4, 2, 2, 4, 4};
+    for (std::size_t i = 0; i < sizeof(topPieces) / sizeof(topPieces[0]); ++i) {
+        const PieceDefinition* definition = topCatalog.Find(topPieces[i]);
+        CHECK(definition != nullptr);
+        CHECK(definition->rotations.size() == expectedRotations[i]);
+        const ReachabilityResult pieceResult = ReachabilityPlanner{}.Enumerate(
+            Board{}, ActivePiece{topPieces[i], 0, 3, 0}, topCatalog, topOptions);
+        CHECK(pieceResult.validStart);
+        CHECK(!pieceResult.truncated);
+        CHECK(!pieceResult.landings.empty());
+        for (const ReachablePlacement& landing : pieceResult.landings) {
+            CHECK(!landing.path.empty());
+            CHECK(landing.path.back() == MovementAction::HardDrop);
+        }
+    }
+
+    const ReachabilityResult tReachable = ReachabilityPlanner{}.Enumerate(
+        Board{}, ActivePiece{PieceKind::T, 0, 3, 0}, topCatalog, topOptions);
+    bool foundRotatedT = false;
+    for (const ReachablePlacement& landing : tReachable.landings) {
+        if (landing.placement.rotation != 0) foundRotatedT = true;
+    }
+    CHECK(foundRotatedT);
+
+    // A narrow landing gap checks that the path is found by legal intermediate
+    // states rather than by geometric drop-column enumeration alone.
+    Board narrowGap{};
+    for (int x = 0; x < 8; ++x) CHECK(narrowGap.Set(x, 19));
+    const ReachabilityResult gapReachable = ReachabilityPlanner{}.Enumerate(
+        narrowGap, ActivePiece{PieceKind::O, 0, 3, 0}, topCatalog, topOptions);
+    bool foundRightGap = false;
+    for (const ReachablePlacement& landing : gapReachable.landings) {
+        if (landing.placement.x == 8 && landing.placement.y == 18) {
+            foundRightGap = true;
+            bool movedRight = false;
+            for (MovementAction action : landing.path) {
+                if (action == MovementAction::MoveRight) movedRight = true;
+            }
+            CHECK(movedRight);
+        }
+    }
+    CHECK(foundRightGap);
+
+    const ReachabilityResult invalidStart = ReachabilityPlanner{}.Enumerate(
+        Board{}, ActivePiece{PieceKind::T, 0, -1, 0}, topCatalog, topOptions);
+    CHECK(!invalidStart.validStart);
+    CHECK(invalidStart.landings.empty());
+
+    ReachabilityOptions boundedOptions = topOptions;
+    boundedOptions.maxVisitedStates = 1;
+    const ReachabilityResult bounded = ReachabilityPlanner{}.Enumerate(
+        Board{}, ActivePiece{PieceKind::T, 0, 3, 0}, topCatalog, boundedOptions);
+    CHECK(bounded.validStart);
+    CHECK(bounded.truncated);
+    CHECK(bounded.visitedStates == 1);
 
     TestStateSource source;
     const SnapshotRead snapshot = source.ReadSnapshot();

@@ -44,6 +44,20 @@ The metadata report contains executable/module and virtual-memory region metadat
 - `memory_snapshot.cpp`: versioned binary snapshot format, guarded loader, same-address byte comparison, and compact difference report.
 - `inspector_main.cpp`: Windows utility to select the game window, export metadata, capture snapshots, and compare two snapshots.
 
+
+## TOP visual-piece reachability baseline
+
+This increment adds two portable components:
+
+- \`top_piece_profile.cpp\` builds the seven tetromino shapes using the same normalized screen-coordinate geometry already used by the repository's Tetris visual recognizer. The Up key is modeled as clockwise, matching that recognizer.
+- \`reachability.cpp\` performs breadth-first search over left, right, optional soft-drop, and explicitly configured clockwise/counter-clockwise rotation transitions. Each result includes the actual action path ending in Hard Drop, landing coordinates, and the resulting board after line clears.
+
+The rotation profile uses nominal 3×3 boxes for J/L/S/Z/T and a 4×4 box for I to calculate the geometric anchor shift when rotating normalized shapes. This is a pivot-alignment baseline, **not a verified TOP wall-kick table**. No wall-kick offsets are added. The planner only uses rotation transitions supplied in \`ReachabilityOptions\`; callers must add only offsets measured for the target client.
+
+The search cap is explicit. If \`truncated\` is true, the returned landing list is incomplete and must not be treated as exhaustive. The planner models a discrete input graph; it does not yet simulate the client's gravity timer, lock delay, DAS/ARR, or frame-level input timing.
+
+**Integration status:** this is a portable, unit-tested planning component in TetrisPilotNext. It is not yet wired to the live TOP window capture/input loop, and it does not replace the existing TetrisVisionPilotBenchmark executable. The next integration step is to feed verified visual snapshots into this planner and compare proposed paths against active-piece/Ghost feedback before enabling live dispatch.
+
 ## Implementation sequence
 
 1. Validate the portable board model, solver and unit tests.
@@ -70,7 +84,7 @@ Snapshot files contain raw bytes from private process memory and writable game-m
 
 ## Current scope
 
-The deterministic core, client/action ports, session state machine, portable tests, and Windows process inspector are in place. The inspector is a diagnostic utility, not yet the automated player. No in-process game-state addresses have been asserted or guessed.
+The deterministic board solver, TOP visual-piece profile, BFS reachability planner, client/action ports, session state machine, portable tests, and Windows process inspector are in place. The inspector remains a diagnostic utility, and the new reachability component is not yet connected to the live game capture/input loop. No in-process game-state addresses have been asserted or guessed.
 
 ## Build
 
