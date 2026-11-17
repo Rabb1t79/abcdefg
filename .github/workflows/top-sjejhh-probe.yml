@@ -28,6 +28,14 @@ jobs:
       - name: Run SJE.JHH parser and decrypt self-test
         run: ctest --test-dir build/TopSjeJhhProbe -C Release --output-on-failure
 
+      - name: Validate against TOP reference SJE.JHH fixture
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'SJE.JHH-config'
+          Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/BSoD-Ultimate/SjeJhhUtil/master/SjeJhhUtilTest/testdata/SJE.JHH-config' -OutFile $fixture
+          & build/TopSjeJhhProbe/Release/TopSjeJhhProbe.exe --validate-archive $fixture
+          if ($LASTEXITCODE -ne 0) { throw "TOP reference SJE.JHH validation failed" }
+
       - name: Package
         shell: pwsh
         run: |
