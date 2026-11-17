@@ -1,0 +1,6 @@
+Historical target fingerprint recorded by the prior TOP vision project
+Image name: tetris.exe
+File size: 1654784 bytes
+SHA256: 9951C928F15F71839CE97CCDFA29CF040EB6699C8CA54F82C7B31B0561784C42
+Architecture: x86 / PE32
+Status: historical evidence; exact client binary has not been reacquired in this session.
