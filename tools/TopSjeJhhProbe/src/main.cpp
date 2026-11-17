@@ -198,6 +198,18 @@ void AppendU32(std::vector<std::uint8_t>& data, std::uint32_t value) {
     data.push_back(static_cast<std::uint8_t>((value >> 24U) & 0xffU));
 }
 
+std::string HexPrefix(const std::vector<std::uint8_t>& data, std::size_t maxBytes = 16) {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string result;
+    const std::size_t count = (std::min)(data.size(), maxBytes);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (!result.empty()) result.push_back(' ');
+        result.push_back(kHex[(data[i] >> 4U) & 0x0fU]);
+        result.push_back(kHex[data[i] & 0x0fU]);
+    }
+    return result;
+}
+
 void AppendStringBlob(std::vector<std::uint8_t>& data, const std::string& value) {
     const auto length = static_cast<std::uint32_t>(value.size() + 1);
     AppendU32(data, length);
@@ -275,7 +287,12 @@ bool ParseArchive(const fs::path& path, ArchiveIndex& index, std::string& error)
     cursor = 0;
     std::uint32_t count = 0;
     if (!ReadU32(plainIndex, cursor, count) || count > kMaxEntries) {
-        error = "decrypted index has an invalid entry count";
+        std::ostringstream detail;
+        detail << "decrypted index has an invalid entry count; indexOffset=0x"
+               << std::hex << index.indexOffset << ", indexLength=0x" << index.indexLength
+               << ", decodedPrefix=[" << HexPrefix(plainIndex) << "]";
+        if (plainIndex.size() >= 4) detail << ", decodedCount=0x" << std::hex << count;
+        error = detail.str();
         return false;
     }
     if (!ReadStringBlob(plainIndex, cursor, index.folderId)) {
