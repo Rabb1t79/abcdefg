@@ -6,7 +6,7 @@
         if (s->stop.load()) throw std::runtime_error("用户请求停止。");
         log(gpuMode ? L"GPU Direct3D 11 硬件穷举已启动。" : L"CPU 多核穷举已启动。两者使用相同规则和多行消除优先目标。");
         KickWallLearner kickLearner;
-        constexpr bool benchmarkUseWallKick = true;
+        constexpr bool benchmarkUseWallKick = false; // BFS uses verified clockwise input; empirical kick probing stays disabled.
         if (benchmarkUseWallKick) {
             std::wstring kickPath=s->configPath;
             const size_t configSlash=kickPath.find_last_of(L"\\/");
@@ -417,14 +417,22 @@
             PolicyDecision decision{};
             Move move{};
             bool trainableAction = false; // This benchmark never writes policy samples.
+            std::vector<ReachableRoot> reachableRoots;
+            std::wstring reachabilityError;
+            if (!BuildReachableRoots(board, piece.name, piece.rotation,
+                                     piece.minX, piece.minY,
+                                     reachableRoots, reachabilityError)) {
+                log(L"BFS 可达路径搜索未通过，本次不执行硬降："+reachabilityError);
+                break;
+            }
             const auto solverStart = std::chrono::steady_clock::now();
             ExhaustiveDecision exhaustive{};
             CpuGpuBenchmarkInfo backendInfo{};
             const bool solved = gpuMode
                 ? gpuSolver.Solve(board,piece.name,piece.rotation,piece.minX,queue.pieces,
-                                  exhaustive,backendInfo,capError)
+                                  reachableRoots,exhaustive,backendInfo,capError)
                 : ChooseCpuParallelAction(board,piece.name,piece.rotation,piece.minX,queue.pieces,
-                                          exhaustive,backendInfo);
+                                          reachableRoots,exhaustive,backendInfo);
             if (!solved) {
                 if (gpuMode && !capError.empty()) throw std::runtime_error(WideToUtf8(capError));
                 throw std::runtime_error("所选硬件后端未找到合法落点；棋盘可能已堆到顶部，或识别结果不正确。");
@@ -435,8 +443,9 @@
             decision.expectedBoard = exhaustive.expectedBoard;
             decision.predictedLines = exhaustive.predictedLines;
             decision.searchedNextPieces = exhaustive.searchedNextPieces;
-            log(Format(L"%s 搜索完成：候选节点 %llu；纯计算 %.3f ms；CPU 线程 %u；设备 %s；前瞻当前方块 + %d NEXT；首步立即消行 %d；前瞻内多行清除计划 %d 次（%d 行）；目标旋转 %d、列 %d。",
+            log(Format(L"%s 搜索完成：BFS 可达首层落点 %llu；候选节点 %llu；纯计算 %.3f ms；CPU 线程 %u；设备 %s；前瞻当前方块 + %d NEXT；首步立即消行 %d；前瞻内多行清除计划 %d 次（%d 行）；目标旋转 %d、列 %d。",
                 backendInfo.backend.c_str(),
+                static_cast<unsigned long long>(reachableRoots.size()),
                 static_cast<unsigned long long>(exhaustive.nodes),backendInfo.computeMs,
                 backendInfo.cpuThreads,backendInfo.device.empty()?L"CPU":backendInfo.device.c_str(),
                 exhaustive.searchedNextPieces,exhaustive.predictedLines,
@@ -444,117 +453,170 @@
             if (gpuMode && backendInfo.initializationMs > 0.0)
                 log(Format(L"GPU 冷启动初始化另计：%.3f ms；不计入稳态搜索耗时。",backendInfo.initializationMs));
             const auto inputStarted = std::chrono::steady_clock::now();
-            const auto& pieceRotations=g_rotations[piece.name];
-            int rotateSteps=(move.rotation-piece.rotation+static_cast<int>(pieceRotations.size()))%static_cast<int>(pieceRotations.size());
-            log(Format(L"当前 %c 型（稳定采样 %d/3）；NEXT=[%s]；前瞻 %d 块；目标旋转 %d、列 %d，路径评分 %.2f。",
-                piece.name,check.activeStableSamples,FormatNextQueueConfidence(queue).c_str(),decision.searchedNextPieces,
-                move.rotation,move.x,move.score));
-            int currentX=piece.minX;
-            bool rotatedWithWallKick=false;
-            if (benchmarkUseWallKick && rotateSteps==1 && piece.minY<=4 &&
-                ExtractFeatures(board,0).value[3] <= 0.45) {
-                int kickedX=piece.minX;
-                std::wstring kickMessage;
-                const WallKickAttemptOutcome kickOutcome=TryEmpiricalWallKick(
-                    s->stop,target,rect,threshold,board,piece,move.rotation,move.x,
-                    tapMs,leftTapMs,rightTapMs,keyGapMs,
-                    kickLearner,kickedX,kickMessage);
-                if (kickOutcome==WallKickAttemptOutcome::Unsafe) {
-                    log(L"Wall Kick 尝试未能安全完成："+kickMessage+L" 自动操作已停止，未硬降。");
+            int currentX = piece.minX;
+            int currentY = piece.minY;
+            int currentRotation = piece.rotation;
+            bool actionPathReady = false;
+            bool actionStateUncertain = false;
+            bool actionNeedsReplan = false;
+            int executedPathSteps = 0;
+
+            // Recalculate from the latest observed active-piece state after each
+            // key pulse. This absorbs natural gravity and actual pivot displacement.
+            for (int pathIteration = 0; pathIteration < 64 && !s->stop.load(); ++pathIteration) {
+                std::vector<tetris::MovementAction> currentPath;
+                std::wstring pathError;
+                if (!FindReachablePathForTarget(
+                        board, piece.name, currentRotation, currentX, currentY,
+                        move.rotation, move.x, decision.expectedBoard,
+                        currentPath, pathError)) {
+                    log(L"BFS 路径在实时位置发生变化："+pathError+L"；取消本次硬降并重新规划。");
+                    actionNeedsReplan = true;
                     break;
                 }
-                if (kickOutcome==WallKickAttemptOutcome::Applied) {
-                    currentX=kickedX;
-                    rotatedWithWallKick=true;
+                if (currentPath.size() == 1 &&
+                    currentPath.front() == tetris::MovementAction::HardDrop) {
+                    actionPathReady = true;
+                    break;
+                }
+                if (currentPath.size() < 2 ||
+                    currentPath.back() != tetris::MovementAction::HardDrop) {
+                    log(L"BFS 返回的实时路径格式异常；停止本次操作。");
+                    actionStateUncertain = true;
+                    break;
+                }
+
+                const tetris::MovementAction action = currentPath.front();
+                WORD key = 0;
+                int pressMs = tapMs;
+                switch (action) {
+                case tetris::MovementAction::MoveLeft:
+                    key = VK_LEFT;
+                    pressMs = leftTapMs;
+                    break;
+                case tetris::MovementAction::MoveRight:
+                    key = VK_RIGHT;
+                    pressMs = rightTapMs;
+                    break;
+                case tetris::MovementAction::RotateClockwise:
+                    key = VK_UP;
+                    break;
+                default:
+                    log(L"BFS 提出了尚未校准的输入动作（软降或逆时针旋转）；拒绝执行。");
+                    actionStateUncertain = true;
+                    break;
+                }
+                if (actionStateUncertain) break;
+
+                std::wstring inputError;
+                if (!TapKey(target, key, pressMs, s->stop, inputError)) {
+                    if (s->stop.load()) break;
+                    log(L"BFS 路径输入失败："+inputError+L"；停止自动操作。");
+                    actionStateUncertain = true;
+                    break;
+                }
+                SleepCheck(s->stop, keyGapMs);
+                if (s->stop.load()) break;
+
+                VisionResult afterAction = AnalyzeStable(rect, threshold, capError, 2, 4);
+                if (!capError.empty()) {
+                    log(L"BFS 输入后的画面复核失败："+capError);
+                    actionStateUncertain = true;
+                    break;
+                }
+                if (!afterAction.hasActive || afterAction.active.name != piece.name) {
+                    log(L"BFS 输入后无法确认原活动方块；停止，避免按错对象。");
+                    actionStateUncertain = true;
+                    break;
+                }
+
+                const int observedX = afterAction.active.minX;
+                const int observedRotation = afterAction.active.rotation;
+                if (action == tetris::MovementAction::MoveLeft) {
+                    if (observedX != currentX - 1 ||
+                        observedRotation != currentRotation) {
+                        log(Format(L"左移复核失败：预期列 %d，实际列 %d；停止自动操作。",
+                            currentX - 1, observedX));
+                        actionStateUncertain = true;
+                        break;
+                    }
+                } else if (action == tetris::MovementAction::MoveRight) {
+                    if (observedX != currentX + 1 ||
+                        observedRotation != currentRotation) {
+                        log(Format(L"右移复核失败：预期列 %d，实际列 %d；停止自动操作。",
+                            currentX + 1, observedX));
+                        actionStateUncertain = true;
+                        break;
+                    }
+                } else if (action == tetris::MovementAction::RotateClockwise) {
+                    const auto rotationIt = g_rotations.find(piece.name);
+                    if (rotationIt == g_rotations.end() || rotationIt->second.empty()) {
+                        log(L"旋转复核失败：缺少当前方块旋转目录。");
+                        actionStateUncertain = true;
+                        break;
+                    }
+                    const int count = static_cast<int>(rotationIt->second.size());
+                    const int expectedRotation = (currentRotation + 1) % count;
+                    if (observedRotation != expectedRotation) {
+                        log(Format(L"顺时针旋转复核失败：预期方向索引 %d，实际索引 %d；停止自动操作。",
+                            expectedRotation, observedRotation));
+                        actionStateUncertain = true;
+                        break;
+                    }
                     trackedRotationPhase = (trackedRotationPhase + 1) % 4;
-                    rotateSteps=0;
-                    log(kickMessage);
-                } else if (kickOutcome==WallKickAttemptOutcome::FailedAndRestored) {
-                    log(kickMessage);
                 }
-            }
-            if (!rotatedWithWallKick) {
-                for(int i=0;i<rotateSteps && !s->stop.load();++i) {
-                    std::wstring err; if(!TapKey(target,VK_UP,tapMs,s->stop,err)) { if(s->stop.load()) break; throw std::runtime_error("旋转按键发送失败："+WideToUtf8(err)); }
-                    SleepCheck(s->stop,keyGapMs);
+
+                // The game's own pivot/kick result is now the new bounding-box origin.
+                currentX = observedX;
+                currentY = afterAction.active.minY;
+                currentRotation = observedRotation;
+                ++executedPathSteps;
+                if (executedPathSteps > 40) {
+                    log(L"BFS 路径超过 40 个已验证输入步骤；停止本次操作。");
+                    actionStateUncertain = true;
+                    break;
                 }
-                if(s->stop.load())break;
-            }
-            if(rotateSteps>0) {
-                SleepCheck(s->stop,55);
-                if(s->stop.load())break;
-                VisionResult rotated=AnalyzeStable(rect,threshold,capError,2,4);
-                if(!capError.empty()) { log(L"旋转后复核截图失败："+capError); break; }
-                bool usedGhost=false;
-                if(!ReadPieceColumn(rotated,piece.name,move.rotation,currentX,usedGhost,piece.minY)) {
-                    log(L"旋转后无法通过活动方块或 Ghost 确认目标朝向；取消本次落块并重新规划。");
-                    SleepCheck(s->stop,100);
-                    continue;
-                }
-                if(usedGhost) log(Format(L"旋转复核：Ghost 确认 %c 型、旋转 %d、落点列 %d。",
-                    piece.name,move.rotation,currentX));
-                // The visible geometry confirmed the requested turn count.
-                // Keep the full 0..3 phase even for 180-degree symmetric pieces.
-                trackedRotationPhase = (trackedRotationPhase + rotateSteps) % 4;
             }
 
-            int delta=move.x-currentX;
-            WORD moveKey=delta>0?VK_RIGHT:VK_LEFT;
-            for(int i=0;i<std::abs(delta) && !s->stop.load();++i) {
-                std::wstring err;
-                if(!TapKey(target,moveKey,moveKey==VK_RIGHT?rightTapMs:leftTapMs,s->stop,err)) { if(s->stop.load()) break; throw std::runtime_error("移动按键发送失败："+WideToUtf8(err)); }
-                SleepCheck(s->stop,keyGapMs);
-            }
-            if(s->stop.load())break;
-
-            // Verify the actual screen position before hard drop. A key pulse is not
-            // proof that the game advanced exactly one column.
-            SleepCheck(s->stop,45);
-            if(s->stop.load())break;
-            VisionResult positioned=AnalyzeStable(rect,threshold,capError,2,4);
-            if(!capError.empty()) { log(L"横移后位置复核截图失败："+capError); break; }
-            int observedX=0;
-            bool usedGhost=false;
-            if(!ReadPieceColumn(positioned,piece.name,move.rotation,observedX,usedGhost,piece.minY)) {
-                log(L"横移后无法通过活动方块或 Ghost 确认当前位置；取消本次硬降，不记录训练样本。");
-                SleepCheck(s->stop,100);
+            if (s->stop.load()) break;
+            if (actionStateUncertain) break;
+            if (actionNeedsReplan) {
+                SleepCheck(s->stop, 80);
                 continue;
             }
-            if(usedGhost) log(Format(L"Ghost 落点反馈：旋转 %d、落点列 %d。",
-                positioned.ghost.rotation,positioned.ghost.minX));
-
-            int correction=move.x-observedX;
-            if(correction!=0) {
-                log(Format(L"横移复核发现偏差：目标列 %d，实际落点列 %d；尝试按反馈纠正。",
-                    move.x,observedX));
-                const WORD correctionKey=correction>0?VK_RIGHT:VK_LEFT;
-                for(int i=0;i<std::abs(correction) && !s->stop.load();++i) {
-                    std::wstring err;
-                    if(!TapKey(target,correctionKey,correctionKey==VK_RIGHT?rightTapMs:leftTapMs,s->stop,err)) { if(s->stop.load()) break; throw std::runtime_error("位置纠正按键发送失败："+WideToUtf8(err)); }
-                    SleepCheck(s->stop,keyGapMs);
-                }
-                if(s->stop.load())break;
-                SleepCheck(s->stop,45);
-                if(s->stop.load())break;
-                VisionResult corrected=AnalyzeStable(rect,threshold,capError,2,4);
-                if(!capError.empty()) { log(L"位置纠正后复核截图失败："+capError); break; }
-                int correctedX=0;
-                bool correctedByGhost=false;
-                if(!ReadPieceColumn(corrected,piece.name,move.rotation,correctedX,correctedByGhost,piece.minY) ||
-                   correctedX!=move.x) {
-                    log(L"位置纠正后仍未到达目标列；本次取消硬降并重新规划。");
-                    SleepCheck(s->stop,100);
-                    continue;
-                }
-                positioned=std::move(corrected);
-                observedX=correctedX;
-                usedGhost=correctedByGhost;
-            } else {
-                // Exact match: the move pulses reached the intended column.
+            if (!actionPathReady) {
+                log(L"BFS 路径未能在限定步骤内完成；停止自动操作。");
+                break;
             }
 
-            log(Format(L"位置验证通过：旋转 %d、实际落点列 %d（%s）；准备硬降。",
-                move.rotation,observedX,usedGhost?L"Ghost轮廓":L"活动方块"));
+            // The Ghost is the final landing oracle. A correct input sequence
+            // is not enough: projected landing column and orientation must agree.
+            SleepCheck(s->stop, 35);
+            if (s->stop.load()) break;
+            VisionResult positioned = AnalyzeStable(rect, threshold, capError, 2, 4);
+            if (!capError.empty()) {
+                log(L"硬降前 Ghost 复核截图失败："+capError);
+                break;
+            }
+            int observedX = 0;
+            bool usedGhost = false;
+            if (!ReadPieceColumn(positioned, piece.name, move.rotation,
+                                 observedX, usedGhost, piece.minY) ||
+                observedX != move.x) {
+                log(Format(L"硬降前落点复核失败：目标列 %d，观测列 %d；本次取消硬降。",
+                    move.x, observedX));
+                SleepCheck(s->stop, 80);
+                continue;
+            }
+            if (positioned.hasActive &&
+                (positioned.active.name != piece.name ||
+                 positioned.active.rotation != move.rotation)) {
+                log(L"硬降前活动方块朝向与求解结果不一致；本次取消硬降。");
+                SleepCheck(s->stop, 80);
+                continue;
+            }
+            log(Format(L"BFS 路径执行并通过逐步复核：%d 个输入动作；目标旋转 %d、实际 Ghost 落点列 %d；准备硬降。",
+                executedPathSteps, move.rotation, observedX));
             std::wstring err;
             if(!TapKey(target,VK_SPACE,tapMs,s->stop,err)) { if(s->stop.load()) break; throw std::runtime_error("硬降按键发送失败："+WideToUtf8(err)); }
             pendingExpectedBoard = decision.expectedBoard;

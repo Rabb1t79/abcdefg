@@ -1,3 +1,4 @@
+#include "tetris/top_piece_profile.hpp"
 #include "parts/main_00.inc"
 #include "parts/main_01.inc"
 #include "parts/main_02.inc"
@@ -6,6 +7,7 @@
 #include "parts/main_04.inc"
 #include "parts/main_05.inc"
 #include "parts/main_05_math.inc"
+#include "parts/top_reachability_adapter.inc"
 #include "parts/cpu_gpu_benchmark.inc"
 #include "parts/main_06.inc"
 #include "parts/main_07.inc"

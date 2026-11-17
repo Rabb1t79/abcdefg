@@ -9,6 +9,12 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 add_executable(TetrisVisionPilotBenchmark WIN32 src/main.cpp)
 
+target_sources(TetrisVisionPilotBenchmark PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../TetrisPilotNext/src/reachability.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../TetrisPilotNext/src/top_piece_profile.cpp")
+target_include_directories(TetrisVisionPilotBenchmark PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../TetrisPilotNext/include")
+
 # Compile both compute-shader entry points during CI so runtime FXC errors
 # are caught before a Windows package is published.
 add_executable(TetrisShaderValidation src/shader_validation.cpp)

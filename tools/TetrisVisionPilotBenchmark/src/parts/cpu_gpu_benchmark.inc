@@ -13,12 +13,15 @@ struct CpuGpuBenchmarkInfo {
     double initializationMs{};
 };
 
-bool ChooseCpuParallelAction(const Board& board, char piece, int currentRotation,
-                             int currentX, const std::vector<char>& nextQueue,
+bool ChooseCpuParallelAction(const Board& board, char piece,
+                             int currentRotation, int currentX,
+                             const std::vector<char>& nextQueue,
+                             const std::vector<ReachableRoot>& roots,
                              ExhaustiveDecision& decision,
                              CpuGpuBenchmarkInfo& info) {
     const auto rotationIt = g_rotations.find(piece);
-    if (rotationIt == g_rotations.end() || rotationIt->second.empty()) return false;
+    if (rotationIt == g_rotations.end() || rotationIt->second.empty() || roots.empty())
+        return false;
     std::vector<char> sequence{piece};
     const int futureCount = (std::min)(2, static_cast<int>(nextQueue.size()));
     for (int i = 0; i < futureCount; ++i) sequence.push_back(nextQueue[static_cast<size_t>(i)]);
@@ -26,9 +29,6 @@ bool ChooseCpuParallelAction(const Board& board, char piece, int currentRotation
     LARGE_INTEGER frequency{}, started{}, finished{};
     QueryPerformanceFrequency(&frequency);
     QueryPerformanceCounter(&started);
-
-    const std::vector<ActionCandidate> roots = EnumerateActions(board, piece);
-    if (roots.empty()) return false;
 
     const unsigned int hw = (std::max)(1u, std::thread::hardware_concurrency());
     const unsigned int workers = (std::min)(hw, static_cast<unsigned int>(roots.size()));
@@ -40,17 +40,15 @@ bool ChooseCpuParallelAction(const Board& board, char piece, int currentRotation
         for (;;) {
             const size_t index = cursor.fetch_add(1, std::memory_order_relaxed);
             if (index >= roots.size()) break;
-            const ActionCandidate& root = roots[index];
-            const int rotationCount = static_cast<int>(rotationIt->second.size());
-            const int rotationTaps = rotationCount > 0
-                ? (root.move.rotation - currentRotation + rotationCount) % rotationCount : 0;
-            const int horizontalTaps = std::abs(root.move.x - currentX);
+            const ReachableRoot& reachableRoot = roots[index];
+            const ActionCandidate& root = reachableRoot.candidate;
             const int rootMultiEvents = root.linesCleared >= 2 ? 1 : 0;
             const int rootMultiLines = root.linesCleared >= 2 ? root.linesCleared : 0;
             ExhaustiveSearch(root.nextBoard, sequence, 1, 1, root.linesCleared,
                 rootMultiEvents, rootMultiLines, root.move, root.nextBoard,
-                root.linesCleared, rotationTaps, horizontalTaps,
-                currentRotation, currentX, localBest[index], localNodes[index]);
+                root.linesCleared, reachableRoot.rotationTaps,
+                reachableRoot.horizontalTaps, currentRotation, currentX,
+                localBest[index], localNodes[index]);
         }
     };
 
@@ -86,11 +84,13 @@ bool ChooseCpuParallelAction(const Board& board, char piece, int currentRotation
     decision.keyTaps = best.evaluation.keyTaps;
     decision.multiClearEvents = best.evaluation.multiClearEvents;
     decision.multiClearLines = best.evaluation.multiClearLines;
-    info.backend = L"CPU 多核穷举";
-    info.device = Format(L"%u 个逻辑处理器；本次使用 %u 个工作线程", hw, workers);
+    info.backend = L"CPU 多核穷举（BFS 可达根节点）";
+    info.device = Format(L"%u 个逻辑处理器；本次使用 %u 个工作线程；可达首层落点 %llu",
+        hw, workers, static_cast<unsigned long long>(roots.size()));
     info.computeMs = elapsedMs;
     info.candidateChecks = nodes;
     info.cpuThreads = workers;
+    (void)board;
     return true;
 }
 
@@ -225,11 +225,17 @@ public:
     double InitializationMs() const { return initializationMs_; }
 
     bool Solve(const Board& board, char piece, int currentRotation, int currentX,
-               const std::vector<char>& nextQueue, ExhaustiveDecision& decision,
+               const std::vector<char>& nextQueue,
+               const std::vector<ReachableRoot>& roots,
+               ExhaustiveDecision& decision,
                CpuGpuBenchmarkInfo& info, std::wstring& error) {
         if (!Initialize(error)) return false;
         const int pieceId = PieceId(piece);
         if (pieceId < 0) { error = L"GPU 搜索不认识当前方块类型。"; return false; }
+        if (roots.empty() || roots.size() > kCapacity) {
+            error = L"GPU 收到的 BFS 可达根节点为空或超过缓冲区容量。";
+            return false;
+        }
         const int sequenceLength = 1 + (std::min)(2, static_cast<int>(nextQueue.size()));
         std::uint32_t pieceIds[3]{static_cast<std::uint32_t>(pieceId),0,0};
         for (int i = 1; i < sequenceLength; ++i) {
@@ -238,14 +244,35 @@ public:
             pieceIds[i] = static_cast<std::uint32_t>(id);
         }
 
-        GpuNode root{};
-        for (int y = 0; y < ROWS; ++y) {
-            for (int x = 0; x < COLS; ++x) if (board[y][x]) root.rows[y] |= (1u << x);
+        std::vector<GpuNode> rootNodes(roots.size());
+        for (size_t i = 0; i < roots.size(); ++i) {
+            const ReachableRoot& reachableRoot = roots[i];
+            const ActionCandidate& root = reachableRoot.candidate;
+            GpuNode& node = rootNodes[i];
+            for (int y = 0; y < ROWS; ++y) {
+                for (int x = 0; x < COLS; ++x) {
+                    if (root.nextBoard[y][x]) {
+                        node.rows[y] |= (1u << x);
+                        node.firstRows[y] |= (1u << x);
+                    }
+                }
+            }
+            node.placed = 1;
+            node.lines = root.linesCleared;
+            node.firstX = root.move.x;
+            node.firstRotation = root.move.rotation;
+            node.rotationTaps = reachableRoot.rotationTaps;
+            node.horizontalTaps = reachableRoot.horizontalTaps;
+            node.firstLines = root.linesCleared;
+            node.multiClearEvents = root.linesCleared >= 2 ? 1 : 0;
+            node.multiClearLines = root.linesCleared >= 2 ? root.linesCleared : 0;
+            node.valid = 1;
+            node.terminal = 0;
         }
-        root.valid = 1;
+
         D3D11_BOX firstNodeBox{};
         firstNodeBox.left = 0;
-        firstNodeBox.right = sizeof(GpuNode);
+        firstNodeBox.right = static_cast<UINT>(sizeof(GpuNode) * rootNodes.size());
         firstNodeBox.top = 0;
         firstNodeBox.bottom = 1;
         firstNodeBox.front = 0;
@@ -254,17 +281,17 @@ public:
         LARGE_INTEGER frequency{}, started{}, finished{};
         QueryPerformanceFrequency(&frequency);
         QueryPerformanceCounter(&started);
-        context_->UpdateSubresource(bufferA_.get(), 0, &firstNodeBox, &root, 0, 0);
+        context_->UpdateSubresource(
+            bufferA_.get(), 0, &firstNodeBox, rootNodes.data(), 0, 0);
         ID3D11Buffer* constants = paramsBuffer_.get();
         context_->CSSetConstantBuffers(0, 1, &constants);
         context_->CSSetShader(expandShader_.get(), nullptr, 0);
 
-        UINT inputCount = 1;
+        UINT inputCount = static_cast<UINT>(rootNodes.size());
         bool useAAsInput = true;
-        for (int depth = 0; depth < sequenceLength; ++depth) {
-            // Each parent produces exactly 40 action slots. Check the output
-            // capacity before dispatch; do not multiply once more after the
-            // final depth, which previously rejected the valid 64,000-leaf tree.
+        // The current piece has already been placed by BFS. GPU search expands
+        // only the visible NEXT prefix from those reachable first-ply boards.
+        for (int depth = 1; depth < sequenceLength; ++depth) {
             if (inputCount == 0 || inputCount > kCapacity / 40) {
                 error = L"GPU 搜索节点超过预设容量，拒绝截断搜索。";
                 return false;
@@ -297,6 +324,7 @@ public:
             error = L"GPU 搜索结果数量超过预设容量，拒绝截断搜索。";
             return false;
         }
+
 
         GpuParams reduceParams{};
         reduceParams.inputCount = inputCount;
@@ -350,9 +378,9 @@ public:
         decision.expectedBoard = firstBoard;
         decision.predictedLines = firstLines;
         decision.searchedNextPieces = sequenceLength - 1;
-        std::uint64_t candidateChecks = 0;
-        std::uint64_t levelParents = 1;
-        for (int depth = 0; depth < sequenceLength; ++depth) {
+        std::uint64_t candidateChecks = roots.size();
+        std::uint64_t levelParents = roots.size();
+        for (int depth = 1; depth < sequenceLength; ++depth) {
             candidateChecks += levelParents * 40ull;
             levelParents *= 40ull;
         }
