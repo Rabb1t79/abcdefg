@@ -89,6 +89,12 @@ TopSjeJhhProbe.exe --self-test
 
 The self-test creates a temporary synthetic SJE.JHH archive, checks the index parser, decrypts one TOP-style Lua payload, compares the result, and removes the temporary file.
 
+For maintainers, the parser can also be checked against a published TOP reference archive without a target client installation:
+
+```powershell
+TopSjeJhhProbe.exe --validate-archive "path\\to\\SJE.JHH-config"
+```
+
 ## Build
 
 The GitHub Actions workflow builds the 32-bit Windows executable and runs the self-test. No local Visual Studio installation is required to obtain the packaged artifact.
