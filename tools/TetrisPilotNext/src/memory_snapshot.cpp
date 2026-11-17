@@ -25,6 +25,9 @@ constexpr std::size_t kMaximumPages = 100;
 constexpr std::size_t kMaximumAllocationGroups = 50;
 constexpr std::size_t kMaximumDetailedAllocationGroups = 12;
 constexpr std::size_t kMaximumRunsPerAllocation = 64;
+constexpr std::size_t kMaximumContextPrivateAllocations = 8;
+constexpr std::size_t kMaximumContextRunsPerAllocation = 8;
+constexpr std::uint64_t kContextBytes = 16;
 
 bool WriteU32(std::ostream& out, std::uint32_t value) {
     for (unsigned i = 0; i < 4; ++i)
@@ -433,6 +436,16 @@ bool CompareMemorySnapshots(const MemorySnapshotFile& before,
          index < allocations.size() && index < kMaximumDetailedAllocationGroups; ++index) {
         detailedAllocationBases.push_back(allocations[index].first);
     }
+    // Small but meaningful changes in the game's mapped image (.data) are
+    // easy to miss in a top-N heap ranking. Always include every changed
+    // image allocation, even when it has only a handful of changed bytes.
+    for (const auto& metadata : allocationMetadata) {
+        if (metadata.second.first == MemoryRegionKind::Image &&
+            std::find(detailedAllocationBases.begin(), detailedAllocationBases.end(),
+                metadata.first) == detailedAllocationBases.end()) {
+            detailedAllocationBases.push_back(metadata.first);
+        }
+    }
     std::map<std::uint64_t, std::vector<ChangedRun>> allocationDetails;
     bool allocationRunActive = false;
     std::uint64_t allocationRunBase = 0;
@@ -532,6 +545,115 @@ bool CompareMemorySnapshots(const MemorySnapshotFile& before,
         if (allocationRunsCount == kMaximumRunsPerAllocation) {
             report << "  Additional runs for this allocation may be omitted.\n";
         }
+    }
+
+    // Select a compact set of private-memory candidates (moderate change count)
+    // plus every changed image allocation. Include unchanged bytes around each
+    // selected range so pointer fields, adjacent coordinates and structure
+    // boundaries are visible in the text report without sending raw snapshots.
+    std::vector<std::uint64_t> contextAllocationBases;
+    for (const auto& allocation : allocations) {
+        if (contextAllocationBases.size() >= kMaximumContextPrivateAllocations)
+            break;
+        const auto metadata = allocationMetadata.find(allocation.first);
+        if (metadata == allocationMetadata.end() ||
+            metadata->second.first != MemoryRegionKind::Private ||
+            allocation.second < 100 || allocation.second > 5000) {
+            continue;
+        }
+        contextAllocationBases.push_back(allocation.first);
+    }
+    for (const auto& metadata : allocationMetadata) {
+        if (metadata.second.first == MemoryRegionKind::Image &&
+            std::find(contextAllocationBases.begin(), contextAllocationBases.end(),
+                metadata.first) == contextAllocationBases.end()) {
+            contextAllocationBases.push_back(metadata.first);
+        }
+    }
+
+    const auto findSpanAt = [](const std::vector<MemorySnapshotSpan>& spans,
+                               std::uint64_t address) -> const MemorySnapshotSpan* {
+        const auto it = std::upper_bound(spans.begin(), spans.end(), address,
+            [](std::uint64_t value, const MemorySnapshotSpan& span) {
+                return value < span.base;
+            });
+        if (it == spans.begin()) return nullptr;
+        const auto& candidate = *std::prev(it);
+        const auto end = candidate.base +
+            static_cast<std::uint64_t>(candidate.bytes.size());
+        return address >= candidate.base && address < end ? &candidate : nullptr;
+    };
+
+    report << "\n[Candidate memory context windows]\n";
+    report << "Each window shows 16 bytes before and after a changed range when available.\n";
+    for (const auto allocationBase : contextAllocationBases) {
+        const auto metadata = allocationMetadata.find(allocationBase);
+        const auto runs = allocationDetails.find(allocationBase);
+        if (metadata == allocationMetadata.end() || runs == allocationDetails.end())
+            continue;
+
+        const auto count = changedByAllocation.find(allocationBase);
+        report << "AllocationBase: 0x" << std::hex << allocationBase << std::dec
+            << " | region: " << RegionKindName(metadata->second.first);
+        if (!metadata->second.second.empty())
+            report << " | module: " << metadata->second.second;
+        if (count != changedByAllocation.end())
+            report << " | changed bytes: " << count->second;
+        report << "\n";
+
+        std::size_t emitted = 0;
+        for (const auto& run : runs->second) {
+            if (emitted >= kMaximumContextRunsPerAllocation) break;
+            const auto* beforeSpan = findSpanAt(a, run.base);
+            const auto* afterSpan = findSpanAt(b, run.base);
+            if (!beforeSpan || !afterSpan ||
+                beforeSpan->allocationBase != allocationBase ||
+                afterSpan->allocationBase != allocationBase ||
+                beforeSpan->regionKind != afterSpan->regionKind ||
+                beforeSpan->moduleName != afterSpan->moduleName) {
+                continue;
+            }
+
+            const auto beforeEnd = beforeSpan->base +
+                static_cast<std::uint64_t>(beforeSpan->bytes.size());
+            const auto afterEnd = afterSpan->base +
+                static_cast<std::uint64_t>(afterSpan->bytes.size());
+            const auto commonEnd = (std::min)(beforeEnd, afterEnd);
+            const auto contextStart = run.base > beforeSpan->base + kContextBytes
+                ? run.base - kContextBytes : beforeSpan->base;
+            const auto changedEnd = run.base + run.length;
+            const auto contextEnd = (std::min)(commonEnd, changedEnd + kContextBytes);
+            if (contextStart >= contextEnd || run.base + run.length > commonEnd)
+                continue;
+
+            const auto beforeOffset = static_cast<std::size_t>(
+                contextStart - beforeSpan->base);
+            const auto afterOffset = static_cast<std::size_t>(
+                contextStart - afterSpan->base);
+            const auto contextLength = static_cast<std::size_t>(
+                contextEnd - contextStart);
+            std::vector<std::uint8_t> beforeWindow(
+                beforeSpan->bytes.begin() + static_cast<std::ptrdiff_t>(beforeOffset),
+                beforeSpan->bytes.begin() + static_cast<std::ptrdiff_t>(
+                    beforeOffset + contextLength));
+            std::vector<std::uint8_t> afterWindow(
+                afterSpan->bytes.begin() + static_cast<std::ptrdiff_t>(afterOffset),
+                afterSpan->bytes.begin() + static_cast<std::ptrdiff_t>(
+                    afterOffset + contextLength));
+
+            report << "  Changed: 0x" << std::hex << run.base << std::dec
+                << " | length: " << run.length
+                << " | allocation offset: 0x" << std::hex
+                << (run.base - allocationBase) << std::dec << "\n"
+                << "    before[" << contextLength << "]: "
+                << HexBytes(beforeWindow) << "\n"
+                << "    after [" << contextLength << "]: "
+                << HexBytes(afterWindow) << "\n";
+            ++emitted;
+        }
+        if (runs->second.size() > emitted)
+            report << "  Context windows emitted: " << emitted
+                << " (additional ranges omitted)\n";
     }
 
     report << "\n[Most changed 4 KiB pages]\n";
