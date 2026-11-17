@@ -40,6 +40,21 @@ std::string PathUtf8(const fs::path& path) {
     return path.u8string();
 }
 
+bool IsPathWithin(const fs::path& candidate, const fs::path& parent) {
+    std::wstring child = candidate.lexically_normal().wstring();
+    std::wstring base = parent.lexically_normal().wstring();
+    while (base.size() > 3 && (base.back() == L'\\' || base.back() == L'/')) {
+        base.pop_back();
+    }
+    if (child.size() < base.size() ||
+        _wcsnicmp(child.c_str(), base.c_str(), base.size()) != 0) {
+        return false;
+    }
+    if (child.size() == base.size()) return true;
+    const wchar_t boundary = child[base.size()];
+    return boundary == L'\\' || boundary == L'/';
+}
+
 std::string Win32Error(const char* operation) {
     return std::string(operation) + " failed (Win32 error " +
            std::to_string(GetLastError()) + ")";
@@ -473,7 +488,8 @@ std::vector<fs::path> FindCandidateArchives(const fs::path& root) {
         fs::recursive_directory_iterator it(
             directory, fs::directory_options::skip_permission_denied, ec), end;
         for (; !ec && it != end; it.increment(ec)) {
-            if (!it->is_regular_file(ec) || ec) continue;
+            std::error_code entryError;
+            if (!it->is_regular_file(entryError) || entryError) continue;
             if (LowerAscii(it->path().extension().u8string()) != ".jhh") continue;
             const std::wstring key = it->path().lexically_normal().wstring();
             if (seen.insert(key).second) files.push_back(it->path());
@@ -585,6 +601,16 @@ int RunRoot(const fs::path& rootArgument, const fs::path& outArgument) {
         }
     } else {
         outputRoot = root.parent_path() / L"TOP-SJEJHH-Selected";
+    }
+    outputRoot = fs::weakly_canonical(outputRoot, ec);
+    if (ec) {
+        Log("ERROR: cannot normalize the output directory: " + ec.message());
+        return 64;
+    }
+    if (IsPathWithin(outputRoot, root)) {
+        Log("ERROR: output directory must be outside the TOP client folder.");
+        Log("No output files were written.");
+        return 64;
     }
     Log("Output: " + PathUtf8(outputRoot));
     Log("Scope: only .JHH archives below the TOP ai/ and config/ directories.");
