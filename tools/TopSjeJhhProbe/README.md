@@ -38,6 +38,7 @@ The archive layout and encryption handling were independently implemented using 
 - Does not inject a DLL, create a remote thread, patch code, or write process memory.
 - Does not change, replace, or repackage any original TOP client file.
 - Writes selected decrypted copies and a report to a separate output directory.
+- Rejects an output directory that resolves inside the TOP client folder, so extracted files cannot be written into the installed client tree.
 - Applies bounds checks to archive index records, file offsets, entry lengths, and output paths.
 - Refuses to run against a `tetris.exe` with a different fingerprint.
 
