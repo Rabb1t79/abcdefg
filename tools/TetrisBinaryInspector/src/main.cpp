@@ -431,7 +431,7 @@ int SelfTest() {
     Log(sizeof(void*) == 4
         ? L"PASS: executable is compiled for 32-bit pointers."
         : L"FAIL: executable is not 32-bit.");
-    Log(std::wcslen(kTargetExe) == 9
+    Log(std::wcslen(kTargetExe) == 10
         ? L"PASS: target image name constant."
         : L"FAIL: target image name constant.");
     Log(std::strlen(kExpectedSha256) == 64
