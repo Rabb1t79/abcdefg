@@ -1,0 +1,55 @@
+name: Tetris Binary Inspector (Windows x86)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/tetris-binary-inspector-20261118
+    paths:
+      - "tools/TetrisBinaryInspector/**"
+      - ".github/workflows/tetris-binary-inspector.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-x86:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure x86
+        run: cmake -S tools/TetrisBinaryInspector -B build/TetrisBinaryInspector -A Win32
+
+      - name: Build Release
+        run: cmake --build build/TetrisBinaryInspector --config Release --parallel
+
+      - name: Run self-test
+        run: ctest --test-dir build/TetrisBinaryInspector -C Release --output-on-failure
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          Copy-Item build/TetrisBinaryInspector/Release/TetrisBinaryInspector.exe staging/
+          Copy-Item tools/TetrisBinaryInspector/README.md staging/
+          Compress-Archive -Path staging/* -DestinationPath TetrisBinaryInspector-Windows-x86.zip -Force
+
+      - name: Verify package
+        shell: pwsh
+        run: |
+          if (!(Test-Path staging/TetrisBinaryInspector.exe)) { throw "EXE missing" }
+          $bytes = [System.IO.File]::ReadAllBytes("staging/TetrisBinaryInspector.exe")
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Invalid PE DOS signature" }
+          $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+          if ($machine -ne 0x14c) { throw ("Expected x86 IMAGE_FILE_MACHINE_I386, got 0x{0:X}" -f $machine) }
+          Get-FileHash staging/TetrisBinaryInspector.exe -Algorithm SHA256 | Format-List
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TetrisBinaryInspector-Windows-x86
+          path: TetrisBinaryInspector-Windows-x86.zip
+          if-no-files-found: error
