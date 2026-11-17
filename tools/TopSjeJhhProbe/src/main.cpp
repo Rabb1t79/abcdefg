@@ -129,11 +129,16 @@ bool Rc4Transform(const std::vector<std::uint8_t>& input, const char* keyText,
         if (provider) CryptReleaseContext(provider, 0);
     };
 
-    if (!CryptAcquireContextW(&provider, nullptr, nullptr, PROV_RSA_FULL,
-                              CRYPT_VERIFYCONTEXT)) {
-        error = Win32Error("CryptAcquireContext");
-        cleanup();
-        return false;
+    // Match the TOP-specific SjeJhhUtil implementation exactly:
+    // MS_DEF_PROV / PROV_RSA_FULL, opening the default key container first,
+    // then creating it only when it does not yet exist.
+    if (!CryptAcquireContextW(&provider, nullptr, MS_DEF_PROV, PROV_RSA_FULL, 0)) {
+        if (!CryptAcquireContextW(&provider, nullptr, MS_DEF_PROV, PROV_RSA_FULL,
+                                  CRYPT_NEWKEYSET)) {
+            error = Win32Error("CryptAcquireContext(MS_DEF_PROV)");
+            cleanup();
+            return false;
+        }
     }
     if (!CryptCreateHash(provider, CALG_MD5, 0, 0, &hash)) {
         error = Win32Error("CryptCreateHash");
