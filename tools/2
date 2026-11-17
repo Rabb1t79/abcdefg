@@ -1,0 +1,2143 @@
+Tetris Pilot Next - read-only memory snapshot difference
+Before process ID: 14532
+After process ID: 14532
+Architecture: x86 on x64
+Executable size: 1654784
+Executable SHA-256: 9951C928F15F71839CE97CCDFA29CF040EB6699C8CA54F82C7B31B0561784C42
+Before captured at: 1794890175312 (Unix milliseconds UTC)
+After captured at: 1794890179573 (Unix milliseconds UTC)
+
+[Capture coverage]
+Before eligible bytes: 80125952
+Before captured bytes: 80125952
+Before skipped bytes: 0
+After eligible bytes: 80125952
+After captured bytes: 80125952
+After skipped bytes: 0
+
+[Difference summary]
+Bytes compared at matching addresses and memory mappings: 80125952
+Changed bytes: 24821
+Changed contiguous runs: 6664
+Changed 4 KiB pages: 230
+Changed allocation groups: 39
+Detailed changed runs shown: 1000
+Unmatched or unreadable address ranges are excluded from the comparison.
+
+[Largest changed allocation groups]
+AllocationBase: 0xd5f0000 | changed bytes: 11619 | region: MEM_PRIVATE
+AllocationBase: 0xa0000 | changed bytes: 2668 | region: MEM_PRIVATE
+AllocationBase: 0x3a40000 | changed bytes: 2244 | region: MEM_PRIVATE
+AllocationBase: 0x9860000 | changed bytes: 2043 | region: MEM_PRIVATE
+AllocationBase: 0xfef0000 | changed bytes: 1790 | region: MEM_PRIVATE
+AllocationBase: 0x191d0000 | changed bytes: 1379 | region: MEM_PRIVATE
+AllocationBase: 0x60000 | changed bytes: 1145 | region: MEM_PRIVATE
+AllocationBase: 0x5d80000 | changed bytes: 585 | region: MEM_PRIVATE
+AllocationBase: 0x780000 | changed bytes: 294 | region: MEM_PRIVATE
+AllocationBase: 0x7cf0000 | changed bytes: 198 | region: MEM_PRIVATE
+AllocationBase: 0x18200000 | changed bytes: 183 | region: MEM_PRIVATE
+AllocationBase: 0x2920000 | changed bytes: 122 | region: MEM_PRIVATE
+AllocationBase: 0x5940000 | changed bytes: 69 | region: MEM_PRIVATE
+AllocationBase: 0xdcf0000 | changed bytes: 67 | region: MEM_PRIVATE
+AllocationBase: 0xda10000 | changed bytes: 62 | region: MEM_PRIVATE
+AllocationBase: 0x3f90000 | changed bytes: 39 | region: MEM_PRIVATE
+AllocationBase: 0x400000 | changed bytes: 30 | region: MEM_IMAGE | module: tetris.exe
+AllocationBase: 0x16ac0000 | changed bytes: 27 | region: MEM_PRIVATE
+AllocationBase: 0x2630000 | changed bytes: 26 | region: MEM_PRIVATE
+AllocationBase: 0x16cc0000 | changed bytes: 24 | region: MEM_PRIVATE
+AllocationBase: 0x7ffe0000 | changed bytes: 24 | region: MEM_PRIVATE
+AllocationBase: 0x8b80000 | changed bytes: 20 | region: MEM_PRIVATE
+AllocationBase: 0xa010000 | changed bytes: 20 | region: MEM_PRIVATE
+AllocationBase: 0xdfc0000 | changed bytes: 20 | region: MEM_PRIVATE
+AllocationBase: 0x26a0000 | changed bytes: 14 | region: MEM_PRIVATE
+AllocationBase: 0xdb10000 | changed bytes: 14 | region: MEM_PRIVATE
+AllocationBase: 0x11d70000 | changed bytes: 14 | region: MEM_PRIVATE
+AllocationBase: 0x200000 | changed bytes: 13 | region: MEM_PRIVATE
+AllocationBase: 0x9a0000 | changed bytes: 13 | region: MEM_PRIVATE
+AllocationBase: 0x126c0000 | changed bytes: 12 | region: MEM_PRIVATE
+AllocationBase: 0x3c40000 | changed bytes: 10 | region: MEM_PRIVATE
+AllocationBase: 0x3640000 | changed bytes: 7 | region: MEM_PRIVATE
+AllocationBase: 0xf580000 | changed bytes: 6 | region: MEM_PRIVATE
+AllocationBase: 0x2b00000 | changed bytes: 5 | region: MEM_PRIVATE
+AllocationBase: 0x5640000 | changed bytes: 4 | region: MEM_PRIVATE
+AllocationBase: 0x1e0000 | changed bytes: 3 | region: MEM_PRIVATE
+AllocationBase: 0x3940000 | changed bytes: 3 | region: MEM_PRIVATE
+AllocationBase: 0x40a0000 | changed bytes: 3 | region: MEM_PRIVATE
+AllocationBase: 0xc100000 | changed bytes: 2 | region: MEM_PRIVATE
+
+[Changed byte ranges grouped by largest allocations]
+AllocationBase: 0xd5f0000 | changed bytes: 11619 | region: MEM_PRIVATE
+  Base: 0xd66a108 | length: 3 | before: 792E79 | after: 1A1A1A
+  Base: 0xd66a10c | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a110 | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a114 | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a118 | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a11c | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a120 | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a124 | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a128 | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a12c | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a130 | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a134 | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a138 | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a13c | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a140 | length: 3 | before: FF56FF | after: 1A1A1A
+  Base: 0xd66a144 | length: 1 | before: 34 | after: 1A
+  Base: 0xd66a146 | length: 1 | before: 34 | after: 1A
+  Base: 0xd66a148 | length: 3 | before: 3A3A3A | after: 3D3D3D
+  Base: 0xd66ad84 | length: 3 | before: 671B54 | after: 1A1A1A
+  Base: 0xd66ad88 | length: 3 | before: F6BBEA | after: 1A1A1A
+  Base: 0xd66ad8c | length: 3 | before: FFDFF7 | after: 1A1A1A
+  Base: 0xd66ad90 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ad94 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ad98 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ad9c | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ada0 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ada4 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ada8 | length: 3 | before: FFD1F3 | after: 1A1A1A
+  Base: 0xd66adac | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66adb0 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66adb4 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66adb8 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66adbc | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66adc0 | length: 3 | before: FFE4F8 | after: 1A1A1A
+  Base: 0xd66adc4 | length: 3 | before: EE8FDC | after: 1A1A1A
+  Base: 0xd66adc8 | length: 3 | before: 502445 | after: 3D3D3D
+  Base: 0xd66ba04 | length: 3 | before: D52BAB | after: 1A1A1A
+  Base: 0xd66ba08 | length: 3 | before: FBD0EF | after: 1A1A1A
+  Base: 0xd66ba0c | length: 3 | before: FDE1F5 | after: 1A1A1A
+  Base: 0xd66ba10 | length: 3 | before: FFDEF6 | after: 1A1A1A
+  Base: 0xd66ba14 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ba18 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ba1c | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ba20 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ba24 | length: 3 | before: FFD0F4 | after: 1A1A1A
+  Base: 0xd66ba28 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ba2c | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ba30 | length: 3 | before: FFD0F4 | after: 1A1A1A
+  Base: 0xd66ba34 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ba38 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66ba3c | length: 3 | before: FEE0F7 | after: 1A1A1A
+  Base: 0xd66ba40 | length: 3 | before: FDDFF4 | after: 1A1A1A
+  Base: 0xd66ba44 | length: 3 | before: FBD0EF | after: 1A1A1A
+  Base: 0xd66ba48 | length: 3 | before: 831F6A | after: 3D3D3D
+  Base: 0xd66c684 | length: 3 | before: D52BAB | after: 1A1A1A
+  Base: 0xd66c688 | length: 3 | before: F9C2E9 | after: 1A1A1A
+  Base: 0xd66c68c | length: 3 | before: F9C2E9 | after: 1A1A1A
+  Base: 0xd66c690 | length: 3 | before: FCDEF3 | after: 1A1A1A
+  Base: 0xd66c694 | length: 3 | before: FFDDF6 | after: 1A1A1A
+  Base: 0xd66c698 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66c69c | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66c6a0 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66c6a4 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Base: 0xd66c6a8 | length: 3 | before: FFD1F4 | after: 1A1A1A
+  Additional runs for this allocation may be omitted.
+AllocationBase: 0xa0000 | changed bytes: 2668 | region: MEM_PRIVATE
+  Base: 0x19d664 | length: 4 | before: 09ACDC77 | after: 00000000
+  Base: 0x19d66c | length: 3 | before: 84D619 | after: 000000
+  Base: 0x19d670 | length: 5 | before: DB62D37507 | after: 0000000000
+  Base: 0x19d678 | length: 3 | before: 80D619 | after: 000000
+  Base: 0x19d67c | length: 11 | before: 3983FC2FB80563023CD719 | after: 0000000000000000000000
+  Base: 0x19d688 | length: 3 | before: 82684F | after: 000000
+  Base: 0x19d690 | length: 3 | before: 84D919 | after: 000000
+  Base: 0x19d694 | length: 3 | before: D8D619 | after: 000000
+  Base: 0x19d69c | length: 3 | before: B8E04F | after: 000000
+  Base: 0x19d6a4 | length: 7 | before: EEFFFFFF55974F | after: 00000000000000
+  Base: 0x19d6b0 | length: 11 | before: 7C28D2126828D212D4974F | after: 0000000000000000000000
+  Base: 0x19d6bc | length: 8 | before: 7C28D2126828D212 | after: 0000000000000000
+  Base: 0x19d6c8 | length: 1 | before: 07 | after: 00
+  Base: 0x19d6cc | length: 1 | before: 07 | after: 00
+  Base: 0x19d6d4 | length: 1 | before: 07 | after: 00
+  Base: 0x19d6d8 | length: 16 | before: B83B6302C01D6302B8056302013B6302 | after: 00000000000000000000000000000000
+  Base: 0x19d6f4 | length: 3 | before: DA8253 | after: 000000
+  Base: 0x19d708 | length: 1 | before: 12 | after: 00
+  Base: 0x19d70c | length: 3 | before: 54D919 | after: 000000
+  Base: 0x19d710 | length: 3 | before: 88D919 | after: 000000
+  Base: 0x19d714 | length: 1 | before: 12 | after: 00
+  Base: 0x19d718 | length: 3 | before: D0DD19 | after: 000000
+  Base: 0x19d71c | length: 5 | before: FFFFFFFF12 | after: 0000000000
+  Base: 0x19d728 | length: 7 | before: FFFFFFFFFFFFFF | after: 00000000000000
+  Base: 0x19d74d | length: 2 | before: 4039 | after: 0000
+  Base: 0x19d750 | length: 5 | before: 8868E9778B | after: 0000000000
+  Base: 0x19d75c | length: 3 | before: 80D719 | after: 000000
+  Base: 0x19d760 | length: 8 | before: 6810DA778868E977 | after: 0000000000000000
+  Base: 0x19d775 | length: 2 | before: 4039 | after: 0000
+  Base: 0x19d778 | length: 3 | before: 68D819 | after: 000000
+  Base: 0x19d77c | length: 1 | before: 8B | after: 00
+  Base: 0x19d780 | length: 3 | before: ACD719 | after: 000000
+  Base: 0x19d784 | length: 12 | before: 3FEDD9778868E97709ACDC77 | after: 000000000000000000000000
+  Base: 0x19d794 | length: 3 | before: ACD719 | after: 000000
+  Base: 0x19d798 | length: 5 | before: DB62D37507 | after: 0000000000
+  Base: 0x19d7a0 | length: 3 | before: A8D719 | after: 000000
+  Base: 0x19d7a4 | length: 11 | before: C182FC2FB805630264D819 | after: 0000000000000000000000
+  Base: 0x19d7b0 | length: 3 | before: 82684F | after: 000000
+  Base: 0x19d7b4 | length: 1 | before: 20 | after: 00
+  Base: 0x19d7b8 | length: 7 | before: 9402390658D819 | after: 00000000000000
+  Base: 0x19d7c0 | length: 7 | before: 947F721850D819 | after: 00000000000000
+  Base: 0x19d7c8 | length: 7 | before: 0F63DB777F0000 | after: 0000000040C4DE
+  Base: 0x19d7d0 | length: 3 | before: 200000 | after: 00709C
+  Base: 0x19d7d4 | length: 1 | before: 20 | after: 00
+  Base: 0x19d7d9 | length: 4 | before: 0063020B | after: 709C0000
+  Base: 0x19d7e0 | length: 2 | before: 2000 | after: E032
+  Base: 0x19d7e4 | length: 1 | before: 20 | after: 00
+  Base: 0x19d7e8 | length: 11 | before: 0000630200000000070000 | after: 30D819005F88017640C4DE
+  Base: 0x19d7f4 | length: 1 | before: 28 | after: 00
+  Base: 0x19d7f8 | length: 7 | before: D0077500640000 | after: 7E242671800B01
+  Base: 0x19d800 | length: 5 | before: B83B630228 | after: 800B010002
+  Base: 0x19d808 | length: 3 | before: D00775 | after: 000000
+  Base: 0x19d80c | length: 8 | before: C80D6B18807F7218 | after: 0000000000000000
+  Base: 0x19d815 | length: 2 | before: 0000 | after: 2039
+  Base: 0x19d818 | length: 3 | before: 000000 | after: F8D719
+  Base: 0x19d81c | length: 7 | before: 00007500020000 | after: B901FF64C4D919
+  Base: 0x19d824 | length: 15 | before: 000000000500000000007500CC0175 | after: 302E0276B65F3807FEFFFFFF78D819
+  Base: 0x19d834 | length: 7 | before: 00000000200000 | after: 67B87D76800B01
+  Base: 0x19d83c | length: 3 | before: 340A75 | after: 000000
+  Base: 0x19d840 | length: 3 | before: 000000 | after: 800B01
+  Base: 0x19d844 | length: 8 | before: 00006302300A7500 | after: 8202000080B37D76
+  Base: 0x19d850 | length: 3 | before: 74D819 | after: 820200
+  Base: 0x19d878 | length: 1 | before: 94 | after: B4
+  Base: 0x19d87c | length: 5 | before: A0D8190008 | after: 2CB57D7602
+  Additional runs for this allocation may be omitted.
+AllocationBase: 0x3a40000 | changed bytes: 2244 | region: MEM_PRIVATE
+  Base: 0x3a443c8 | length: 1 | before: 40 | after: 14
+  Base: 0x3a443cc | length: 2 | before: 4C62 | after: 487A
+  Base: 0x3a443d8 | length: 2 | before: 7894 | after: A093
+  Base: 0x3a443e4 | length: 1 | before: 08 | after: 09
+  Base: 0x3a4440c | length: 2 | before: 0000 | after: 9B01
+  Base: 0x3a44410 | length: 6 | before: 865AE7ABFD7F | after: 000000000000
+  Base: 0x3a44418 | length: 1 | before: 20 | after: 14
+  Base: 0x3a44420 | length: 6 | before: 080000000000 | after: 58135C9F9B01
+  Base: 0x3a44428 | length: 4 | before: C86AA49E | after: 00000000
+  Base: 0x3a44430 | length: 6 | before: 7C49ECABFD7F | after: C027619C9B01
+  Base: 0x3a44438 | length: 6 | before: 010000000200 | after: 90E901ACFD7F
+  Base: 0x3a4444c | length: 2 | before: 2100 | after: 9B01
+  Base: 0x3a44450 | length: 2 | before: 90E2 | after: 70E8
+  Base: 0x3a44458 | length: 5 | before: 00E6B73521 | after: 5000000000
+  Base: 0x3a44461 | length: 6 | before: 000000057F1A | after: 0E619C9B0100
+  Base: 0x3a44468 | length: 6 | before: 10056A9C9B01 | after: 000000000000
+  Base: 0x3a44470 | length: 6 | before: C05B699C9B01 | after: 6BB85BB1FD7F
+  Base: 0x3a44478 | length: 4 | before: 90EA699C | after: F02A1CA0
+  Base: 0x3a44480 | length: 6 | before: F0B06B9C9B01 | after: 030000000000
+  Base: 0x3a44488 | length: 6 | before: B81E04ACFD7F | after: F02A1CA09B01
+  Base: 0x3a44490 | length: 6 | before: 000000000000 | after: E0D81DA09B01
+  Base: 0x3a44498 | length: 6 | before: D0D005ACFD7F | after: 0000669C9B01
+  Base: 0x3a444a0 | length: 5 | before: 0000000000 | after: A9E5B73521
+  Base: 0x3a444a8 | length: 3 | before: F04E74 | after: 000061
+  Base: 0x3a444b0 | length: 6 | before: 000000000000 | after: C027619C9B01
+  Base: 0x3a444b8 | length: 4 | before: F04E749C | after: 05000000
+  Base: 0x3a444c0 | length: 6 | before: CD20EAABFD7F | after: 0000619C9B01
+  Base: 0x3a444c8 | length: 4 | before: 40E0A69E | after: B402619C
+  Base: 0x3a444d0 | length: 5 | before: F0E8B73521 | after: 0000000000
+  Base: 0x3a444d8 | length: 5 | before: D0E9B73521 | after: 0200000000
+  Base: 0x3a444e0 | length: 17 | before: FEFFFFFFFFFFFFFFFEFFFFFFFFFFFFFF | after: 20DA1DA09B01000050F101ACFD7F0000
+  Base: 0x3a444f8 | length: 4 | before: 00000000 | after: 20DA1DA0
+  Base: 0x3a44508 | length: 1 | before: 00 | after: 3C
+  Base: 0x3a4450c | length: 1 | before: 21 | after: 00
+  Base: 0x3a44518 | length: 6 | before: C86AA49E9B01 | after: 020000000000
+  Base: 0x3a44520 | length: 6 | before: 7C49ECABFD7F | after: 000000000000
+  Base: 0x3a44528 | length: 6 | before: 5858254AD124 | after: 000000000000
+  Base: 0x3a44530 | length: 6 | before: 000000000000 | after: C7B35BB1FD7F
+  Base: 0x3a44538 | length: 4 | before: 90EA699C | after: C86AA49E
+  Base: 0x3a44540 | length: 6 | before: 1A0000000000 | after: 6847E7ABFD7F
+  Base: 0x3a44548 | length: 1 | before: 00 | after: 01
+  Base: 0x3a4454c | length: 2 | before: 9B01 | after: 0000
+  Base: 0x3a44550 | length: 6 | before: A15B5BB1FD7F | after: 186BA49E9B01
+  Base: 0x3a44558 | length: 6 | before: 9CDAA59E9B01 | after: 00E6B7352100
+  Base: 0x3a44560 | length: 7 | before: C0E7B735210000 | after: 24000000057F03
+  Base: 0x3a44568 | length: 1 | before: 00 | after: 04
+  Base: 0x3a4456c | length: 2 | before: 0000 | after: 9B01
+  Base: 0x3a44570 | length: 6 | before: 627BE9ABFD7F | after: 20DA1DA09B01
+  Base: 0x3a44578 | length: 6 | before: 40E0A69E9B01 | after: 030000000000
+  Base: 0x3a44580 | length: 1 | before: C0 | after: 18
+  Base: 0x3a44588 | length: 6 | before: 900B5C9F9B01 | after: 000000000000
+  Base: 0x3a44590 | length: 6 | before: 160000002100 | after: 10FA699C9B01
+  Base: 0x3a44598 | length: 6 | before: 78D6A59E9B01 | after: 000000000000
+  Base: 0x3a445a0 | length: 6 | before: 700E5C9F9B01 | after: 7620E7ABFD7F
+  Base: 0x3a445a8 | length: 14 | before: FEFFFFFFFFFFFFFFB04CA89E9B01 | after: 010000009B010000000000000000
+  Base: 0x3a445ba | length: 4 | before: 869C9B01 | after: 00000000
+  Base: 0x3a445c0 | length: 6 | before: 506AA49E9B01 | after: 865AE7ABFD7F
+  Base: 0x3a445c8 | length: 1 | before: 00 | after: 20
+  Base: 0x3a445cc | length: 2 | before: 9B01 | after: 0000
+  Base: 0x3a445d0 | length: 1 | before: 00 | after: 08
+  Base: 0x3a445d8 | length: 6 | before: 28E6B7352100 | after: C86AA49E9B01
+  Base: 0x3a445e0 | length: 6 | before: 000000000000 | after: 7C49ECABFD7F
+  Base: 0x3a445e8 | length: 1 | before: 43 | after: 01
+  Base: 0x3a445ec | length: 1 | before: 00 | after: 02
+  Additional runs for this allocation may be omitted.
+AllocationBase: 0x9860000 | changed bytes: 2043 | region: MEM_PRIVATE
+  Base: 0x986a294 | length: 1 | before: 64 | after: 66
+  Base: 0x986a2c4 | length: 1 | before: 66 | after: 68
+  Base: 0x98735a0 | length: 1 | before: 64 | after: 66
+  Base: 0x98735c8 | length: 1 | before: 66 | after: 68
+  Base: 0x98735cc | length: 2 | before: 1032 | after: F833
+  Base: 0x98735d0 | length: 2 | before: 8853 | after: FC76
+  Base: 0x9882868 | length: 305 | before: 29FCB43929FCB4392576B6392576B639 | after: 00000000000000000000000000000000
+  Base: 0x988299a | length: 3 | before: D9390D | after: 000000
+  Base: 0x988299e | length: 1482 | before: D9399362D4399362D43959C0CF3959C0 | after: 00000000000000000000000000000000
+  Base: 0x9894b02 | length: 1 | before: 10 | after: 0F
+  Base: 0x98c36da | length: 1 | before: 0B | after: 03
+  Base: 0x99c6e88 | length: 3 | before: 40A907 | after: E0C90A
+  Base: 0x99e3952 | length: 1 | before: 09 | after: 1E
+  Base: 0x99e6634 | length: 5 | before: 30669E0900 | after: 3F005C0068
+  Base: 0x99e663a | length: 1 | before: 00 | after: 69
+  Base: 0x99e663c | length: 1 | before: 00 | after: 64
+  Base: 0x99e663e | length: 1 | before: 00 | after: 23
+  Base: 0x99e6640 | length: 1 | before: 00 | after: 76
+  Base: 0x99e6642 | length: 3 | before: 008000 | after: 690064
+  Base: 0x99e6646 | length: 1 | before: 00 | after: 5F
+  Base: 0x99e6648 | length: 1 | before: 00 | after: 30
+  Base: 0x99e664a | length: 1 | before: 00 | after: 34
+  Base: 0x99e664c | length: 1 | before: 00 | after: 35
+  Base: 0x99e664e | length: 1 | before: 00 | after: 65
+  Base: 0x99e6650 | length: 1 | before: 00 | after: 26
+  Base: 0x99e6652 | length: 1 | before: 00 | after: 70
+  Base: 0x99e6654 | length: 1 | before: 00 | after: 69
+  Base: 0x99e6656 | length: 1 | before: 00 | after: 64
+  Base: 0x99e6658 | length: 1 | before: 00 | after: 5F
+  Base: 0x99e665a | length: 1 | before: 00 | after: 30
+  Base: 0x99e665c | length: 1 | before: 00 | after: 32
+  Base: 0x99e665e | length: 1 | before: 00 | after: 66
+  Base: 0x99e6660 | length: 1 | before: 00 | after: 66
+  Base: 0x99e6662 | length: 1 | before: 00 | after: 26
+  Base: 0x99e6664 | length: 1 | before: 00 | after: 69
+  Base: 0x99e6666 | length: 1 | before: 00 | after: 67
+  Base: 0x99e6668 | length: 1 | before: 00 | after: 5F
+  Base: 0x99e666a | length: 1 | before: 00 | after: 30
+  Base: 0x99e666c | length: 1 | before: 00 | after: 30
+  Base: 0x99e666e | length: 1 | before: 00 | after: 23
+  Base: 0x99e6670 | length: 1 | before: 00 | after: 37
+  Base: 0x99e6672 | length: 1 | before: 00 | after: 26
+  Base: 0x99e6674 | length: 1 | before: 00 | after: 36
+  Base: 0x99e6676 | length: 1 | before: 00 | after: 61
+  Base: 0x99e6678 | length: 1 | before: 00 | after: 61
+  Base: 0x99e667a | length: 1 | before: 00 | after: 38
+  Base: 0x99e667c | length: 1 | before: 00 | after: 35
+  Base: 0x99e667e | length: 1 | before: 00 | after: 38
+  Base: 0x99e6680 | length: 1 | before: 00 | after: 34
+  Base: 0x99e6682 | length: 1 | before: 00 | after: 26
+  Base: 0x99e6684 | length: 1 | before: 00 | after: 30
+  Base: 0x99e6686 | length: 1 | before: 00 | after: 26
+  Base: 0x99e6688 | length: 1 | before: 00 | after: 30
+  Base: 0x99e668a | length: 1 | before: 00 | after: 30
+  Base: 0x99e668c | length: 1 | before: 00 | after: 30
+  Base: 0x99e668e | length: 1 | before: 00 | after: 30
+  Base: 0x99e6690 | length: 1 | before: 00 | after: 23
+  Base: 0x99e6692 | length: 1 | before: 00 | after: 7B
+  Base: 0x99e6694 | length: 1 | before: 00 | after: 34
+  Base: 0x99e6696 | length: 1 | before: 00 | after: 64
+  Base: 0x99e6698 | length: 1 | before: 00 | after: 31
+  Base: 0x99e669a | length: 1 | before: 00 | after: 65
+  Base: 0x99e669c | length: 1 | before: 00 | after: 35
+  Base: 0x99e669e | length: 1 | before: 00 | after: 35
+  Additional runs for this allocation may be omitted.
+AllocationBase: 0xfef0000 | changed bytes: 1790 | region: MEM_PRIVATE
+  Base: 0xfef001c | length: 305 | before: 29FCB43929FCB4392576B6392576B639 | after: 00000000000000000000000000000000
+  Base: 0xfef014e | length: 3 | before: D9390D | after: 000000
+  Base: 0xfef0152 | length: 1482 | before: D9399362D4399362D43959C0CF3959C0 | after: 00000000000000000000000000000000
+AllocationBase: 0x191d0000 | changed bytes: 1379 | region: MEM_PRIVATE
+  Base: 0x192b68c8 | length: 2 | before: 9869 | after: 586A
+  Base: 0x192b68cc | length: 2 | before: E013 | after: D80E
+  Base: 0x192b68e4 | length: 2 | before: E818 | after: A019
+  Base: 0x192b68f8 | length: 2 | before: 5069 | after: A06A
+  Base: 0x192b68fc | length: 4 | before: 40BD6A02 | after: 7876CF0D
+  Base: 0x192b6910 | length: 2 | before: 2069 | after: D86B
+  Base: 0x192b6914 | length: 4 | before: A019B316 | after: 30B9DD0D
+  Base: 0x192b6928 | length: 2 | before: E86D | after: C869
+  Base: 0x192b692c | length: 4 | before: 30B9DD0D | after: 581AB316
+  Base: 0x192b6940 | length: 2 | before: C068 | after: 906B
+  Base: 0x192b6944 | length: 4 | before: 2813B316 | after: 00C7D20D
+  Base: 0x192b6958 | length: 2 | before: 6869 | after: F068
+  Base: 0x192b695c | length: 4 | before: B8976A02 | after: 380AB316
+  Base: 0x192b6970 | length: 2 | before: A06A | after: 9869
+  Base: 0x192b6974 | length: 4 | before: 88996A02 | after: 900FB316
+  Base: 0x192b6988 | length: 2 | before: 306B | after: 886A
+  Base: 0x192b698c | length: 4 | before: 0816B316 | after: B8976A02
+  Base: 0x192b69a0 | length: 1 | before: 00 | after: A8
+  Base: 0x192b69a4 | length: 2 | before: 900F | after: B00C
+  Base: 0x192b69b8 | length: 2 | before: E069 | after: 306B
+  Base: 0x192b69bc | length: 4 | before: 00C7D20D | after: 200EB316
+  Base: 0x192b69d0 | length: 2 | before: 106A | after: 006B
+  Base: 0x192b69d4 | length: 2 | before: 380A | after: 3018
+  Base: 0x192b69e8 | length: 2 | before: E86A | after: D868
+  Base: 0x192b69ec | length: 4 | before: B0046A02 | after: E818B316
+  Base: 0x192b6a00 | length: 2 | before: 406A | after: 486B
+  Base: 0x192b6a04 | length: 2 | before: 0011 | after: F80B
+  Base: 0x192b6a18 | length: 2 | before: 3869 | after: 706A
+  Base: 0x192b6a1c | length: 4 | before: 7876CF0D | after: 70BB6A02
+  Base: 0x192b6a30 | length: 2 | before: 586A | after: 2069
+  Base: 0x192b6a34 | length: 2 | before: 200E | after: 7817
+  Base: 0x192b6a48 | length: 2 | before: 286A | after: B069
+  Base: 0x192b6a60 | length: 2 | before: D06A | after: 786B
+  Base: 0x192b6a64 | length: 2 | before: 9814 | after: 5015
+  Base: 0x192b6a78 | length: 2 | before: 886A | after: 8069
+  Base: 0x192b6a7c | length: 4 | before: F80BB316 | after: 40BD6A02
+  Base: 0x192b6a94 | length: 4 | before: 7012B316 | after: 88996A02
+  Base: 0x192b6aa8 | length: 2 | before: C869 | after: B86A
+  Base: 0x192b6aac | length: 2 | before: A008 | after: 2813
+  Base: 0x192b6ac0 | length: 1 | before: F8 | after: 68
+  Base: 0x192b6ac4 | length: 2 | before: 680D | after: E013
+  Base: 0x192b6ad8 | length: 1 | before: 70 | after: 40
+  Base: 0x192b6adc | length: 2 | before: 4810 | after: 0011
+  Base: 0x192b6af0 | length: 2 | before: F068 | after: F869
+  Base: 0x192b6af4 | length: 4 | before: 70BB6A02 | after: 4810B316
+  Base: 0x192b6b08 | length: 2 | before: B86A | after: E069
+  Base: 0x192b6b0c | length: 2 | before: B00C | after: 101B
+  Base: 0x192b6b20 | length: 2 | before: 786B | after: 5069
+  Base: 0x192b6b24 | length: 2 | before: D80E | after: A008
+  Base: 0x192b6b38 | length: 2 | before: A86B | after: E86A
+  Base: 0x192b6b3c | length: 2 | before: C016 | after: 9814
+  Base: 0x192b6b50 | length: 2 | before: 606B | after: C068
+  Base: 0x192b6b54 | length: 2 | before: 581A | after: 7012
+  Base: 0x192b6b68 | length: 2 | before: 906B | after: 286A
+  Base: 0x192b6b6c | length: 2 | before: 3018 | after: C016
+  Base: 0x192b6b80 | length: 2 | before: 8069 | after: 606B
+  Base: 0x192b6b84 | length: 2 | before: 5015 | after: 0816
+  Base: 0x192b6b98 | length: 2 | before: D868 | after: 106A
+  Base: 0x192b6b9c | length: 4 | before: 101BB316 | after: B0046A02
+  Base: 0x192b6bb0 | length: 2 | before: 486B | after: D06A
+  Base: 0x192b6bb4 | length: 2 | before: 7817 | after: 680D
+  Base: 0x192b6bdc | length: 1 | before: 02 | after: 07
+  Base: 0x192b6be0 | length: 4 | before: 18D26A02 | after: 68EF2319
+  Base: 0x192b6c3c | length: 1 | before: 02 | after: 05
+  Additional runs for this allocation may be omitted.
+AllocationBase: 0x60000 | changed bytes: 1145 | region: MEM_PRIVATE
+  Base: 0x9a448 | length: 6 | before: 010000000000 | after: 948860B1FD7F
+  Base: 0x9a450 | length: 6 | before: 6C3700000000 | after: BC25D5B0FD7F
+  Base: 0x9a458 | length: 6 | before: 1A9000000000 | after: E2DE5FB1FD7F
+  Base: 0x9a460 | length: 6 | before: 3431D5B0FD7F | after: 020000000000
+  Base: 0x9a468 | length: 3 | before: 72C961 | after: 40105C
+  Base: 0x9a478 | length: 1 | before: 01 | after: 00
+  Base: 0x9a480 | length: 2 | before: 6C37 | after: 0000
+  Base: 0x9a488 | length: 6 | before: 1A9000000000 | after: A6A5B12325C6
+  Base: 0x9a490 | length: 6 | before: 3431D5B0FD7F | after: 70AC09000000
+  Base: 0x9a498 | length: 3 | before: 72C961 | after: 1B1563
+  Base: 0x9a4a0 | length: 6 | before: BC25D5B0FD7F | after: 08A509000000
+  Base: 0x9a4a8 | length: 6 | before: E2DE5FB1FD7F | after: 00AB09000000
+  Base: 0x9a4b0 | length: 3 | before: 010000 | after: 40A509
+  Base: 0x9a4b8 | length: 4 | before: A411D6B0 | after: 02DE5FB1
+  Base: 0x9a4c0 | length: 3 | before: 000000 | after: 40AC09
+  Base: 0x9a4c8 | length: 6 | before: 948860B1FD7F | after: 40AA09000000
+  Base: 0x9a4d0 | length: 6 | before: BC25D5B0FD7F | after: 40A509000000
+  Base: 0x9a4d8 | length: 6 | before: E2DE5FB1FD7F | after: 020000000000
+  Base: 0x9a4e0 | length: 3 | before: 020000 | after: 40AA09
+  Base: 0x9a4e8 | length: 2 | before: 4010 | after: 660B
+  Base: 0x9a4f0 | length: 6 | before: 020000000000 | after: 7537D1B0FD7F
+  Base: 0x9a4f8 | length: 1 | before: 00 | after: 02
+  Base: 0x9a500 | length: 6 | before: 000000000000 | after: 7537D1B0FD7F
+  Base: 0x9a508 | length: 6 | before: 26A5B12325C6 | after: A411D6B0FD7F
+  Base: 0x9a510 | length: 1 | before: F0 | after: 70
+  Base: 0x9a518 | length: 6 | before: 1B1563B1FD7F | after: 000000000000
+  Base: 0x9a520 | length: 2 | before: 88A5 | after: 68AA
+  Base: 0x9a528 | length: 2 | before: 80AB | after: 48AA
+  Base: 0x9a530 | length: 2 | before: C0A5 | after: 58AA
+  Base: 0x9a538 | length: 6 | before: 02DE5FB1FD7F | after: 00AB09000000
+  Base: 0x9a570 | length: 6 | before: 7537D1B0FD7F | after: 0F001000A01F
+  Base: 0x9a578 | length: 1 | before: 02 | after: 33
+  Base: 0x9a582 | length: 4 | before: D1B0FD7F | after: 2B000202
+  Base: 0x9a5b8 | length: 3 | before: 80AB09 | after: 010000
+  Base: 0x9a5d0 | length: 6 | before: B0AD2B000202 | after: 404FDE770000
+  Base: 0x9a5d8 | length: 6 | before: 1B1563B1FD7F | after: 70BB09000000
+  Base: 0x9a5e0 | length: 2 | before: 48A6 | after: 90BE
+  Base: 0x9a5e8 | length: 3 | before: 40AC09 | after: 34FC19
+  Base: 0x9a5f0 | length: 1 | before: 0F | after: 18
+  Base: 0x9a5f2 | length: 1 | before: 10 | after: 00
+  Base: 0x9a5f4 | length: 2 | before: A01F | after: 0000
+  Base: 0x9a618 | length: 1 | before: 02 | after: 00
+  Base: 0x9a620 | length: 4 | before: 404FDE77 | after: B0C90900
+  Base: 0x9a628 | length: 2 | before: C0BB | after: 50C0
+  Base: 0x9a630 | length: 3 | before: E0BE09 | after: 280000
+  Base: 0x9a638 | length: 6 | before: 010000000000 | after: 6C37D1B0FD7F
+  Base: 0x9a640 | length: 3 | before: 200000 | after: 7F0220
+  Base: 0x9a648 | length: 6 | before: A411D6B0FD7F | after: 7BB34A000000
+  Base: 0x9a650 | length: 4 | before: 404FDE77 | after: 00000000
+  Base: 0x9a658 | length: 3 | before: F0BB09 | after: A01F00
+  Base: 0x9a65c | length: 2 | before: 0000 | after: FFFF
+  Base: 0x9a660 | length: 11 | before: 10BF09000000000064F419 | after: 00700D6C956071A8FD3F00
+  Base: 0x9a670 | length: 1 | before: 20 | after: 00
+  Base: 0x9a677 | length: 4 | before: 00C0C009 | after: 96074000
+  Base: 0x9a680 | length: 1 | before: 02 | after: 00
+  Base: 0x9a687 | length: 7 | before: 006C37D1B0FD7F | after: FA064000000000
+  Base: 0x9a690 | length: 2 | before: 7F02 | after: 0000
+  Base: 0x9a695 | length: 5 | before: 0000000000 | after: B680B6FB3F
+  Base: 0x9a6a0 | length: 3 | before: 30CA09 | after: 000000
+  Base: 0x9a6a5 | length: 6 | before: 000000D0C009 | after: B680B6FB3F00
+  Base: 0x9a6b0 | length: 1 | before: 58 | after: 00
+  Base: 0x9a6b5 | length: 9 | before: 0000006C37D1B0FD7F | after: B680B6FB3F00000000
+  Base: 0x9a6c0 | length: 2 | before: 7F02 | after: 0000
+  Base: 0x9a6c7 | length: 4 | before: 007BB34A | after: 80FF3F00
+  Additional runs for this allocation may be omitted.
+AllocationBase: 0x5d80000 | changed bytes: 585 | region: MEM_PRIVATE
+  Base: 0x5e7f140 | length: 2 | before: 58D3 | after: 30DD
+  Base: 0x5e7f160 | length: 2 | before: 72D3 | after: 4ADD
+  Base: 0x5e7f2dc | length: 2 | before: 0E81 | after: D67F
+  Base: 0x5e7f300 | length: 3 | before: C89FEB | after: 0894E4
+  Base: 0x5e7f320 | length: 3 | before: C89FEB | after: 0894E4
+  Base: 0x5e7f3d0 | length: 3 | before: C89FEB | after: 0894E4
+  Base: 0x5e7f5a0 | length: 2 | before: 58D3 | after: 30DD
+  Base: 0x5e7f5cc | length: 1 | before: 09 | after: 1E
+  Base: 0x5e7f5d6 | length: 1 | before: 09 | after: 1E
+  Base: 0x5e7f5dc | length: 2 | before: 58D3 | after: 30DD
+  Base: 0x5e7f604 | length: 2 | before: 58D3 | after: 30DD
+  Base: 0x5e7f61c | length: 2 | before: 58D3 | after: 30DD
+  Base: 0x5e7f624 | length: 2 | before: 50D3 | after: 28DD
+  Base: 0x5e7f6e4 | length: 2 | before: 50D3 | after: 28DD
+  Base: 0x5e7f710 | length: 2 | before: 58D3 | after: 30DD
+  Base: 0x5e7f734 | length: 2 | before: 58D3 | after: 30DD
+  Base: 0x5e7f7a4 | length: 3 | before: C89FEB | after: 0894E4
+  Base: 0x5e7f8bc | length: 6 | before: 623001763804 | after: 160000000000
+  Base: 0x5e7f8c4 | length: 1 | before: 60 | after: 0C
+  Base: 0x5e7f8c6 | length: 1 | before: 00 | after: 03
+  Base: 0x5e7f8c8 | length: 30 | before: 6000000060F9E705CC321D0050F9E705 | after: E87BF207487DF2077078F20700000A04
+  Base: 0x5e7f8e8 | length: 9 | before: 1CF9E705742F017660 | after: 000000000000000000
+  Base: 0x5e7f8f4 | length: 16 | before: 60000000000000000000000000000000 | after: 487DF207B110A62310F9E7051C01E004
+  Base: 0x5e7f906 | length: 3 | before: 000060 | after: 0A0400
+  Base: 0x5e7f90c | length: 46 | before: 002C1D00452F0176600000005205D874 | after: 487DF20720F9E70505BEDD04487DF207
+  Base: 0x5e7f93c | length: 5 | before: 6000000060 | after: 0F88297901
+  Base: 0x5e7f944 | length: 2 | before: C0F9 | after: 24FB
+  Base: 0x5e7f948 | length: 13 | before: DF8B2979E0EC660520AF2F0580 | after: 7F1D680404000000B87FF20700
+  Base: 0x5e7f958 | length: 26 | before: 48F9E705380400004CFAE705B07CDD04 | after: 77236C00448217050000000001000080
+  Base: 0x5e7f974 | length: 5 | before: B1696C0400 | after: 7000000043
+  Base: 0x5e7f97a | length: 1 | before: 00 | after: 55
+  Base: 0x5e7f97c | length: 9 | before: 44FAE705F788297900 | after: 5200520045004E0054
+  Base: 0x5e7f986 | length: 1 | before: 00 | after: 5F
+  Base: 0x5e7f988 | length: 27 | before: CCFAE70580FBE705DA05D874C0F9E705 | after: 55005300450052005C0053006F006600
+  Base: 0x5e7f9a4 | length: 1 | before: 00 | after: 53
+  Base: 0x5e7f9a6 | length: 1 | before: 00 | after: 6F
+  Base: 0x5e7f9a8 | length: 53 | before: 44FAE705E1AC022A24FAE7056CBDDC77 | after: 67006F00750049006E00700075007400
+  Base: 0x5e7f9e0 | length: 5 | before: 74A3F96B18 | after: CC00CC00CC
+  Base: 0x5e7f9e6 | length: 1 | before: 00 | after: CC
+  Base: 0x5e7f9e8 | length: 4 | before: 40FAE705 | after: CC00CC00
+  Base: 0x5e7fa00 | length: 4 | before: 80969800 | after: 58FBE705
+  Base: 0x5e7fa34 | length: 8 | before: 0C086C0480969800 | after: 0894E40718FF6F05
+  Base: 0x5e7fa3e | length: 14 | before: 000091AD297000000000CCFAE705 | after: 0A040D93570464FAE705A63CDB77
+  Base: 0x5e7fa50 | length: 109 | before: 606270042F882979C4FAE70558FDFC03 | after: 00000000000000000100000024FBE705
+  Base: 0x5e7fabe | length: 15 | before: 00000300000058FDFC038007010100 | after: 0A042CFCE70500004F0047005C0049
+  Base: 0x5e7face | length: 1 | before: 00 | after: 4D
+  Base: 0x5e7fad0 | length: 9 | before: 447E1605907D1605D6 | after: 640000000000000064
+  Base: 0x5e7fadc | length: 13 | before: 66FF5704020000001144C27002 | after: 0000000048E6E5071300000000
+  Base: 0x5e7faec | length: 16 | before: 66FF570466FF570466FF570466FF5704 | after: 19000900E08DEB076893EB0738E6E507
+  Base: 0x5e7fb0c | length: 20 | before: B38929794CFBE70525B2FF0408000000 | after: 00000000000000000000000020AF2F05
+  Base: 0x5e7fb36 | length: 1 | before: 2B | after: 3C
+  Base: 0x5e7fb48 | length: 3 | before: F0C50A | after: 3B56DD
+  Base: 0x5e7fb70 | length: 4 | before: D0652F05 | after: 00000A04
+  Base: 0x5e7fba4 | length: 16 | before: 878F2979C8080000A0C90A040137E875 | after: F073FF04FFFFFFFF20FCE70541647004
+  Base: 0x5e7fbd0 | length: 3 | before: 66FF57 | after: E6ED5F
+  Base: 0x5e7fbd4 | length: 8 | before: 66FF570466FF5704 | after: 0000000000000000
+  Base: 0x5e7fc84 | length: 16 | before: 378E2979A4FCE705C8FCE705AFA3F96B | after: 00000000000000000F8E29792DE5C36F
+  Base: 0x5e7fce4 | length: 4 | before: 10460AFA | after: 706DD4FD
+  Base: 0x5e7fd1c | length: 2 | before: 0F27 | after: 390E
+  Base: 0x5e7fd30 | length: 2 | before: 0F27 | after: 390E
+  Base: 0x5e7fd54 | length: 7 | before: 1144C27097AD29 | after: 0000000024B48A
+  Base: 0x5e7fd69 | length: 2 | before: AD29 | after: B48A
+  Base: 0x5e7fd6c | length: 3 | before: 7A9698 | after: ED8F37
+  Base: 0x5e7fdb8 | length: 3 | before: 97AD29 | after: 24B48A
+  Additional runs for this allocation may be omitted.
+AllocationBase: 0x780000 | changed bytes: 294 | region: MEM_PRIVATE
+  Base: 0x780214 | length: 1 | before: 62 | after: 64
+  Base: 0x780238 | length: 2 | before: FF0E | after: 010F
+  Base: 0x78024c | length: 2 | before: 18C3 | after: 90C0
+  Base: 0x7956cc | length: 1 | before: 0D | after: 0E
+  Base: 0x7a792c | length: 1 | before: E9 | after: F1
+  Base: 0x7a7a8c | length: 1 | before: 26 | after: 29
+  Base: 0x7a9742 | length: 1 | before: 0D | after: 05
+  Base: 0x7b6464 | length: 1 | before: 12 | after: 13
+  Base: 0x7baeb0 | length: 2 | before: C8F5 | after: BEF7
+  Base: 0x7baeb4 | length: 2 | before: C9F5 | after: BFF7
+  Base: 0x7c2c38 | length: 1 | before: 53 | after: 54
+  Base: 0x7c2c3c | length: 1 | before: BB | after: BC
+  Base: 0x7c8734 | length: 1 | before: 01 | after: 04
+  Base: 0x7c8738 | length: 2 | before: 6E03 | after: 0000
+  Base: 0x7c873c | length: 2 | before: E302 | after: 0000
+  Base: 0x7f1a3c | length: 1 | before: 32 | after: 43
+  Base: 0x7f1ae0 | length: 3 | before: 88835C | after: 3AE59F
+  Base: 0x7f1ae8 | length: 3 | before: 88835C | after: 3AE59F
+  Base: 0x7f1af0 | length: 3 | before: 88835C | after: 3AE59F
+  Base: 0x806820 | length: 2 | before: 143A | after: 8045
+  Base: 0x806828 | length: 2 | before: 441B | after: F833
+  Base: 0x806830 | length: 3 | before: 4C235D | after: FC765E
+  Base: 0x806844 | length: 1 | before: 34 | after: 66
+  Base: 0x8177d8 | length: 5 | before: 504CD77601 | after: 0000000000
+  Base: 0x8177e0 | length: 5 | before: 78DCD77618 | after: 0001000000
+  Base: 0x8177e6 | length: 1 | before: 10 | after: 00
+  Base: 0x8177ed | length: 1 | before: 00 | after: 01
+  Base: 0x8177f0 | length: 3 | before: D87781 | after: 000100
+  Base: 0x817800 | length: 1 | before: 00 | after: 01
+  Base: 0x817805 | length: 1 | before: 00 | after: 01
+  Base: 0x817807 | length: 1 | before: 00 | after: 80
+  Base: 0x817811 | length: 1 | before: 00 | after: 01
+  Base: 0x817821 | length: 2 | before: 0000 | after: 0101
+  Base: 0x817825 | length: 3 | before: 000000 | after: 010101
+  Base: 0x817829 | length: 2 | before: 0000 | after: 0101
+  Base: 0x81782c | length: 1 | before: 00 | after: 01
+  Base: 0x817830 | length: 1 | before: 00 | after: 01
+  Base: 0x817832 | length: 2 | before: 0000 | after: 0101
+  Base: 0x817835 | length: 2 | before: 0000 | after: 0101
+  Base: 0x817838 | length: 1 | before: 01 | after: 00
+  Base: 0x81783a | length: 1 | before: 00 | after: 01
+  Base: 0x81784c | length: 3 | before: 4C7881 | after: 000000
+  Base: 0x817850 | length: 3 | before: 4C7881 | after: 000000
+  Base: 0x817854 | length: 1 | before: 00 | after: 01
+  Base: 0x817860 | length: 3 | before: 463D5C | after: 000000
+  Base: 0x817870 | length: 7 | before: D05DD876D87781 | after: 00000000000000
+  Base: 0x817879 | length: 6 | before: 4CD776D87781 | after: 000000000000
+  Base: 0x817880 | length: 3 | before: 947881 | after: 000001
+  Base: 0x817884 | length: 21 | before: F04BD776E04BD776CC4BD7767056D876 | after: 00000000000000000000000000000000
+  Base: 0x81789b | length: 3 | before: 800021 | after: 010100
+  Base: 0x81789f | length: 4 | before: 00947881 | after: 01000000
+  Base: 0x8178a8 | length: 4 | before: D016C96E | after: 00000000
+  Base: 0x8178b0 | length: 18 | before: F1A86680AB30B25E778DF56EE1A052BA | after: 00000000000000000000000000000100
+  Base: 0x8178d0 | length: 1 | before: 00 | after: 01
+  Base: 0x8178d3 | length: 1 | before: 00 | after: 01
+  Base: 0x8178d6 | length: 1 | before: 00 | after: 01
+  Base: 0x8178db | length: 1 | before: 00 | after: 01
+  Base: 0x817a08 | length: 1 | before: 02 | after: 00
+  Base: 0x817a0c | length: 1 | before: 13 | after: 00
+  Base: 0x817a10 | length: 3 | before: 787A81 | after: 000100
+  Base: 0x817a14 | length: 3 | before: F9B97C | after: 000000
+  Base: 0x817a18 | length: 1 | before: 02 | after: 00
+  Base: 0x817a1c | length: 3 | before: 3F3885 | after: 000100
+  Base: 0x817a20 | length: 2 | before: 8B00 | after: 0001
+  Additional runs for this allocation may be omitted.
+AllocationBase: 0x7cf0000 | changed bytes: 198 | region: MEM_PRIVATE
+  Base: 0x7e49390 | length: 1 | before: 74 | after: 5B
+  Base: 0x7e49392 | length: 1 | before: 65 | after: 64
+  Base: 0x7e49394 | length: 1 | before: 74 | after: 65
+  Base: 0x7e49396 | length: 1 | before: 72 | after: 66
+  Base: 0x7e49398 | length: 1 | before: 69 | after: 61
+  Base: 0x7e4939a | length: 1 | before: 73 | after: 75
+  Base: 0x7e4939c | length: 1 | before: 2E | after: 6C
+  Base: 0x7e4939e | length: 1 | before: 65 | after: 74
+  Base: 0x7e493a0 | length: 1 | before: 78 | after: 5D
+  Base: 0x7e493a2 | length: 1 | before: 65 | after: 00
+  Base: 0x7eb9098 | length: 1 | before: 44 | after: 74
+  Base: 0x7eb909a | length: 1 | before: 3A | after: 65
+  Base: 0x7eb909c | length: 1 | before: 5C | after: 74
+  Base: 0x7eb909e | length: 1 | before: 54 | after: 72
+  Base: 0x7eb90a0 | length: 1 | before: 4F | after: 69
+  Base: 0x7eb90a2 | length: 1 | before: 2D | after: 73
+  Base: 0x7eb90a4 | length: 1 | before: 50 | after: 2E
+  Base: 0x7eb90a6 | length: 1 | before: 5F | after: 65
+  Base: 0x7eb90a8 | length: 1 | before: 43 | after: 78
+  Base: 0x7eb90aa | length: 1 | before: 48 | after: 65
+  Base: 0x7eb90ac | length: 1 | before: 53 | after: 00
+  Base: 0x7eb90ae | length: 1 | before: 5F | after: 35
+  Base: 0x7eb90b0 | length: 1 | before: 30 | after: 5C
+  Base: 0x7eb90b2 | length: 1 | before: 35 | after: 74
+  Base: 0x7eb90b4 | length: 1 | before: 5C | after: 65
+  Base: 0x7eb90b8 | length: 1 | before: 65 | after: 72
+  Base: 0x7eb90ba | length: 1 | before: 74 | after: 69
+  Base: 0x7eb90bc | length: 1 | before: 72 | after: 73
+  Base: 0x7eb90be | length: 1 | before: 69 | after: 2E
+  Base: 0x7eb90c0 | length: 1 | before: 73 | after: 65
+  Base: 0x7eb90c2 | length: 1 | before: 2E | after: 78
+  Base: 0x7eb90c6 | length: 1 | before: 78 | after: 00
+  Base: 0x7eb90e0 | length: 1 | before: 74 | after: 53
+  Base: 0x7eb90e2 | length: 1 | before: 65 | after: 6F
+  Base: 0x7eb90e4 | length: 1 | before: 74 | after: 66
+  Base: 0x7eb90e6 | length: 1 | before: 72 | after: 74
+  Base: 0x7eb90e8 | length: 1 | before: 69 | after: 77
+  Base: 0x7eb90ea | length: 1 | before: 73 | after: 61
+  Base: 0x7eb90ec | length: 1 | before: 2E | after: 72
+  Base: 0x7eb90f0 | length: 1 | before: 78 | after: 5C
+  Base: 0x7eb90f2 | length: 1 | before: 65 | after: 53
+  Base: 0x7eb90f4 | length: 1 | before: 00 | after: 6F
+  Base: 0x7eb90f6 | length: 1 | before: 35 | after: 67
+  Base: 0x7eb90f8 | length: 1 | before: 5C | after: 6F
+  Base: 0x7eb90fa | length: 1 | before: 74 | after: 75
+  Base: 0x7eb90fc | length: 1 | before: 65 | after: 49
+  Base: 0x7eb90fe | length: 1 | before: 74 | after: 6E
+  Base: 0x7eb9100 | length: 1 | before: 72 | after: 70
+  Base: 0x7eb9102 | length: 1 | before: 69 | after: 75
+  Base: 0x7eb9104 | length: 1 | before: 73 | after: 74
+  Base: 0x7eb9108 | length: 1 | before: 65 | after: 73
+  Base: 0x7eb910a | length: 1 | before: 78 | after: 74
+  Base: 0x7eb910c | length: 1 | before: 65 | after: 6F
+  Base: 0x7eb910e | length: 1 | before: 00 | after: 72
+  Base: 0x7eb9112 | length: 1 | before: 00 | after: 2E
+  Base: 0x7eb9114 | length: 1 | before: 5F | after: 75
+  Base: 0x7eb9116 | length: 1 | before: 63 | after: 73
+  Base: 0x7eb9118 | length: 1 | before: 74 | after: 65
+  Base: 0x7eb911a | length: 1 | before: 00 | after: 72
+  Base: 0x7eb911c | length: 1 | before: 00 | after: 5C
+  Base: 0x7eb95f0 | length: 1 | before: 44 | after: 53
+  Base: 0x7eb95f2 | length: 1 | before: 3A | after: 6F
+  Base: 0x7eb95f4 | length: 1 | before: 5C | after: 66
+  Base: 0x7eb95f6 | length: 1 | before: 54 | after: 74
+  Additional runs for this allocation may be omitted.
+AllocationBase: 0x18200000 | changed bytes: 183 | region: MEM_PRIVATE
+  Base: 0x182ee7f8 | length: 2 | before: 3001 | after: 2A02
+  Base: 0x182ee7fc | length: 2 | before: 2101 | after: 2002
+  Base: 0x182ee810 | length: 1 | before: 17 | after: 1B
+  Base: 0x18696029 | length: 1 | before: FE | after: BE
+  Base: 0x1869786c | length: 3 | before: 887C69 | after: 68C2AB
+  Base: 0x18697b98 | length: 3 | before: 887C69 | after: 68C2AB
+  Base: 0x18697c87 | length: 1 | before: 8C | after: 80
+  Base: 0x186b0dd8 | length: 1 | before: E4 | after: E3
+  Base: 0x186b0dda | length: 1 | before: E8 | after: FC
+  Base: 0x186c2f1c | length: 1 | before: 02 | after: 01
+  Base: 0x186c2f20 | length: 2 | before: 35B7 | after: B5C7
+  Base: 0x186c2f5c | length: 1 | before: 02 | after: 01
+  Base: 0x186c2f60 | length: 2 | before: 35B7 | after: B5C7
+  Base: 0x186c2fdc | length: 1 | before: 02 | after: 01
+  Base: 0x186c2fe0 | length: 2 | before: 35B7 | after: B5C7
+  Base: 0x186c32dc | length: 1 | before: 02 | after: 01
+  Base: 0x186c32e0 | length: 2 | before: 35B7 | after: B5C7
+  Base: 0x18727fdb | length: 1 | before: 20 | after: A0
+  Base: 0x1872cb80 | length: 1 | before: 34 | after: 39
+  Base: 0x1872cb84 | length: 1 | before: 39 | after: 34
+  Base: 0x1872cb86 | length: 1 | before: 39 | after: 30
+  Base: 0x1872cb88 | length: 1 | before: 38 | after: 31
+  Base: 0x1872cba8 | length: 1 | before: 35 | after: 38
+  Base: 0x1872cbac | length: 1 | before: 30 | after: 39
+  Base: 0x1872cbae | length: 1 | before: 33 | after: 32
+  Base: 0x1872cbb0 | length: 1 | before: 32 | after: 35
+  Base: 0x1872cbd0 | length: 1 | before: 35 | after: 39
+  Base: 0x1872cbd6 | length: 1 | before: 30 | after: 36
+  Base: 0x1872cbd8 | length: 1 | before: 34 | after: 37
+  Base: 0x1872cbf8 | length: 1 | before: 35 | after: 39
+  Base: 0x1872cbfc | length: 1 | before: 32 | after: 35
+  Base: 0x1872cbfe | length: 1 | before: 31 | after: 33
+  Base: 0x1872cc00 | length: 1 | before: 39 | after: 37
+  Base: 0x1872cc20 | length: 1 | before: 34 | after: 39
+  Base: 0x1872cc24 | length: 1 | before: 38 | after: 34
+  Base: 0x1872cc26 | length: 1 | before: 32 | after: 36
+  Base: 0x1872cc28 | length: 1 | before: 38 | after: 39
+  Base: 0x1872cc48 | length: 1 | before: 35 | after: 39
+  Base: 0x1872cc4c | length: 1 | before: 32 | after: 35
+  Base: 0x1872cc50 | length: 1 | before: 33 | after: 34
+  Base: 0x1872cc70 | length: 1 | before: 35 | after: 39
+  Base: 0x1872cc74 | length: 1 | before: 30 | after: 32
+  Base: 0x1872cc76 | length: 1 | before: 34 | after: 31
+  Base: 0x1872cc78 | length: 1 | before: 39 | after: 34
+  Base: 0x1872cc98 | length: 1 | before: 35 | after: 39
+  Base: 0x1872cc9e | length: 1 | before: 32 | after: 38
+  Base: 0x1872cca0 | length: 1 | before: 31 | after: 34
+  Base: 0x1872ccc0 | length: 1 | before: 35 | after: 39
+  Base: 0x1872ccc6 | length: 1 | before: 32 | after: 35
+  Base: 0x1872ccc8 | length: 1 | before: 31 | after: 30
+  Base: 0x1872cce8 | length: 1 | before: 35 | after: 39
+  Base: 0x1872ccee | length: 1 | before: 30 | after: 36
+  Base: 0x1872ccf0 | length: 1 | before: 32 | after: 35
+  Base: 0x1872cd10 | length: 1 | before: 35 | after: 39
+  Base: 0x1872cd14 | length: 1 | before: 30 | after: 35
+  Base: 0x1872cd16 | length: 1 | before: 38 | after: 33
+  Base: 0x1872cd18 | length: 1 | before: 33 | after: 37
+  Base: 0x1872cd38 | length: 1 | before: 35 | after: 39
+  Base: 0x1872cd3c | length: 1 | before: 31 | after: 32
+  Base: 0x1872cd3e | length: 1 | before: 35 | after: 31
+  Base: 0x1872cd40 | length: 1 | before: 31 | after: 34
+  Base: 0x1872cd60 | length: 1 | before: 34 | after: 39
+  Base: 0x1872cd64 | length: 1 | before: 39 | after: 32
+  Base: 0x1872cd66 | length: 1 | before: 39 | after: 36
+  Additional runs for this allocation may be omitted.
+AllocationBase: 0x2920000 | changed bytes: 122 | region: MEM_PRIVATE
+  Base: 0x2923444 | length: 1 | before: 55 | after: 4D
+  Base: 0x2923446 | length: 1 | before: 53 | after: 41
+  Base: 0x2923448 | length: 1 | before: 45 | after: 43
+  Base: 0x292344a | length: 1 | before: 52 | after: 48
+  Base: 0x292344c | length: 1 | before: 5C | after: 49
+  Base: 0x292344e | length: 1 | before: 53 | after: 4E
+  Base: 0x2923450 | length: 1 | before: 2D | after: 45
+  Base: 0x2923452 | length: 1 | before: 31 | after: 5C
+  Base: 0x2923454 | length: 1 | before: 2D | after: 53
+  Base: 0x2923456 | length: 1 | before: 35 | after: 4F
+  Base: 0x2923458 | length: 1 | before: 2D | after: 46
+  Base: 0x292345a | length: 1 | before: 32 | after: 54
+  Base: 0x292345c | length: 1 | before: 31 | after: 57
+  Base: 0x292345e | length: 1 | before: 2D | after: 41
+  Base: 0x2923460 | length: 1 | before: 38 | after: 52
+  Base: 0x2923462 | length: 1 | before: 30 | after: 45
+  Base: 0x2923464 | length: 1 | before: 38 | after: 5C
+  Base: 0x2923466 | length: 1 | before: 32 | after: 4D
+  Base: 0x2923468 | length: 1 | before: 31 | after: 69
+  Base: 0x292346a | length: 1 | before: 35 | after: 63
+  Base: 0x292346c | length: 1 | before: 39 | after: 72
+  Base: 0x292346e | length: 1 | before: 38 | after: 6F
+  Base: 0x2923470 | length: 1 | before: 35 | after: 73
+  Base: 0x2923472 | length: 1 | before: 2D | after: 6F
+  Base: 0x2923474 | length: 1 | before: 33 | after: 66
+  Base: 0x2923476 | length: 1 | before: 34 | after: 74
+  Base: 0x2923478 | length: 1 | before: 39 | after: 5C
+  Base: 0x292347a | length: 1 | before: 32 | after: 41
+  Base: 0x292347c | length: 1 | before: 37 | after: 50
+  Base: 0x292347e | length: 1 | before: 34 | after: 4C
+  Base: 0x2923480 | length: 1 | before: 32 | after: 00
+  Base: 0x2925684 | length: 1 | before: 55 | after: 4D
+  Base: 0x2925686 | length: 1 | before: 53 | after: 41
+  Base: 0x2925688 | length: 1 | before: 45 | after: 43
+  Base: 0x292568a | length: 1 | before: 52 | after: 48
+  Base: 0x292568c | length: 1 | before: 5C | after: 49
+  Base: 0x292568e | length: 1 | before: 53 | after: 4E
+  Base: 0x2925690 | length: 1 | before: 2D | after: 45
+  Base: 0x2925692 | length: 1 | before: 31 | after: 5C
+  Base: 0x2925694 | length: 1 | before: 2D | after: 53
+  Base: 0x2925696 | length: 1 | before: 35 | after: 4F
+  Base: 0x2925698 | length: 1 | before: 2D | after: 46
+  Base: 0x292569a | length: 1 | before: 32 | after: 54
+  Base: 0x292569c | length: 1 | before: 31 | after: 57
+  Base: 0x292569e | length: 1 | before: 2D | after: 41
+  Base: 0x29256a0 | length: 1 | before: 38 | after: 52
+  Base: 0x29256a2 | length: 1 | before: 30 | after: 45
+  Base: 0x29256a4 | length: 1 | before: 38 | after: 5C
+  Base: 0x29256a6 | length: 1 | before: 32 | after: 4D
+  Base: 0x29256a8 | length: 1 | before: 31 | after: 69
+  Base: 0x29256aa | length: 1 | before: 35 | after: 63
+  Base: 0x29256ac | length: 1 | before: 39 | after: 72
+  Base: 0x29256ae | length: 1 | before: 38 | after: 6F
+  Base: 0x29256b0 | length: 1 | before: 35 | after: 73
+  Base: 0x29256b2 | length: 1 | before: 2D | after: 6F
+  Base: 0x29256b4 | length: 1 | before: 33 | after: 66
+  Base: 0x29256b6 | length: 1 | before: 34 | after: 74
+  Base: 0x29256b8 | length: 1 | before: 39 | after: 5C
+  Base: 0x29256ba | length: 1 | before: 32 | after: 41
+  Base: 0x29256bc | length: 1 | before: 37 | after: 50
+  Base: 0x29256be | length: 1 | before: 34 | after: 4C
+  Base: 0x29256c0 | length: 1 | before: 32 | after: 00
+  Base: 0x292929a | length: 1 | before: 4D | after: 53
+  Base: 0x292929c | length: 1 | before: 69 | after: 6F
+  Additional runs for this allocation may be omitted.
+AllocationBase: 0x400000 | changed bytes: 30 | region: MEM_IMAGE | module: tetris.exe
+  Base: 0x58c1c0 | length: 1 | before: 3A | after: 56
+  Base: 0x58c1c4 | length: 1 | before: A2 | after: 9A
+  Base: 0x591e98 | length: 2 | before: 11DE | after: B6EE
+  Base: 0x591ea4 | length: 2 | before: 16B7 | after: B0C7
+  Base: 0x591f68 | length: 2 | before: E2DB | after: 0AEE
+  Base: 0x5920b4 | length: 2 | before: CFDA | after: FF00
+  Base: 0x597a68 | length: 3 | before: D0496C | after: C8D52E
+  Base: 0x597a6c | length: 4 | before: 00000000 | after: D0496C18
+  Base: 0x597a74 | length: 2 | before: 11DE | after: B6EE
+  Base: 0x597a88 | length: 4 | before: 00000000 | after: FEFFFFFF
+  Base: 0x597a90 | length: 1 | before: 3A | after: 56
+  Base: 0x597a94 | length: 1 | before: A2 | after: 9A
+  Base: 0x597afc | length: 2 | before: 95DB | after: FEE1
+  Base: 0x597b00 | length: 3 | before: D0496C | after: C8D52E
+
+[Candidate memory context windows]
+Each window shows 16 bytes before and after a changed range when available.
+AllocationBase: 0xa0000 | region: MEM_PRIVATE | changed bytes: 2668
+  Changed: 0x19d664 | length: 4 | allocation offset: 0xfd664
+    before[36]: 506172616D3D3078300000000000000009ACDC770000000084D61900DB62D37507000000
+    after [36]: 506172616D3D307830000000000000000000000000000000000000000000000000000000
+  Changed: 0x19d66c | length: 3 | allocation offset: 0xfd66c
+    before[35]: 300000000000000009ACDC770000000084D61900DB62D3750700000080D619003983FC
+    after [35]: 3000000000000000000000000000000000000000000000000000000000000000000000
+  Changed: 0x19d670 | length: 5 | allocation offset: 0xfd670
+    before[37]: 0000000009ACDC770000000084D61900DB62D3750700000080D619003983FC2FB80563023C
+    after [37]: 00000000000000000000000000000000000000000000000000000000000000000000000000
+  Changed: 0x19d678 | length: 3 | allocation offset: 0xfd678
+    before[35]: 0000000084D61900DB62D3750700000080D619003983FC2FB80563023CD7190082684F
+    after [35]: 0000000000000000000000000000000000000000000000000000000000000000000000
+  Changed: 0x19d67c | length: 11 | allocation offset: 0xfd67c
+    before[43]: 84D61900DB62D3750700000080D619003983FC2FB80563023CD7190082684F000000000084D91900D8D619
+    after [43]: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  Changed: 0x19d688 | length: 3 | allocation offset: 0xfd688
+    before[35]: 80D619003983FC2FB80563023CD7190082684F000000000084D91900D8D61900000000
+    after [35]: 0000000000000000000000000000000000000000000000000000000000000000000000
+  Changed: 0x19d690 | length: 3 | allocation offset: 0xfd690
+    before[35]: B80563023CD7190082684F000000000084D91900D8D6190000000000B8E04F00000000
+    after [35]: 0000000000000000000000000000000000000000000000000000000000000000000000
+  Changed: 0x19d694 | length: 3 | allocation offset: 0xfd694
+    before[35]: 3CD7190082684F000000000084D91900D8D6190000000000B8E04F0000000000EEFFFF
+    after [35]: 0000000000000000000000000000000000000000000000000000000000000000000000
+  Context windows emitted: 8 (additional ranges omitted)
+AllocationBase: 0x3a40000 | region: MEM_PRIVATE | changed bytes: 2244
+  Changed: 0x3a443c8 | length: 1 | allocation offset: 0x43c8
+    before[33]: 9080A40370309A00B01B000060090000403300004C625E00000000000000000078
+    after [33]: 9080A40370309A00B01B00006009000014330000487A5E000000000000000000A0
+  Changed: 0x3a443cc | length: 2 | allocation offset: 0x43cc
+    before[34]: 70309A00B01B000060090000403300004C625E0000000000000000007894A4030000
+    after [34]: 70309A00B01B00006009000014330000487A5E000000000000000000A093A4030000
+  Changed: 0x3a443d8 | length: 2 | allocation offset: 0x43d8
+    before[34]: 403300004C625E0000000000000000007894A4030000000001000000080000000000
+    after [34]: 14330000487A5E000000000000000000A093A4030000000001000000090000000000
+  Changed: 0x3a443e4 | length: 1 | allocation offset: 0x43e4
+    before[33]: 000000007894A40300000000010000000800000000000100000000003002000000
+    after [33]: 00000000A093A40300000000010000000900000000000100000000003002000000
+  Changed: 0x3a4440c | length: 2 | allocation offset: 0x440c
+    before[34]: 0000010028020000000000000300000000000000865AE7ABFD7F0000200000000000
+    after [34]: 000001002802000000000000030000009B0100000000000000000000140000000000
+  Changed: 0x3a44410 | length: 6 | allocation offset: 0x4410
+    before[38]: 28020000000000000300000000000000865AE7ABFD7F00002000000000000000080000000000
+    after [38]: 2802000000000000030000009B0100000000000000000000140000000000000058135C9F9B01
+  Changed: 0x3a44418 | length: 1 | allocation offset: 0x4418
+    before[33]: 0300000000000000865AE7ABFD7F000020000000000000000800000000000000C8
+    after [33]: 030000009B0100000000000000000000140000000000000058135C9F9B01000000
+  Changed: 0x3a44420 | length: 6 | allocation offset: 0x4420
+    before[38]: 865AE7ABFD7F000020000000000000000800000000000000C86AA49E9B0100007C49ECABFD7F
+    after [38]: 0000000000000000140000000000000058135C9F9B010000000000009B010000C027619C9B01
+  Context windows emitted: 8 (additional ranges omitted)
+AllocationBase: 0x9860000 | region: MEM_PRIVATE | changed bytes: 2043
+  Changed: 0x986a294 | length: 1 | allocation offset: 0xa294
+    before[33]: 0000000000000000D0070002030000006403000000000000000000002000000001
+    after [33]: 0000000000000000D0070002030000006603000000000000000000002000000001
+  Changed: 0x986a2c4 | length: 1 | allocation offset: 0xa2c4
+    before[33]: 00000000DADADADA00000000000000006603000028F86A0B0000000010975C0000
+    after [33]: 00000000DADADADA00000000000000006803000028F86A0B0000000010975C0000
+  Changed: 0x98735a0 | length: 1 | allocation offset: 0x135a0
+    before[33]: 0000000040A69C0320A286090008000064030000AE8A991E0000007E0000002024
+    after [33]: 0000000040A69C0320A286090008000066030000AE8A991E0000007E0000002024
+  Changed: 0x98735c8 | length: 1 | allocation offset: 0x135c8
+    before[33]: 020000006C1A0000240D0000F0348709660300001032000088535E000000000000
+    after [33]: 020000006C1A0000240D0000F034870968030000F8330000FC765E000000000000
+  Changed: 0x98735cc | length: 2 | allocation offset: 0x135cc
+    before[34]: 6C1A0000240D0000F0348709660300001032000088535E0000000000000000000000
+    after [34]: 6C1A0000240D0000F034870968030000F8330000FC765E0000000000000000000000
+  Changed: 0x98735d0 | length: 2 | allocation offset: 0x135d0
+    before[34]: 240D0000F0348709660300001032000088535E000000000000000000000000000000
+    after [34]: 240D0000F034870968030000F8330000FC765E000000000000000000000000000000
+  Changed: 0x9882868 | length: 305 | allocation offset: 0x22868
+    before[337]: 6C2539696F6D304E5D43FB10F071030829FCB43929FCB4392576B6392576B639237CB239237CB23977AFAC3977AFAC3938E7A63938E7A6398715A3398715A339F1F1A539F1F1A539F43BAD39F43BAD3979A7AF3979A7AF39244CAA39244CAA39FD0EA539FD0EA539A548A439A548A43956E6A33956E6A3397007A1397007A13917889E3917889E3980899F3980899F3973FBA03973FBA0398FCE9E398FCE9E3962EB993962EB99398C7494398C74943933978F3933978F39A84F8C39A84F8C398ABE8B398ABE8B39D9249039D92490392D049D392D049D39574FA939574FA9391DAEA9391DAEA9392F49A8392F49A83946B1AD3946B1AD39C4E3B639C4E3B6394F59C0394F59C039F1F8C839F1F8C8397BE5CF397BE5CF398FACD4398FACD4393320D8393320D839AC8DDA39AC8DDA395698DB395698DB39C20CDB39C20CDB390D00D9390D00D9399362D4399362D43959
+    after [337]: 6C2539696F6D304E5D43FB10F0710308000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  Changed: 0x988299a | length: 3 | allocation offset: 0x2299a
+    before[35]: DB395698DB39C20CDB39C20CDB390D00D9390D00D9399362D4399362D43959C0CF3959
+    after [35]: 0000000000000000000000000000000000000000000000000000000000000000000000
+  Context windows emitted: 8 (additional ranges omitted)
+AllocationBase: 0xfef0000 | region: MEM_PRIVATE | changed bytes: 1790
+  Changed: 0xfef001c | length: 305 | allocation offset: 0x1c
+    before[337]: 0030EF0F00000000010000000000EF0F29FCB43929FCB4392576B6392576B639237CB239237CB23977AFAC3977AFAC3938E7A63938E7A6398715A3398715A339F1F1A539F1F1A539F43BAD39F43BAD3979A7AF3979A7AF39244CAA39244CAA39FD0EA539FD0EA539A548A439A548A43956E6A33956E6A3397007A1397007A13917889E3917889E3980899F3980899F3973FBA03973FBA0398FCE9E398FCE9E3962EB993962EB99398C7494398C74943933978F3933978F39A84F8C39A84F8C398ABE8B398ABE8B39D9249039D92490392D049D392D049D39574FA939574FA9391DAEA9391DAEA9392F49A8392F49A83946B1AD3946B1AD39C4E3B639C4E3B6394F59C0394F59C039F1F8C839F1F8C8397BE5CF397BE5CF398FACD4398FACD4393320D8393320D839AC8DDA39AC8DDA395698DB395698DB39C20CDB39C20CDB390D00D9390D00D9399362D4399362D43959
+    after [337]: 0030EF0F00000000010000000000EF0F000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  Changed: 0xfef014e | length: 3 | allocation offset: 0x14e
+    before[35]: DB395698DB39C20CDB39C20CDB390D00D9390D00D9399362D4399362D43959C0CF3959
+    after [35]: 0000000000000000000000000000000000000000000000000000000000000000000000
+  Changed: 0xfef0152 | length: 1482 | allocation offset: 0x152
+    before[1514]: DB39C20CDB39C20CDB390D00D9390D00D9399362D4399362D43959C0CF3959C0CF390605CE390605CE398E01CF398E01CF39EBE6D339EBE6D339D4EED939D4EED939549CD839549CD839715FCD39715FCD39B53AC239B53AC2392365BD392365BD3938AEB73938AEB739AB95A939AB95A939B0F29C39B0F29C39CF4B9C39CF4B9C399202A0399202A039AFF09E39AFF09E3983FC993983FC9939F1AF9439F1AF9439A3709039A37090399FC58E399FC58E39A69F9039A69F90394D0793394D079339E4F49339E4F49339704894397048943905969339059693390FED92390FED92398CD593398CD5933908429539084295399D6095399D609539E3979439E39794394FC694394FC69439F5339639F533963925F9963925F99639811B9639811B96394CD395394CD39539E2129839E2129839B3159B39B3159B39A7D79D39A7D79D394F6EA0394F6EA0398909A3398909A3393DF7A4393DF7A439043DA439043DA43957E7A13957E7A139332FA239332FA239879DA639879DA63938F1AB3938F1AB39DA74B039DA74B0394D26B5394D26B5399C11BB399C11BB39D6E3BF39D6E3BF395A71C0395A71C0397E60BF397E60BF39C502C039C502C039401AC239401AC2392A3BC4392A3BC439BE28C639BE28C63901E1C83901E1C8392069CC392069CC390A71CC390A71CC39B30EC439B30EC4397578BC397578BC39DC48C039DC48C039B366C639B366C639494CC739494CC739F9C9C439F9C9C43995EEC03995EEC03919D5BC3919D5BC39DF58BA39DF58BA39D2D7B939D2D7B9399AB5B8399AB5B8390E86B5390E86B539FD03B239FD03B2397C13AF397C13AF397ABBAC397ABBAC399C95AB399C95AB392224AB392224AB399530AC399530AC394042AC394042AC39BDD9A439BDD9A439A9A39839A9A39839231794392317943982AD9B3982AD9B398456A5398456A53975C7AB3975C7AB39BD5CAF39BD5CAF39B3A8AB39B3A8AB39245BA739245BA739FA86A939FA86A93997F8AD3997F8AD39C179AF39C179AF39F197AE39F197AE39032CAE39032CAE39E266AE39E266AE3993BDAC3993BDAC393C53A8393C53A8391BA4A5391BA4A53959E7A83959E7A839A160AC39A160AC39394AAB39394AAB39A9DEA739A9DEA739C346A139C346A139424D9B39424D9B39A7739D39A7739D39E463A539E463A5398359A9398359A9392506A7392506A7394759A6394759A6392953AB392953AB39B937AF39B937AF39177BAB39177BAB398A61A8398A61A839DB8CAD39DB8CAD39AC74B639AC74B639131BC039131BC03982B1C83982B1C83949ABCC3949ABCC3957E7CC3957E7CC39152ACF39152ACF39E4A8D539E4A8D539658FDC39658FDC3996E7E13996E7E139E6F8E639E6F8E6395462EC395462EC392C85F1392C85F13931B8F63931B8F639FD55FA39FD55FA398685F8398685F839EB0DF439EB0DF4390BAAF4390BAAF4393C98FA393C98FA397DC3FC397DC3FC399C01F7399C01F739B4B2F039B4B2F0399EF5EE399EF5EE39C9DEEC39C9DEEC397C29E6397C29E6391FABDE391FABDE39FBEBDA39FBEBDA3903D6D73903D6D739FC63CF39FC63CF39E815C339E815C3395368B9395368B9391C80B4391C80B4396C70B1396C70B1399D30AF399D30AF3968A3AF3968A3AF3936BCB53936BCB5392AA6BB392AA6BB39ABD1BB39ABD1BB39132FB839132FB8395371B0395371B039168AA739168AA739D630A339D630A3394676A3394676A339DB7AA339DB7AA339D534A139D534A13906619D3906619D391F8997391F899739E07A9139E07A91392CD58C392CD58C39135E8939135E8939E8A78839E8A78839B4198839B41988392A8183392A8183398FF077398FF0773962B3693962B36939E6C05E39E6C05E39EB205739EB20573955A7533955A753394E3253394E325339BABF5539BABF5539D5905839D5905839520C5939520C59397FE456397FE45639EC904D39EC904D39FC094439FC094439BF514739BF514739C7525539C7525539371D6939371D69397C1B78397C1B78393CBD57393CBD573906B6CE3806B6CE38CE13CFB5CE13CFB5C3636FB7C3636FB7841F17B6841F17B600000000000000000000000000000000
+    after [1514]: 0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+AllocationBase: 0x191d0000 | region: MEM_PRIVATE | changed bytes: 1379
+  Changed: 0x192b68c8 | length: 2 | allocation offset: 0xe68c8
+    before[34]: 8262E8C800000080BC1E3A6D0000000098692B19E013B3168F62E5C800010080BC1E
+    after [34]: 8262E8C800000080BC1E3A6D00000000586A2B19D80EB3168F62E5C800010080BC1E
+  Changed: 0x192b68cc | length: 2 | allocation offset: 0xe68cc
+    before[34]: 00000080BC1E3A6D0000000098692B19E013B3168F62E5C800010080BC1E3A6D0000
+    after [34]: 00000080BC1E3A6D00000000586A2B19D80EB3168F62E5C800010080BC1E3A6D0000
+  Changed: 0x192b68e4 | length: 2 | allocation offset: 0xe68e4
+    before[34]: 00010080BC1E3A6D0000000008692B19E818B3168862E6C800020080BC1E3A6D0000
+    after [34]: 00010080BC1E3A6D0000000008692B19A019B3168862E6C800020080BC1E3A6D0000
+  Changed: 0x192b68f8 | length: 2 | allocation offset: 0xe68f8
+    before[34]: 8862E6C800020080BC1E3A6D0000000050692B1940BD6A02B562E3C800030080BC1E
+    after [34]: 8862E6C800020080BC1E3A6D00000000A06A2B197876CF0DB562E3C800030080BC1E
+  Changed: 0x192b68fc | length: 4 | allocation offset: 0xe68fc
+    before[36]: 00020080BC1E3A6D0000000050692B1940BD6A02B562E3C800030080BC1E3A6D00000000
+    after [36]: 00020080BC1E3A6D00000000A06A2B197876CF0DB562E3C800030080BC1E3A6D00000000
+  Changed: 0x192b6910 | length: 2 | allocation offset: 0xe6910
+    before[34]: B562E3C800030080BC1E3A6D0000000020692B19A019B316B662FCC800040080BC1E
+    after [34]: B562E3C800030080BC1E3A6D00000000D86B2B1930B9DD0DB662FCC800040080BC1E
+  Changed: 0x192b6914 | length: 4 | allocation offset: 0xe6914
+    before[36]: 00030080BC1E3A6D0000000020692B19A019B316B662FCC800040080BC1E3A6D00000000
+    after [36]: 00030080BC1E3A6D00000000D86B2B1930B9DD0DB662FCC800040080BC1E3A6D00000000
+  Changed: 0x192b6928 | length: 2 | allocation offset: 0xe6928
+    before[34]: B662FCC800040080BC1E3A6D00000000E86D2B1930B9DD0DB362F9C800050080BC1E
+    after [34]: B662FCC800040080BC1E3A6D00000000C8692B19581AB316B362F9C800050080BC1E
+  Context windows emitted: 8 (additional ranges omitted)
+AllocationBase: 0x60000 | region: MEM_PRIVATE | changed bytes: 1145
+  Changed: 0x9a448 | length: 6 | allocation offset: 0x3a448
+    before[38]: A411D6B0FD7F0000000000000000000001000000000000006C370000000000001A9000000000
+    after [38]: A411D6B0FD7F00000000000000000000948860B1FD7F0000BC25D5B0FD7F0000E2DE5FB1FD7F
+  Changed: 0x9a450 | length: 6 | allocation offset: 0x3a450
+    before[38]: 000000000000000001000000000000006C370000000000001A900000000000003431D5B0FD7F
+    after [38]: 0000000000000000948860B1FD7F0000BC25D5B0FD7F0000E2DE5FB1FD7F0000020000000000
+  Changed: 0x9a458 | length: 6 | allocation offset: 0x3a458
+    before[38]: 01000000000000006C370000000000001A900000000000003431D5B0FD7F000072C961B1FD7F
+    after [38]: 948860B1FD7F0000BC25D5B0FD7F0000E2DE5FB1FD7F0000020000000000000040105CB1FD7F
+  Changed: 0x9a460 | length: 6 | allocation offset: 0x3a460
+    before[38]: 6C370000000000001A900000000000003431D5B0FD7F000072C961B1FD7F0000020000000000
+    after [38]: BC25D5B0FD7F0000E2DE5FB1FD7F0000020000000000000040105CB1FD7F0000020000000000
+  Changed: 0x9a468 | length: 3 | allocation offset: 0x3a468
+    before[35]: 1A900000000000003431D5B0FD7F000072C961B1FD7F00000200000000000000010000
+    after [35]: E2DE5FB1FD7F0000020000000000000040105CB1FD7F00000200000000000000000000
+  Changed: 0x9a478 | length: 1 | allocation offset: 0x3a478
+    before[33]: 72C961B1FD7F0000020000000000000001000000000000006C370000000000001A
+    after [33]: 40105CB1FD7F0000020000000000000000000000000000000000000000000000A6
+  Changed: 0x9a480 | length: 2 | allocation offset: 0x3a480
+    before[34]: 020000000000000001000000000000006C370000000000001A900000000000003431
+    after [34]: 020000000000000000000000000000000000000000000000A6A5B12325C6000070AC
+  Changed: 0x9a488 | length: 6 | allocation offset: 0x3a488
+    before[38]: 01000000000000006C370000000000001A900000000000003431D5B0FD7F000072C961B1FD7F
+    after [38]: 00000000000000000000000000000000A6A5B12325C6000070AC0900000000001B1563B1FD7F
+  Context windows emitted: 8 (additional ranges omitted)
+AllocationBase: 0x5d80000 | region: MEM_PRIVATE | changed bytes: 585
+  Changed: 0x5e7f140 | length: 2 | allocation offset: 0xff140
+    before[34]: 090000002000000090F8E7056C006C0058D39909C6B8F2031CD9DB6909AB5304FAEF
+    after [34]: 090000002000000090F8E7056C006C0030DD9909C6B8F2031CD9DB6909AB5304FAEF
+  Changed: 0x5e7f160 | length: 2 | allocation offset: 0xff160
+    before[34]: FAEF36A6F6FD80A1000000000000000072D39909000000000000000000000000C6B8
+    after [34]: FAEF36A6F6FD80A100000000000000004ADD9909000000000000000000000000C6B8
+  Changed: 0x5e7f2dc | length: 2 | allocation offset: 0xff2dc
+    before[34]: 80F3E7051A0000000D000000B233DE040E81F207E8487D001A00000080F3E70594F3
+    after [34]: 80F3E7051A0000000D000000B233DE04D67FF207E8487D001A00000080F3E70594F3
+  Changed: 0x5e7f300 | length: 3 | allocation offset: 0xff300
+    before[35]: 140000000A000000B233DE04CE7DF207C89FEB0714000000A0F3E705B4F3E705000000
+    after [35]: 140000000A000000B233DE04CE7DF2070894E40714000000A0F3E705B4F3E705000000
+  Changed: 0x5e7f320 | length: 3 | allocation offset: 0xff320
+    before[35]: 00000000E8F7E70564F3E705E128DE04C89FEB070A000000B4F3E70560F8E705730000
+    after [35]: 00000000E8F7E70564F3E705E128DE040894E4070A000000B4F3E70560F8E705730000
+  Changed: 0x5e7f3d0 | length: 3 | allocation offset: 0xff3d0
+    before[35]: 00000000FFFFFFFF0000000000FF0000C89FEB070A000000019DEC0726000000010000
+    after [35]: 00000000FFFFFFFF0000000000FF00000894E4070A000000019DEC0726000000010000
+  Changed: 0x5e7f5a0 | length: 2 | allocation offset: 0xff5a0
+    before[34]: 000000000000EE031005EE03447BDF7758D39909000078001C000000000000000000
+    after [34]: 000000000000EE031005EE03447BDF7730DD9909000078001C000000000000000000
+  Changed: 0x5e7f5cc | length: 1 | allocation offset: 0xff5cc
+    before[33]: 30AEDE77640000000000000050399E09090000000000000018000900F0CE990958
+    after [33]: 30AEDE77640000000000000050399E091E0000000000000018001E00F0CE990930
+  Context windows emitted: 8 (additional ranges omitted)
+AllocationBase: 0x780000 | region: MEM_PRIVATE | changed bytes: 294
+  Changed: 0x780214 | length: 1 | allocation offset: 0x214
+    before[33]: 0400000005000000DB00000004000000626F0000450000009D010000D400000000
+    after [33]: 0400000005000000DB00000004000000646F0000450000009D010000D400000000
+  Changed: 0x780238 | length: 2 | allocation offset: 0x238
+    before[34]: 00000000010000003500000001000000FF0E0000630000001200000000200800287A
+    after [34]: 00000000010000003500000001000000010F0000630000001200000000200800287A
+  Changed: 0x78024c | length: 2 | allocation offset: 0x24c
+    before[34]: 630000001200000000200800287A3A0018C338000400000000E00F00004AE977FFFF
+    after [34]: 630000001200000000200800287A3A0090C038000400000000E00F00004AE977FFFF
+  Changed: 0x7956cc | length: 1 | allocation offset: 0x156cc
+    before[33]: 490A008C6CEB79006CEB7900000000000D000000000000000F000000F0047A0080
+    after [33]: 490A008C6CEB79006CEB7900000000000E000000000000000F000000F0047A0080
+  Changed: 0x7a792c | length: 1 | allocation offset: 0x2792c
+    before[33]: 405A7B0004000000FFFF010002000000E9010000F84C7B00020000000000000000
+    after [33]: 405A7B0004000000FFFF010002000000F1010000F84C7B00020000000000000000
+  Changed: 0x7a7a8c | length: 1 | allocation offset: 0x27a8c
+    before[33]: 404A7C0000000000FFFF0100000000002600000000000000000000000000000000
+    after [33]: 404A7C0000000000FFFF0100000000002900000000000000000000000000000000
+  Changed: 0x7a9742 | length: 1 | allocation offset: 0x29742
+    before[33]: 02006874810000000000000000000C000D00230000000E00210007000000B0967A
+    after [33]: 02006874810000000000000000000C000500230000000E00210007000000B0967A
+  Changed: 0x7b6464 | length: 1 | allocation offset: 0x36464
+    before[33]: 01000000982E8100004C7C000000000012000000186310C900180088D8187B76C8
+    after [33]: 01000000982E8100004C7C000000000013000000186310C900180088D8187B76C8
+  Context windows emitted: 8 (additional ranges omitted)
+AllocationBase: 0x400000 | region: MEM_IMAGE | module: tetris.exe | changed bytes: 30
+  Changed: 0x58c1c0 | length: 1 | allocation offset: 0x18c1c0
+    before[33]: 2E3F4156434D7946696C6540400000003A010000A2010000A4675500000000002E
+    after [33]: 2E3F4156434D7946696C654040000000560100009A010000A4675500000000002E
+  Changed: 0x58c1c4 | length: 1 | allocation offset: 0x18c1c4
+    before[33]: 434D7946696C6540400000003A010000A2010000A4675500000000002E3F415643
+    after [33]: 434D7946696C654040000000560100009A010000A4675500000000002E3F415643
+  Changed: 0x591e98 | length: 2 | allocation offset: 0x191e98
+    before[34]: 01000000C83C6302E83C63020000000011DE9F00110000000F00000016B743000000
+    after [34]: 01000000C83C6302E83C630200000000B6EE9F00110000000F000000B0C743000000
+  Changed: 0x591ea4 | length: 2 | allocation offset: 0x191ea4
+    before[34]: 0000000011DE9F00110000000F00000016B74300000000002E000000000000000000
+    after [34]: 00000000B6EE9F00110000000F000000B0C74300000000002E000000000000000000
+  Changed: 0x591f68 | length: 2 | allocation offset: 0x191f68
+    before[34]: 000000000000000000000000B80B0000E2DB9F00086B700301000000983B6302886B
+    after [34]: 000000000000000000000000B80B00000AEE9F00086B700301000000983B6302886B
+  Changed: 0x5920b4 | length: 2 | allocation offset: 0x1920b4
+    before[34]: 00000000000000000000000001000000CFDA00002813770300000000D89A6F030800
+    after [34]: 00000000000000000000000001000000FF0000002813770300000000D89A6F030800
+  Changed: 0x597a68 | length: 3 | allocation offset: 0x197a68
+    before[35]: A8D67403A8D674030000000000000000D0496C18000000000000000011DE9F00000000
+    after [35]: A8D67403A8D674030000000000000000C8D52E18D0496C1800000000B6EE9F00000000
+  Changed: 0x597a6c | length: 4 | allocation offset: 0x197a6c
+    before[36]: A8D674030000000000000000D0496C18000000000000000011DE9F00000000000F000000
+    after [36]: A8D674030000000000000000C8D52E18D0496C1800000000B6EE9F00000000000F000000
+  Context windows emitted: 8 (additional ranges omitted)
+
+[Most changed 4 KiB pages]
+Page: 0xfef0000 | changed bytes: 1790
+Page: 0x9882000 | changed bytes: 1790
+Page: 0x3a45000 | changed bytes: 1790
+Page: 0x19f000 | changed bytes: 986
+Page: 0x19d000 | changed bytes: 957
+Page: 0x19e000 | changed bytes: 725
+Page: 0x9a000 | changed bytes: 620
+Page: 0x1931c000 | changed bytes: 612
+Page: 0x5e7f000 | changed bytes: 585
+Page: 0x1931d000 | changed bytes: 546
+Page: 0xd74b000 | changed bytes: 409
+Page: 0xd67c000 | changed bytes: 324
+Page: 0xd683000 | changed bytes: 324
+Page: 0xd6bc000 | changed bytes: 324
+Page: 0xd6b5000 | changed bytes: 324
+Page: 0xd6b1000 | changed bytes: 324
+Page: 0xd67f000 | changed bytes: 324
+Page: 0x3a44000 | changed bytes: 322
+Page: 0xd678000 | changed bytes: 312
+Page: 0x9b000 | changed bytes: 297
+Page: 0x817000 | changed bytes: 255
+Page: 0xd6b8000 | changed bytes: 255
+Page: 0xd6b9000 | changed bytes: 231
+Page: 0xd73d000 | changed bytes: 210
+Page: 0xd74c000 | changed bytes: 204
+Page: 0x192b6000 | changed bytes: 180
+Page: 0x99e6000 | changed bytes: 172
+Page: 0xd67b000 | changed bytes: 162
+Page: 0xd6ba000 | changed bytes: 162
+Page: 0xd67e000 | changed bytes: 162
+Page: 0xd6b7000 | changed bytes: 162
+Page: 0xd67a000 | changed bytes: 162
+Page: 0xd6b6000 | changed bytes: 162
+Page: 0xd67d000 | changed bytes: 162
+Page: 0xd680000 | changed bytes: 162
+Page: 0xd6b3000 | changed bytes: 162
+Page: 0xd6b2000 | changed bytes: 162
+Page: 0xd679000 | changed bytes: 162
+Page: 0xd681000 | changed bytes: 162
+Page: 0xd6b4000 | changed bytes: 162
+Page: 0xd684000 | changed bytes: 162
+Page: 0xd682000 | changed bytes: 162
+Page: 0xd6bd000 | changed bytes: 162
+Page: 0xd6bb000 | changed bytes: 162
+Page: 0xd685000 | changed bytes: 162
+Page: 0xd78b000 | changed bytes: 154
+Page: 0xd756000 | changed bytes: 153
+Page: 0xd6b0000 | changed bytes: 150
+Page: 0xd78f000 | changed bytes: 142
+Page: 0xd796000 | changed bytes: 125
+Page: 0xd757000 | changed bytes: 119
+Page: 0xd758000 | changed bytes: 117
+Page: 0xd6a3000 | changed bytes: 108
+Page: 0xd73e000 | changed bytes: 108
+Page: 0xd671000 | changed bytes: 108
+Page: 0xd66d000 | changed bytes: 108
+Page: 0xd675000 | changed bytes: 108
+Page: 0xd6aa000 | changed bytes: 108
+Page: 0xd6a7000 | changed bytes: 108
+Page: 0xd6ae000 | changed bytes: 108
+Page: 0xd66a000 | changed bytes: 104
+Page: 0x1872c000 | changed bytes: 103
+Page: 0xd78c000 | changed bytes: 100
+Page: 0x9d000 | changed bytes: 99
+Page: 0xd788000 | changed bytes: 98
+Page: 0xd78d000 | changed bytes: 90
+Page: 0xd78e000 | changed bytes: 82
+Page: 0xd799000 | changed bytes: 81
+Page: 0xd785000 | changed bytes: 81
+Page: 0xd797000 | changed bytes: 80
+Page: 0x7eb9000 | changed bytes: 78
+Page: 0xd792000 | changed bytes: 76
+Page: 0x9e000 | changed bytes: 75
+Page: 0x7f28000 | changed bytes: 74
+Page: 0xd787000 | changed bytes: 74
+Page: 0xd747000 | changed bytes: 72
+Page: 0xd744000 | changed bytes: 72
+Page: 0xd740000 | changed bytes: 72
+Page: 0xd752000 | changed bytes: 72
+Page: 0xd78a000 | changed bytes: 68
+Page: 0x99e9000 | changed bytes: 67
+Page: 0x3a4c000 | changed bytes: 66
+Page: 0xd790000 | changed bytes: 66
+Page: 0xdd30000 | changed bytes: 63
+Page: 0xdb0f000 | changed bytes: 62
+Page: 0xd793000 | changed bytes: 61
+Page: 0xd786000 | changed bytes: 57
+Page: 0x597e000 | changed bytes: 56
+Page: 0xd6ac000 | changed bytes: 54
+Page: 0xd6ab000 | changed bytes: 54
+Page: 0xd6a9000 | changed bytes: 54
+Page: 0xd6a8000 | changed bytes: 54
+Page: 0xd6af000 | changed bytes: 54
+Page: 0xd6a6000 | changed bytes: 54
+Page: 0xd6a5000 | changed bytes: 54
+Page: 0xd6a4000 | changed bytes: 54
+Page: 0xd66b000 | changed bytes: 54
+Page: 0xd66c000 | changed bytes: 54
+Page: 0xd66e000 | changed bytes: 54
+Page: 0xd66f000 | changed bytes: 54
+
+[Changed byte ranges]
+Base: 0x9a448 | length: 6 | before: 010000000000 | after: 948860B1FD7F
+Base: 0x9a450 | length: 6 | before: 6C3700000000 | after: BC25D5B0FD7F
+Base: 0x9a458 | length: 6 | before: 1A9000000000 | after: E2DE5FB1FD7F
+Base: 0x9a460 | length: 6 | before: 3431D5B0FD7F | after: 020000000000
+Base: 0x9a468 | length: 3 | before: 72C961 | after: 40105C
+Base: 0x9a478 | length: 1 | before: 01 | after: 00
+Base: 0x9a480 | length: 2 | before: 6C37 | after: 0000
+Base: 0x9a488 | length: 6 | before: 1A9000000000 | after: A6A5B12325C6
+Base: 0x9a490 | length: 6 | before: 3431D5B0FD7F | after: 70AC09000000
+Base: 0x9a498 | length: 3 | before: 72C961 | after: 1B1563
+Base: 0x9a4a0 | length: 6 | before: BC25D5B0FD7F | after: 08A509000000
+Base: 0x9a4a8 | length: 6 | before: E2DE5FB1FD7F | after: 00AB09000000
+Base: 0x9a4b0 | length: 3 | before: 010000 | after: 40A509
+Base: 0x9a4b8 | length: 4 | before: A411D6B0 | after: 02DE5FB1
+Base: 0x9a4c0 | length: 3 | before: 000000 | after: 40AC09
+Base: 0x9a4c8 | length: 6 | before: 948860B1FD7F | after: 40AA09000000
+Base: 0x9a4d0 | length: 6 | before: BC25D5B0FD7F | after: 40A509000000
+Base: 0x9a4d8 | length: 6 | before: E2DE5FB1FD7F | after: 020000000000
+Base: 0x9a4e0 | length: 3 | before: 020000 | after: 40AA09
+Base: 0x9a4e8 | length: 2 | before: 4010 | after: 660B
+Base: 0x9a4f0 | length: 6 | before: 020000000000 | after: 7537D1B0FD7F
+Base: 0x9a4f8 | length: 1 | before: 00 | after: 02
+Base: 0x9a500 | length: 6 | before: 000000000000 | after: 7537D1B0FD7F
+Base: 0x9a508 | length: 6 | before: 26A5B12325C6 | after: A411D6B0FD7F
+Base: 0x9a510 | length: 1 | before: F0 | after: 70
+Base: 0x9a518 | length: 6 | before: 1B1563B1FD7F | after: 000000000000
+Base: 0x9a520 | length: 2 | before: 88A5 | after: 68AA
+Base: 0x9a528 | length: 2 | before: 80AB | after: 48AA
+Base: 0x9a530 | length: 2 | before: C0A5 | after: 58AA
+Base: 0x9a538 | length: 6 | before: 02DE5FB1FD7F | after: 00AB09000000
+Base: 0x9a570 | length: 6 | before: 7537D1B0FD7F | after: 0F001000A01F
+Base: 0x9a578 | length: 1 | before: 02 | after: 33
+Base: 0x9a582 | length: 4 | before: D1B0FD7F | after: 2B000202
+Base: 0x9a5b8 | length: 3 | before: 80AB09 | after: 010000
+Base: 0x9a5d0 | length: 6 | before: B0AD2B000202 | after: 404FDE770000
+Base: 0x9a5d8 | length: 6 | before: 1B1563B1FD7F | after: 70BB09000000
+Base: 0x9a5e0 | length: 2 | before: 48A6 | after: 90BE
+Base: 0x9a5e8 | length: 3 | before: 40AC09 | after: 34FC19
+Base: 0x9a5f0 | length: 1 | before: 0F | after: 18
+Base: 0x9a5f2 | length: 1 | before: 10 | after: 00
+Base: 0x9a5f4 | length: 2 | before: A01F | after: 0000
+Base: 0x9a618 | length: 1 | before: 02 | after: 00
+Base: 0x9a620 | length: 4 | before: 404FDE77 | after: B0C90900
+Base: 0x9a628 | length: 2 | before: C0BB | after: 50C0
+Base: 0x9a630 | length: 3 | before: E0BE09 | after: 280000
+Base: 0x9a638 | length: 6 | before: 010000000000 | after: 6C37D1B0FD7F
+Base: 0x9a640 | length: 3 | before: 200000 | after: 7F0220
+Base: 0x9a648 | length: 6 | before: A411D6B0FD7F | after: 7BB34A000000
+Base: 0x9a650 | length: 4 | before: 404FDE77 | after: 00000000
+Base: 0x9a658 | length: 3 | before: F0BB09 | after: A01F00
+Base: 0x9a65c | length: 2 | before: 0000 | after: FFFF
+Base: 0x9a660 | length: 11 | before: 10BF09000000000064F419 | after: 00700D6C956071A8FD3F00
+Base: 0x9a670 | length: 1 | before: 20 | after: 00
+Base: 0x9a677 | length: 4 | before: 00C0C009 | after: 96074000
+Base: 0x9a680 | length: 1 | before: 02 | after: 00
+Base: 0x9a687 | length: 7 | before: 006C37D1B0FD7F | after: FA064000000000
+Base: 0x9a690 | length: 2 | before: 7F02 | after: 0000
+Base: 0x9a695 | length: 5 | before: 0000000000 | after: B680B6FB3F
+Base: 0x9a6a0 | length: 3 | before: 30CA09 | after: 000000
+Base: 0x9a6a5 | length: 6 | before: 000000D0C009 | after: B680B6FB3F00
+Base: 0x9a6b0 | length: 1 | before: 58 | after: 00
+Base: 0x9a6b5 | length: 9 | before: 0000006C37D1B0FD7F | after: B680B6FB3F00000000
+Base: 0x9a6c0 | length: 2 | before: 7F02 | after: 0000
+Base: 0x9a6c7 | length: 4 | before: 007BB34A | after: 80FF3F00
+Base: 0x9a6d4 | length: 1 | before: 00 | after: 7C
+Base: 0x9a6d7 | length: 3 | before: 00A01F | after: 8C0340
+Base: 0x9a6dc | length: 2 | before: FFFF | after: 0000
+Base: 0x9a735 | length: 5 | before: 0000000000 | after: B680B6FB3F
+Base: 0x9a754 | length: 1 | before: 7C | after: 00
+Base: 0x9a757 | length: 3 | before: 8C0340 | after: 000000
+Base: 0x9a760 | length: 3 | before: 10CB09 | after: 000000
+Base: 0x9a768 | length: 3 | before: B0C109 | after: 000000
+Base: 0x9a770 | length: 1 | before: 02 | after: 00
+Base: 0x9a778 | length: 6 | before: 6C37D1B0FD7F | after: 000000000000
+Base: 0x9a780 | length: 3 | before: 7F0220 | after: 000000
+Base: 0x9a788 | length: 3 | before: 7BB34A | after: 000000
+Base: 0x9a9d8 | length: 6 | before: 731D5EB1FD7F | after: 000000000000
+Base: 0x9aa08 | length: 4 | before: 731D5EB1 | after: D0040000
+Base: 0x9aa20 | length: 1 | before: 10 | after: 19
+Base: 0x9aa24 | length: 1 | before: 01 | after: 00
+Base: 0x9aa40 | length: 2 | before: 0000 | after: A01F
+Base: 0x9aa50 | length: 3 | before: 100000 | after: 70AC09
+Base: 0x9aa54 | length: 1 | before: 01 | after: 00
+Base: 0x9aa58 | length: 6 | before: 000000000000 | after: 489BD2B0FD7F
+Base: 0x9aa60 | length: 1 | before: 0B | after: 00
+Base: 0x9aa62 | length: 4 | before: 10000000 | after: D1B0FD7F
+Base: 0x9aa68 | length: 4 | before: 56075CB1 | after: E025D5B0
+Base: 0x9aa70 | length: 6 | before: 000000000000 | after: A411D6B0FD7F
+Base: 0x9aa88 | length: 2 | before: D004 | after: 0000
+Base: 0x9aa90 | length: 6 | before: 30FBFFFFE804 | after: 006009000000
+Base: 0x9aa98 | length: 6 | before: 30FBFFFFD004 | after: 20FD09000000
+Base: 0x9aaa0 | length: 1 | before: 19 | after: 01
+Base: 0x9aaa8 | length: 3 | before: 489BD2 | after: 6C37D1
+Base: 0x9aab0 | length: 2 | before: 0000 | after: 7537
+Base: 0x9aab8 | length: 3 | before: E025D5 | after: 0000D1
+Base: 0x9aac0 | length: 4 | before: A01F0000 | after: A411D6B0
+Base: 0x9aac8 | length: 1 | before: E0 | after: 60
+Base: 0x9aad0 | length: 6 | before: F0AC09000000 | after: 6C37D1B0FD7F
+Base: 0x9aad8 | length: 6 | before: 489BD2B0FD7F | after: 40A509000000
+Base: 0x9aae0 | length: 3 | before: 0000D1 | after: 489BD2
+Base: 0x9aaf0 | length: 6 | before: A411D6B0FD7F | after: 000000000000
+Base: 0x9aaf8 | length: 3 | before: C0A509 | after: 000000
+Base: 0x9ab00 | length: 6 | before: 7537D1B0FD7F | after: 000000000000
+Base: 0x9ab11 | length: 2 | before: 6009 | after: 0000
+Base: 0x9abc0 | length: 6 | before: 7537D1B0FD7F | after: B6ABB12325C6
+Base: 0x9abd0 | length: 4 | before: 00600900 | after: 6046D677
+Base: 0x9abd8 | length: 3 | before: 20FD09 | after: 000000
+Base: 0x9abe0 | length: 3 | before: 010000 | after: A0FD09
+Base: 0x9abe8 | length: 6 | before: 6C37D1B0FD7F | after: 002039000000
+Base: 0x9abf0 | length: 6 | before: 7537D1B0FD7F | after: 00FC19000000
+Base: 0x9abf8 | length: 1 | before: 00 | after: 18
+Base: 0x9abfa | length: 4 | before: D1B0FD7F | after: 00000000
+Base: 0x9ac00 | length: 6 | before: A411D6B0FD7F | after: 18FC19000000
+Base: 0x9ac08 | length: 6 | before: A0BF09000000 | after: 1D3E63B1FD7F
+Base: 0x9ac10 | length: 6 | before: 66ABB12325C6 | after: 50C009000000
+Base: 0x9ac30 | length: 2 | before: A0FD | after: 70AC
+Base: 0x9ac39 | length: 2 | before: 2039 | after: 0000
+Base: 0x9ac40 | length: 6 | before: 36ABB12325C6 | after: 260000802200
+Base: 0x9ac48 | length: 1 | before: 18 | after: 00
+Base: 0x9ac50 | length: 4 | before: 6046D677 | after: 00000000
+Base: 0x9ac58 | length: 1 | before: 00 | after: 01
+Base: 0x9ac60 | length: 2 | before: A0FD | after: 50C0
+Base: 0x9aca0 | length: 1 | before: 00 | after: 0F
+Base: 0x9aca2 | length: 1 | before: 00 | after: 10
+Base: 0x9aca4 | length: 2 | before: 0000 | after: A01F
+Base: 0x9aca8 | length: 1 | before: 01 | after: 33
+Base: 0x9acaa | length: 1 | before: 00 | after: 2B
+Base: 0x9acb0 | length: 3 | before: F0AC09 | after: 2B002B
+Base: 0x9acb4 | length: 2 | before: 0000 | after: 0202
+Base: 0x9acf0 | length: 3 | before: 0F0010 | after: 70AC09
+Base: 0x9acf4 | length: 2 | before: A01F | after: 0000
+Base: 0x9acf8 | length: 3 | before: 33002B | after: C0A409
+Base: 0x9acfc | length: 1 | before: 2B | after: 00
+Base: 0x9acfe | length: 1 | before: 53 | after: 00
+Base: 0x9ad00 | length: 3 | before: 2B002B | after: B0C909
+Base: 0x9ad04 | length: 2 | before: 0202 | after: 0000
+Base: 0x9ad10 | length: 4 | before: 6046D677 | after: 90CB0900
+Base: 0x9ad19 | length: 2 | before: 0000 | after: 2039
+Base: 0x9ad20 | length: 3 | before: 0F0010 | after: 58CA09
+Base: 0x9ad24 | length: 2 | before: A01F | after: 0000
+Base: 0x9ad28 | length: 1 | before: 33 | after: 00
+Base: 0x9ad2a | length: 1 | before: 2B | after: 00
+Base: 0x9ad2c | length: 1 | before: 2B | after: 00
+Base: 0x9ad2e | length: 1 | before: 53 | after: 00
+Base: 0x9ad30 | length: 1 | before: 2B | after: 01
+Base: 0x9ad32 | length: 1 | before: 2B | after: 00
+Base: 0x9ad34 | length: 2 | before: 0602 | after: 0000
+Base: 0x9ad38 | length: 1 | before: 01 | after: 0B
+Base: 0x9ad3a | length: 1 | before: 00 | after: 10
+Base: 0x9ad40 | length: 2 | before: C0AC | after: 40A5
+Base: 0x9ad48 | length: 3 | before: 10A509 | after: 000000
+Base: 0x9ad50 | length: 3 | before: A0131D | after: 000000
+Base: 0x9ad58 | length: 2 | before: 70C0 | after: B0C9
+Base: 0x9ad60 | length: 6 | before: 904D7BAFFD7F | after: 000000000000
+Base: 0x9ad68 | length: 6 | before: 010000000000 | after: 21CE7BAFFD7F
+Base: 0x9ad70 | length: 3 | before: F0AC09 | after: 7F0220
+Base: 0x9ad78 | length: 3 | before: 40A509 | after: 7BB34A
+Base: 0x9ad80 | length: 3 | before: D8CA09 | after: 000000
+Base: 0x9ad89 | length: 2 | before: C009 | after: 1F00
+Base: 0x9ad8c | length: 2 | before: 0000 | after: FFFF
+Base: 0x9ad90 | length: 10 | before: 904D7BAFFD7F00000000 | after: 00700D6C956071A8FD3F
+Base: 0x9ada1 | length: 2 | before: 2039 | after: 0000
+Base: 0x9ada7 | length: 3 | before: 000000 | after: 960740
+Base: 0x9adb0 | length: 1 | before: 01 | after: 00
+Base: 0x9adb7 | length: 4 | before: 000B0010 | after: FA064000
+Base: 0x9adc0 | length: 3 | before: C0A509 | after: 000000
+Base: 0x9adc5 | length: 5 | before: 0000000000 | after: B680B6FB3F
+Base: 0x9add5 | length: 5 | before: 0000000000 | after: B680B6FB3F
+Base: 0x9ade5 | length: 9 | before: 0000009E577BAFFD7F | after: B680B6FB3F00000000
+Base: 0x9adf0 | length: 2 | before: 7F02 | after: 0000
+Base: 0x9adf7 | length: 4 | before: 007BB34A | after: 80FF3F00
+Base: 0x9ae04 | length: 1 | before: 00 | after: 7C
+Base: 0x9ae07 | length: 3 | before: 00A01F | after: 8C0340
+Base: 0x9ae0c | length: 2 | before: FFFF | after: 0000
+Base: 0x9ae11 | length: 9 | before: 700D6C956071A8FD3F | after: 000000000000000000
+Base: 0x9ae27 | length: 3 | before: 960740 | after: 000000
+Base: 0x9ae37 | length: 3 | before: FA0640 | after: 000000
+Base: 0x9ae45 | length: 5 | before: B680B6FB3F | after: 0000000000
+Base: 0x9ae55 | length: 5 | before: B680B6FB3F | after: 0000000000
+Base: 0x9ae84 | length: 1 | before: 7C | after: 00
+Base: 0x9ae87 | length: 3 | before: 8C0340 | after: 000000
+Base: 0x9b118 | length: 6 | before: FD3F00000000 | after: D4FF61B1FD7F
+Base: 0x9b141 | length: 2 | before: 0000 | after: FC19
+Base: 0x9b148 | length: 4 | before: C24D7BAF | after: B1C3D1B0
+Base: 0x9b150 | length: 3 | before: 000000 | after: 50C009
+Base: 0x9b170 | length: 4 | before: 800B0100 | after: 6046D677
+Base: 0x9b178 | length: 6 | before: 8E177BAFFD7F | after: F4FB19000000
+Base: 0x9b181 | length: 2 | before: 0000 | after: 4039
+Base: 0x9b190 | length: 2 | before: 30F4 | after: 00FC
+Base: 0x9b198 | length: 6 | before: D4FF61B1FD7F | after: 002039000000
+Base: 0x9b1a0 | length: 6 | before: C0C009000000 | after: E0C2D1B0FD7F
+Base: 0x9b1b8 | length: 6 | before: F74F7BAFFD7F | after: 004039000000
+Base: 0x9b1c0 | length: 3 | before: 30F419 | after: 002039
+Base: 0x9b1c8 | length: 6 | before: B1C3D1B0FD7F | after: E0BE09000000
+Base: 0x9b1d0 | length: 3 | before: D0C009 | after: 040000
+Base: 0x9b1e8 | length: 3 | before: 88F019 | after: 000000
+Base: 0x9b1ec | length: 1 | before: 00 | after: 05
+Base: 0x9b200 | length: 3 | before: 004039 | after: 90C109
+Base: 0x9b208 | length: 6 | before: 1A90D1B0FD7F | after: 08B209000000
+Base: 0x9b210 | length: 3 | before: 30F419 | after: 08B209
+Base: 0x9b218 | length: 3 | before: 002039 | after: 20BA09
+Base: 0x9ba98 | length: 6 | before: C317D6770000 | after: 4D1F5EB1FD7F
+Base: 0x9bab8 | length: 3 | before: 000000 | after: 90BE09
+Base: 0x9bac0 | length: 4 | before: 90EA7D76 | after: 18000000
+Base: 0x9bac8 | length: 6 | before: C317D6770000 | after: EB1BD1B0FD7F
+Base: 0x9bad0 | length: 5 | before: 8C11797623 | after: 404FDE7700
+Base: 0x9bad8 | length: 2 | before: 2300 | after: 4D1F
+Base: 0x9bae0 | length: 3 | before: 020000 | after: B0C909
+Base: 0x9bae8 | length: 3 | before: 48F419 | after: 50C009
+Base: 0x9baf0 | length: 1 | before: 2B | after: 28
+Base: 0x9bb08 | length: 4 | before: E0BE0900 | after: EB10D677
+Base: 0x9bb10 | length: 3 | before: 200000 | after: A0BB09
+Base: 0x9bb18 | length: 6 | before: 4D1F5EB1FD7F | after: 90BE09000000
+Base: 0x9bb20 | length: 4 | before: 404FDE77 | after: 34FC1900
+Base: 0x9bb28 | length: 6 | before: 4D1F5EB1FD7F | after: 000000000000
+Base: 0x9bb30 | length: 2 | before: 20CA | after: 24FD
+Base: 0x9bb38 | length: 2 | before: 10BF | after: F0FF
+Base: 0x9bb40 | length: 3 | before: 200000 | after: 24FD09
+Base: 0x9bb48 | length: 6 | before: EB1BD1B0FD7F | after: 20FD09000000
+Base: 0x9bb50 | length: 6 | before: 404FDE770000 | after: 000001004C01
+Base: 0x9bb58 | length: 6 | before: 4D1F5EB1FD7F | after: F8FF09000000
+Base: 0x9bb60 | length: 3 | before: 30CA09 | after: 180000
+Base: 0x9bb68 | length: 6 | before: D0C009000000 | after: 1838D1B0FD7F
+Base: 0x9bb70 | length: 4 | before: 58000000 | after: 004FDE77
+Base: 0x9bb78 | length: 1 | before: D0 | after: 50
+Base: 0x9bb88 | length: 4 | before: EB10D677 | after: 01000000
+Base: 0x9bb98 | length: 6 | before: 10BF09000000 | after: 21A0D1B0FD7F
+Base: 0x9bba0 | length: 3 | before: 64F419 | after: 030001
+Base: 0x9bc3c | length: 4 | before: 00000000 | after: D0979C03
+Base: 0x9bc41 | length: 2 | before: 0000 | after: 2039
+Base: 0x9bc48 | length: 4 | before: EB10D677 | after: 00000000
+Base: 0x9bc50 | length: 3 | before: E0BC09 | after: 010000
+Base: 0x9bc54 | length: 3 | before: 000000 | after: 74FC19
+Base: 0x9bc58 | length: 5 | before: D0BF090000 | after: EC11797623
+Base: 0x9bc60 | length: 3 | before: B4FA19 | after: 160200
+Base: 0x9bc64 | length: 3 | before: 000000 | after: 50FC19
+Base: 0x9bc68 | length: 1 | before: 00 | after: 2B
+Base: 0x9bde8 | length: 6 | before: 000000000000 | after: EC1D5EB1FD7F
+Base: 0x9be10 | length: 3 | before: 78BE09 | after: 040000
+Base: 0x9be14 | length: 1 | before: 00 | after: 01
+Base: 0x9be20 | length: 3 | before: B0BE09 | after: 180000
+Base: 0x9be28 | length: 3 | before: 02DE5F | after: 2D1C5E
+Base: 0x9be30 | length: 3 | before: B0C509 | after: 030001
+Base: 0x9be48 | length: 1 | before: 02 | after: 00
+Base: 0x9be50 | length: 3 | before: B0C309 | after: 030001
+Base: 0x9be58 | length: 4 | before: 660B5CB1 | after: 4A35D1B0
+Base: 0x9be60 | length: 2 | before: 0400 | after: CC02
+Base: 0x9be68 | length: 10 | before: EC1D5EB1FD7F00002000 | after: 0400000034FDFFFFE402
+Base: 0x9be74 | length: 10 | before: 000000002D1C5EB1FD7F | after: 34FDFFFFCC0000001900
+Base: 0x9be80 | length: 1 | before: 03 | after: 00
+Base: 0x9be82 | length: 1 | before: 01 | after: 00
+Base: 0x9be94 | length: 2 | before: 0100 | after: 4C01
+Base: 0x9be98 | length: 2 | before: 0000 | after: 4C01
+Base: 0x9be9c | length: 2 | before: 0000 | after: 4C01
+Base: 0x9bea4 | length: 1 | before: 00 | after: 1C
+Base: 0x9bea8 | length: 7 | before: 2D1C5EB1FD7F00 | after: 00000000F8FC19
+Base: 0x9beb0 | length: 3 | before: 030001 | after: A0BB09
+Base: 0x9beb8 | length: 2 | before: 0400 | after: 4C01
+Base: 0x9bec0 | length: 2 | before: E402 | after: 4C01
+Base: 0x9bec8 | length: 2 | before: 0000 | after: E702
+Base: 0x9bed4 | length: 3 | before: 000000 | after: 18FC19
+Base: 0x9bed8 | length: 3 | before: 010000 | after: 24FD09
+Base: 0x9bee0 | length: 3 | before: 6C3700 | after: F8CC09
+Base: 0x9ca97 | length: 7 | before: 96074000000000 | after: 00583280AFFD7F
+Base: 0x9caa0 | length: 1 | before: 00 | after: 02
+Base: 0x9caa7 | length: 3 | before: FA0640 | after: 000000
+Base: 0x9cab0 | length: 1 | before: 00 | after: 34
+Base: 0x9cab2 | length: 6 | before: 000000B680B6 | after: 7CAFFD7F0000
+Base: 0x9cac8 | length: 3 | before: FB3F00 | after: 08CB09
+Base: 0x9cad8 | length: 4 | before: FB3F0000 | after: 90EA7D76
+Base: 0x9cae0 | length: 4 | before: 00000000 | after: B707D42C
+Base: 0x9cae7 | length: 3 | before: 80FF3F | after: 000200
+Base: 0x9caeb | length: 1 | before: 00 | after: 80
+Base: 0x9caf0 | length: 3 | before: 000000 | after: 200B15
+Base: 0x9caf6 | length: 7 | before: 429C0C40000000 | after: 00000408040802
+Base: 0x9cb00 | length: 2 | before: 0000 | after: E032
+Base: 0x9cb04 | length: 4 | before: 0000429C | after: 420C0000
+Base: 0x9cbf0 | length: 2 | before: 0000 | after: F002
+Base: 0x9cc00 | length: 3 | before: 000000 | after: 74F119
+Base: 0x9d3b0 | length: 4 | before: C081DF77 | after: 0000A400
+Base: 0x9d3b8 | length: 4 | before: C317D677 | after: C0D30900
+Base: 0x9d470 | length: 1 | before: 65 | after: 8A
+Base: 0x9d472 | length: 1 | before: 63 | after: 8A
+Base: 0x9d478 | length: 3 | before: 5C004C | after: 80D409
+Base: 0x9d47c | length: 1 | before: 6F | after: 00
+Base: 0x9d47e | length: 1 | before: 63 | after: 00
+Base: 0x9d480 | length: 1 | before: 61 | after: 5C
+Base: 0x9d482 | length: 1 | before: 6C | after: 53
+Base: 0x9d484 | length: 1 | before: 5C | after: 65
+Base: 0x9d486 | length: 1 | before: 31 | after: 73
+Base: 0x9d488 | length: 1 | before: 49 | after: 73
+Base: 0x9d48a | length: 1 | before: 6D | after: 69
+Base: 0x9d48c | length: 1 | before: 6D | after: 6F
+Base: 0x9d48e | length: 1 | before: 65 | after: 6E
+Base: 0x9d490 | length: 1 | before: 72 | after: 73
+Base: 0x9d492 | length: 1 | before: 73 | after: 5C
+Base: 0x9d494 | length: 1 | before: 69 | after: 31
+Base: 0x9d496 | length: 1 | before: 76 | after: 5C
+Base: 0x9d498 | length: 1 | before: 65 | after: 42
+Base: 0x9d49a | length: 1 | before: 46 | after: 61
+Base: 0x9d49c | length: 1 | before: 6F | after: 73
+Base: 0x9d49e | length: 1 | before: 63 | after: 65
+Base: 0x9d4a0 | length: 1 | before: 75 | after: 4E
+Base: 0x9d4a2 | length: 1 | before: 73 | after: 61
+Base: 0x9d4a4 | length: 1 | before: 54 | after: 6D
+Base: 0x9d4a6 | length: 1 | before: 72 | after: 65
+Base: 0x9d4a8 | length: 1 | before: 61 | after: 64
+Base: 0x9d4aa | length: 1 | before: 63 | after: 4F
+Base: 0x9d4ac | length: 1 | before: 6B | after: 62
+Base: 0x9d4ae | length: 1 | before: 69 | after: 6A
+Base: 0x9d4b0 | length: 1 | before: 6E | after: 65
+Base: 0x9d4b2 | length: 1 | before: 67 | after: 63
+Base: 0x9d4b4 | length: 1 | before: 41 | after: 74
+Base: 0x9d4b6 | length: 1 | before: 63 | after: 73
+Base: 0x9d4b8 | length: 1 | before: 74 | after: 5C
+Base: 0x9d4ba | length: 1 | before: 69 | after: 4C
+Base: 0x9d4bc | length: 1 | before: 76 | after: 6F
+Base: 0x9d4be | length: 1 | before: 65 | after: 63
+Base: 0x9d4c0 | length: 1 | before: 45 | after: 61
+Base: 0x9d4c2 | length: 1 | before: 76 | after: 6C
+Base: 0x9d4c4 | length: 1 | before: 65 | after: 5C
+Base: 0x9d4c6 | length: 1 | before: 6E | after: 31
+Base: 0x9d4c8 | length: 1 | before: 74 | after: 49
+Base: 0x9d4ca | length: 1 | before: 00 | after: 6D
+Base: 0x9d4cc | length: 1 | before: 00 | after: 6D
+Base: 0x9d4ce | length: 1 | before: 00 | after: 65
+Base: 0x9d4d0 | length: 1 | before: 50 | after: 72
+Base: 0x9d4d2 | length: 1 | before: 52 | after: 73
+Base: 0x9d4d4 | length: 1 | before: 00 | after: 69
+Base: 0x9d4d6 | length: 1 | before: 00 | after: 76
+Base: 0x9d4d8 | length: 5 | before: 24FF060E00 | after: 650046006F
+Base: 0x9d4de | length: 1 | before: 00 | after: 63
+Base: 0x9d4e0 | length: 1 | before: 1C | after: 75
+Base: 0x9d4e2 | length: 1 | before: 1E | after: 73
+Base: 0x9d4e4 | length: 1 | before: 00 | after: 54
+Base: 0x9d4e6 | length: 1 | before: 00 | after: 72
+Base: 0x9d4e8 | length: 5 | before: 5481D77700 | after: 610063006B
+Base: 0x9d4ee | length: 1 | before: 00 | after: 69
+Base: 0x9d4f0 | length: 1 | before: 1C | after: 6E
+Base: 0x9d4f2 | length: 1 | before: 1E | after: 67
+Base: 0x9d4f4 | length: 1 | before: 00 | after: 41
+Base: 0x9d4f6 | length: 1 | before: 00 | after: 63
+Base: 0x9d4f8 | length: 5 | before: 5481D77700 | after: 7400690076
+Base: 0x9d4fe | length: 1 | before: 00 | after: 65
+Base: 0x9d500 | length: 7 | before: 4760231525CA00 | after: 4500760065006E
+Base: 0x9d508 | length: 1 | before: 00 | after: 74
+Base: 0x9d518 | length: 6 | before: CECED1B0FD7F | after: 24FF060E0000
+Base: 0x9e212 | length: 1 | before: 00 | after: 09
+Base: 0x9e218 | length: 1 | before: 1F | after: 23
+Base: 0x9e2f0 | length: 1 | before: 70 | after: 38
+Base: 0x9e308 | length: 1 | before: 07 | after: 08
+Base: 0x9e380 | length: 2 | before: C03C | after: 5045
+Base: 0x9e418 | length: 2 | before: C03C | after: 5045
+Base: 0x9e458 | length: 2 | before: F43C | after: 8445
+Base: 0x9e4b4 | length: 1 | before: 6B | after: 87
+Base: 0x9e4b8 | length: 1 | before: 93 | after: 8B
+Base: 0x9e5b8 | length: 2 | before: E1C9 | after: A03A
+Base: 0x9e5c8 | length: 6 | before: 000000000000 | after: BFA07BAFFD7F
+Base: 0x9e5d9 | length: 1 | before: 10 | after: 00
+Base: 0x9e5e0 | length: 2 | before: 5802 | after: 0100
+Base: 0x9e5e8 | length: 11 | before: B51C01B7FFFFFFFF000000 | after: 0FCF7BAFFD7F0000200B15
+Base: 0x9e5f8 | length: 2 | before: 0C4C | after: 203B
+Base: 0x9e600 | length: 1 | before: 20 | after: 00
+Base: 0x9e602 | length: 1 | before: CC | after: 00
+Base: 0x9e608 | length: 4 | before: FFFFFFFF | after: 56019A01
+Base: 0x9e610 | length: 1 | before: 00 | after: 01
+Base: 0x9e620 | length: 3 | before: 04FD19 | after: 004039
+Base: 0x9e68c | length: 2 | before: AC04 | after: 2A00
+Base: 0x9ed90 | length: 1 | before: 45 | after: 00
+Base: 0x9ed92 | length: 1 | before: 5C | after: C8
+Base: 0x9ed98 | length: 3 | before: 730074 | after: A0ED09
+Base: 0x9ed9c | length: 1 | before: 65 | after: 00
+Base: 0x9ed9e | length: 1 | before: 6D | after: 00
+Base: 0x9ee88 | length: 4 | before: F0AEA203 | after: 98969E09
+Base: 0x9eed0 | length: 1 | before: BC | after: E0
+Base: 0x9eed8 | length: 4 | before: 11DE9F00 | after: A0FDFF75
+Base: 0x9eee0 | length: 4 | before: DB1C0131 | after: 181F5900
+Base: 0x9eef0 | length: 2 | before: CC5A | after: AC12
+Base: 0x9ef00 | length: 2 | before: 3B00 | after: E039
+Base: 0x9ef03 | length: 1 | before: 00 | after: 76
+Base: 0x9ef10 | length: 2 | before: 40EF | after: 2B00
+Base: 0x19d664 | length: 4 | before: 09ACDC77 | after: 00000000
+Base: 0x19d66c | length: 3 | before: 84D619 | after: 000000
+Base: 0x19d670 | length: 5 | before: DB62D37507 | after: 0000000000
+Base: 0x19d678 | length: 3 | before: 80D619 | after: 000000
+Base: 0x19d67c | length: 11 | before: 3983FC2FB80563023CD719 | after: 0000000000000000000000
+Base: 0x19d688 | length: 3 | before: 82684F | after: 000000
+Base: 0x19d690 | length: 3 | before: 84D919 | after: 000000
+Base: 0x19d694 | length: 3 | before: D8D619 | after: 000000
+Base: 0x19d69c | length: 3 | before: B8E04F | after: 000000
+Base: 0x19d6a4 | length: 7 | before: EEFFFFFF55974F | after: 00000000000000
+Base: 0x19d6b0 | length: 11 | before: 7C28D2126828D212D4974F | after: 0000000000000000000000
+Base: 0x19d6bc | length: 8 | before: 7C28D2126828D212 | after: 0000000000000000
+Base: 0x19d6c8 | length: 1 | before: 07 | after: 00
+Base: 0x19d6cc | length: 1 | before: 07 | after: 00
+Base: 0x19d6d4 | length: 1 | before: 07 | after: 00
+Base: 0x19d6d8 | length: 16 | before: B83B6302C01D6302B8056302013B6302 | after: 00000000000000000000000000000000
+Base: 0x19d6f4 | length: 3 | before: DA8253 | after: 000000
+Base: 0x19d708 | length: 1 | before: 12 | after: 00
+Base: 0x19d70c | length: 3 | before: 54D919 | after: 000000
+Base: 0x19d710 | length: 3 | before: 88D919 | after: 000000
+Base: 0x19d714 | length: 1 | before: 12 | after: 00
+Base: 0x19d718 | length: 3 | before: D0DD19 | after: 000000
+Base: 0x19d71c | length: 5 | before: FFFFFFFF12 | after: 0000000000
+Base: 0x19d728 | length: 7 | before: FFFFFFFFFFFFFF | after: 00000000000000
+Base: 0x19d74d | length: 2 | before: 4039 | after: 0000
+Base: 0x19d750 | length: 5 | before: 8868E9778B | after: 0000000000
+Base: 0x19d75c | length: 3 | before: 80D719 | after: 000000
+Base: 0x19d760 | length: 8 | before: 6810DA778868E977 | after: 0000000000000000
+Base: 0x19d775 | length: 2 | before: 4039 | after: 0000
+Base: 0x19d778 | length: 3 | before: 68D819 | after: 000000
+Base: 0x19d77c | length: 1 | before: 8B | after: 00
+Base: 0x19d780 | length: 3 | before: ACD719 | after: 000000
+Base: 0x19d784 | length: 12 | before: 3FEDD9778868E97709ACDC77 | after: 000000000000000000000000
+Base: 0x19d794 | length: 3 | before: ACD719 | after: 000000
+Base: 0x19d798 | length: 5 | before: DB62D37507 | after: 0000000000
+Base: 0x19d7a0 | length: 3 | before: A8D719 | after: 000000
+Base: 0x19d7a4 | length: 11 | before: C182FC2FB805630264D819 | after: 0000000000000000000000
+Base: 0x19d7b0 | length: 3 | before: 82684F | after: 000000
+Base: 0x19d7b4 | length: 1 | before: 20 | after: 00
+Base: 0x19d7b8 | length: 7 | before: 9402390658D819 | after: 00000000000000
+Base: 0x19d7c0 | length: 7 | before: 947F721850D819 | after: 00000000000000
+Base: 0x19d7c8 | length: 7 | before: 0F63DB777F0000 | after: 0000000040C4DE
+Base: 0x19d7d0 | length: 3 | before: 200000 | after: 00709C
+Base: 0x19d7d4 | length: 1 | before: 20 | after: 00
+Base: 0x19d7d9 | length: 4 | before: 0063020B | after: 709C0000
+Base: 0x19d7e0 | length: 2 | before: 2000 | after: E032
+Base: 0x19d7e4 | length: 1 | before: 20 | after: 00
+Base: 0x19d7e8 | length: 11 | before: 0000630200000000070000 | after: 30D819005F88017640C4DE
+Base: 0x19d7f4 | length: 1 | before: 28 | after: 00
+Base: 0x19d7f8 | length: 7 | before: D0077500640000 | after: 7E242671800B01
+Base: 0x19d800 | length: 5 | before: B83B630228 | after: 800B010002
+Base: 0x19d808 | length: 3 | before: D00775 | after: 000000
+Base: 0x19d80c | length: 8 | before: C80D6B18807F7218 | after: 0000000000000000
+Base: 0x19d815 | length: 2 | before: 0000 | after: 2039
+Base: 0x19d818 | length: 3 | before: 000000 | after: F8D719
+Base: 0x19d81c | length: 7 | before: 00007500020000 | after: B901FF64C4D919
+Base: 0x19d824 | length: 15 | before: 000000000500000000007500CC0175 | after: 302E0276B65F3807FEFFFFFF78D819
+Base: 0x19d834 | length: 7 | before: 00000000200000 | after: 67B87D76800B01
+Base: 0x19d83c | length: 3 | before: 340A75 | after: 000000
+Base: 0x19d840 | length: 3 | before: 000000 | after: 800B01
+Base: 0x19d844 | length: 8 | before: 00006302300A7500 | after: 8202000080B37D76
+Base: 0x19d850 | length: 3 | before: 74D819 | after: 820200
+Base: 0x19d878 | length: 1 | before: 94 | after: B4
+Base: 0x19d87c | length: 5 | before: A0D8190008 | after: 2CB57D7602
+Base: 0x19d884 | length: 1 | before: 0E | after: 00
+Base: 0x19d888 | length: 2 | before: 0000 | after: 8202
+Base: 0x19d88c | length: 3 | before: 710000 | after: 800B01
+Base: 0x19d890 | length: 6 | before: A70BD4750000 | after: 820200001060
+Base: 0x19d897 | length: 5 | before: 0000000000 | after: 803CC8DB77
+Base: 0x19d8a4 | length: 3 | before: 000000 | after: 40C4DE
+Base: 0x19d8a8 | length: 4 | before: 807F7218 | after: 54DDDB77
+Base: 0x19d8b4 | length: 1 | before: EC | after: C4
+Base: 0x19d8b8 | length: 7 | before: 737650007B7650 | after: 96B37D76020000
+Base: 0x19d8c0 | length: 7 | before: C9364656000000 | after: 00000000F0D819
+Base: 0x19d8c8 | length: 7 | before: B80300004C8F59 | after: 8B0E0276800B01
+Base: 0x19d8d0 | length: 2 | before: 8C05 | after: 8202
+Base: 0x19d8d4 | length: 3 | before: 6CED01 | after: 020000
+Base: 0x19d8dc | length: 3 | before: 000000 | after: 800B01
+Base: 0x19d8e0 | length: 15 | before: 28D91900AB76500094BF71037DFA4F | after: CDABBADC80B37D7682020000800B01
+Base: 0x19d8f0 | length: 3 | before: 710000 | after: D4D919
+Base: 0x19d8f4 | length: 31 | before: 74FA4F000D37465600000000F0A77103 | after: 5A7E017680B37D76CD8DFC2FD4D91900
+Base: 0x19d914 | length: 7 | before: FEFFFFFF70D919 | after: 0000000040C4DE
+Base: 0x19d954 | length: 17 | before: A537465628A86B036828D212F0A77103 | after: 24000000010000000000000000000000
+Base: 0x19d968 | length: 27 | before: 54D91900D0E01900D0E0190030DF4E00 | after: FFFFFFFFFFFFFFFF6E7C01769F800176
+Base: 0x19d984 | length: 3 | before: 32F051 | after: 000000
+Base: 0x19d988 | length: 7 | before: F0A771036CED01 | after: 10600080000000
+Base: 0x19d994 | length: 7 | before: 008E630280E019 | after: 48131D00000000
+Base: 0x19d99c | length: 7 | before: 6828D2128BF051 | after: 00000000000000
+Base: 0x19d9a4 | length: 4 | before: 8BF05101 | after: 80B37D76
+Base: 0x19d9a9 | length: 6 | before: 8E6302D0DD19 | after: 000000010000
+Base: 0x19d9b0 | length: 3 | before: D0DA19 | after: 000000
+Base: 0x19d9b4 | length: 3 | before: D4DA19 | after: 800B01
+Base: 0x19d9b8 | length: 4 | before: D8DA1900 | after: 10600080
+Base: 0x19d9d4 | length: 15 | before: 09ACDC77F0D91900D0DB1900D2DF4F | after: 3CDA19003972017680B37D76000000
+Base: 0x19d9e4 | length: 3 | before: 28DA19 | after: 820200
+Base: 0x19d9e8 | length: 11 | before: B83B6302C01D63023CDA19 | after: 0200000000000000002039
+Base: 0x19d9f4 | length: 3 | before: 00684F | after: 010000
+Base: 0x19d9f8 | length: 3 | before: 3CDA19 | after: B8A47C
+Base: 0x19d9fc | length: 3 | before: 23E04F | after: E0A47C
+Base: 0x19da00 | length: 3 | before: 28DA19 | after: 020000
+Base: 0x19da0c | length: 1 | before: 04 | after: 02
+Base: 0x19da10 | length: 3 | before: C28C4F | after: 800B01
+Base: 0x19da14 | length: 3 | before: 610000 | after: 7044DE
+Base: 0x19da18 | length: 3 | before: 28DA19 | after: 000000
+Base: 0x19da1c | length: 3 | before: FFDE19 | after: 000000
+Base: 0x19da20 | length: 1 | before: 04 | after: 00
+Base: 0x19da28 | length: 17 | before: B83B6302C01D6302B805630201DF4F00 | after: 0000000080B37D7600000040881300C0
+Base: 0x19da3c | length: 1 | before: 80 | after: 64
+Base: 0x19da40 | length: 7 | before: 3BE34E00D0DB19 | after: A19C017640C4DE
+Base: 0x19da48 | length: 7 | before: FFFFFFFF0DDF19 | after: 00000000000000
+Base: 0x19da50 | length: 3 | before: D3DB19 | after: 000000
+Base: 0x19da58 | length: 7 | before: 413646569CDA19 | after: 2043DE00B8A47C
+Base: 0x19da60 | length: 3 | before: 19E84E | after: 820200
+Base: 0x19da64 | length: 1 | before: 7C | after: 94
+Base: 0x19da68 | length: 7 | before: 605D5300000000 | after: 45A50176B8A47C
+Base: 0x19da70 | length: 3 | before: ACDA19 | after: 000000
+Base: 0x19da74 | length: 4 | before: 6828D212 | after: 00000000
+Base: 0x19da7c | length: 3 | before: E2DD19 | after: 820200
+Base: 0x19da80 | length: 7 | before: ECFFFF7FD0DD19 | after: 2043DE00020000
+Base: 0x19da88 | length: 1 | before: 42 | after: 02
+Base: 0x19da8c | length: 6 | before: 000000000000 | after: FB46FB758202
+Base: 0x19da94 | length: 1 | before: D0 | after: C4
+Base: 0x19da98 | length: 7 | before: 0001000080E019 | after: 02960176B8A47C
+Base: 0x19daa0 | length: 3 | before: 45F251 | after: 000000
+Base: 0x19daa4 | length: 3 | before: D0DD19 | after: 000000
+Base: 0x19daa8 | length: 3 | before: 605D53 | after: 820200
+Base: 0x19daac | length: 3 | before: D0DC19 | after: 88029F
+Base: 0x19dab0 | length: 3 | before: D0DB19 | after: 820200
+Base: 0x19dab4 | length: 8 | before: 8137465690F25100 | after: 106000803CC8DB77
+Base: 0x19dac4 | length: 11 | before: 6828D212E8787318A4F251 | after: E4DA1900759401762043DE
+Base: 0x19dad0 | length: 18 | before: 534B494E5C47484F53545C4445464155 | after: 00000000820200000200000000000000
+Base: 0x19dae4 | length: 3 | before: 4C5400 | after: 10DB19
+Base: 0x19dbcc | length: 3 | before: B8E04F | after: 010000
+Base: 0x19dbe4 | length: 2 | before: ECDE | after: 38DD
+Base: 0x19dbfd | length: 3 | before: DC1900 | after: CE62B1
+Base: 0x19dc1c | length: 4 | before: 00000000 | after: 303BFB75
+Base: 0x19dc30 | length: 3 | before: 000000 | after: 88029F
+Base: 0x19dc38 | length: 3 | before: D00775 | after: 000000
+Base: 0x19dc3c | length: 1 | before: 64 | after: 00
+Base: 0x19dc40 | length: 6 | before: FB8CDB772800 | after: 000000008202
+Base: 0x19dc48 | length: 14 | before: 00006302C80D6B18807F72180000 | after: FD7F000090CE62B1000000408813
+Base: 0x19dc57 | length: 4 | before: 00000000 | after: C0E0DC19
+Base: 0x19dc5c | length: 7 | before: 00007500020000 | after: 116501762043DE
+Base: 0x19dc68 | length: 1 | before: 05 | after: 00
+Base: 0x19dc6c | length: 1 | before: 00 | after: 01
+Base: 0x19dc6e | length: 1 | before: 75 | after: 00
+Base: 0x19dc70 | length: 3 | before: CC0175 | after: 010000
+Base: 0x19dc74 | length: 3 | before: 000000 | after: 6066DC
+Base: 0x19dc78 | length: 4 | before: 20000000 | after: F7600176
+Base: 0x19dc80 | length: 1 | before: 00 | after: 02
+Base: 0x19dc84 | length: 7 | before: 00006302300A75 | after: 200B1500000000
+Base: 0x19dc8c | length: 2 | before: D617 | after: 0200
+Base: 0x19dc8f | length: 4 | before: C1B0DC19 | after: 00000000
+Base: 0x19dc94 | length: 4 | before: 6E5EDB77 | after: 50000000
+Base: 0x19dca0 | length: 3 | before: 000000 | after: B8A47C
+Base: 0x19dca8 | length: 4 | before: A0757318 | after: 01000000
+Base: 0x19dcae | length: 5 | before: 6302000000 | after: 00006066DC
+Base: 0x19dcdc | length: 16 | before: 93022106807F7218A0757318C80D6B18 | after: 3220267100DD19006C3700766066DC00
+Base: 0x19dcee | length: 3 | before: 630220 | after: 000000
+Base: 0x19dcf4 | length: 3 | before: 14DD19 | after: 010000
+Base: 0x19dcf8 | length: 3 | before: A4DE19 | after: 000000
+Base: 0x19dcfc | length: 7 | before: 1272DB77D61700 | after: 0200000048DD19
+Base: 0x19dd04 | length: 10 | before: F84F6302000063027C46 | after: D7360076200B15008202
+Base: 0x19dd10 | length: 6 | before: 083C69187F07 | after: 1B370076E836
+Base: 0x19dd17 | length: 23 | before: 000000630230E1AC1838E1AC18000063 | after: 7606212671181F590082020000200B15
+Base: 0x19dd30 | length: 1 | before: 6C | after: 18
+Base: 0x19dd38 | length: 3 | before: 010000 | after: D8E019
+Base: 0x19dd3c | length: 23 | before: 38E1AC18FF070000D617000030E1AC18 | after: 302E027696613807FEFFFFFF181F5900
+Base: 0x19dd54 | length: 6 | before: DF0CDB77D617 | after: 820200000200
+Base: 0x19dd5e | length: 4 | before: 20180000 | after: 00008202
+Base: 0x19dd64 | length: 3 | before: D61700 | after: 200B15
+Base: 0x19dd68 | length: 3 | before: 30E1AC | after: 200B15
+Base: 0x19dd6c | length: 3 | before: B8DD19 | after: 6DE24A
+Base: 0x19dd70 | length: 6 | before: F9F1D977D617 | after: 200B15008202
+Base: 0x19dd78 | length: 1 | before: 00 | after: 02
+Base: 0x19dd7a | length: 10 | before: 6302406EAD1830E1AC18 | after: 00000000000079E24A00
+Base: 0x19ddcc | length: 11 | before: B827AD1800006302000000 | after: A133465615D24100200B15
+Base: 0x19ddd8 | length: 3 | before: 38DF19 | after: 820200
+Base: 0x19dddc | length: 6 | before: A648DB77D108 | after: 020000000000
+Base: 0x19dde4 | length: 19 | before: CA50DB77698AFC2F30E1AC1800006302 | after: CD33465682020000200B15000CE11900
+Base: 0x19e12c | length: 3 | before: 0A0000 | after: E0D74B
+Base: 0x19e134 | length: 3 | before: 0A0000 | after: 200B15
+Base: 0x19e180 | length: 3 | before: 60EC19 | after: 700000
+Base: 0x19e18c | length: 8 | before: FCAD530007000000 | after: 6E7C01769F800176
+Base: 0x19e1fc | length: 1 | before: 01 | after: 00
+Base: 0x19e200 | length: 3 | before: F68A50 | after: 820200
+Base: 0x19e204 | length: 1 | before: 00 | after: 02
+Base: 0x19e214 | length: 2 | before: 9025 | after: 0100
+Base: 0x19e218 | length: 3 | before: 74E219 | after: 200B15
+Base: 0x19e21c | length: 2 | before: 60EC | after: 34E3
+Base: 0x19e220 | length: 7 | before: DCE11900BCEB19 | after: 830AFFFF000000
+Base: 0x19e228 | length: 3 | before: 18A852 | after: 40E219
+Base: 0x19e22c | length: 8 | before: 0000000000006C61 | after: DB56017682020000
+Base: 0x19e29c | length: 3 | before: 000000 | after: B8E219
+Base: 0x19e2a0 | length: 4 | before: 00000000 | after: E3078B63
+Base: 0x19e2e4 | length: 3 | before: 90E319 | after: 200B15
+Base: 0x19e2e8 | length: 1 | before: 06 | after: 00
+Base: 0x19e304 | length: 3 | before: 000000 | after: 200B15
+Base: 0x19e315 | length: 1 | before: 13 | after: 03
+Base: 0x19e39c | length: 6 | before: 696E675F3764 | after: 2A1826718102
+Base: 0x19e422 | length: 9 | before: 2440718A4D00B4E419 | after: 000070098B63000000
+Base: 0x19e42c | length: 1 | before: 70 | after: 01
+Base: 0x19e434 | length: 11 | before: 0000244054E419008B8C4D | after: 200B150010600080010000
+Base: 0x19e440 | length: 3 | before: B4E419 | after: 000000
+Base: 0x19e444 | length: 2 | before: B4E4 | after: A4E6
+Base: 0x19e448 | length: 12 | before: 0000000000003B40C0E41900 | after: 302E0276365F3807FEFFFFFF
+Base: 0x19e4bc | length: 8 | before: 1000000000006302 | after: 7F5801766066DC00
+Base: 0x19e504 | length: 1 | before: 00 | after: 6B
+Base: 0x19e508 | length: 1 | before: 08 | after: 81
+Base: 0x19e535 | length: 1 | before: 13 | after: 03
+Base: 0x19e55c | length: 4 | before: 447BDF77 | after: B8A47C00
+Base: 0x19e578 | length: 4 | before: 94A5AB18 | after: 3CC8DB77
+Base: 0x19e584 | length: 3 | before: 110000 | after: A4E519
+Base: 0x19e594 | length: 2 | before: 0C00 | after: 8102
+Base: 0x19e598 | length: 1 | before: 00 | after: 01
+Base: 0x19e59a | length: 21 | before: 6302082F6C1888F1670300006302242F | after: 00000F0000C000000000D0E519008B0E
+Base: 0x19e5b0 | length: 3 | before: D00775 | after: 810200
+Base: 0x19e5b4 | length: 1 | before: 64 | after: 01
+Base: 0x19e5b8 | length: 4 | before: D0077500 | after: 0F0000C0
+Base: 0x19e664 | length: 11 | before: 09ACDC7741E7190084E619 | after: 0000000010600080000000
+Base: 0x19e670 | length: 7 | before: DB62D375070000 | after: 0000000000131D
+Base: 0x19e678 | length: 3 | before: 80E619 | after: 000000
+Base: 0x19e67c | length: 15 | before: 39B3FC2FB8056302DCE6190082684F | after: 000000000000000050940176000000
+Base: 0x19e68c | length: 1 | before: 00 | after: 01
+Base: 0x19e690 | length: 3 | before: 28F119 | after: 000000
+Base: 0x19e694 | length: 3 | before: FCAD53 | after: 88029F
+Base: 0x19e698 | length: 4 | before: 8D684F00 | after: 10600080
+Base: 0x19e6a4 | length: 2 | before: 28F1 | after: F8E7
+Base: 0x19e6a8 | length: 4 | before: 00000000 | after: 302E0276
+Base: 0x19e6d8 | length: 3 | before: 40E719 | after: 6066DC
+Base: 0x19e6dc | length: 7 | before: 88247B037BA24B | after: 104DFB75810200
+Base: 0x19e6e9 | length: 1 | before: 04 | after: 00
+Base: 0x19e6ec | length: 7 | before: 6509465628F119 | after: 0100000088029F
+Base: 0x19e6f4 | length: 3 | before: 28F119 | after: 50D9DC
+Base: 0x19e6f8 | length: 3 | before: 7DA64B | after: 000000
+Base: 0x19e6fc | length: 5 | before: 6A835F7679 | after: 0000000000
+Base: 0x19e708 | length: 2 | before: 0100 | after: FD7F
+Base: 0x19e70c | length: 4 | before: 00000000 | after: 90CE62B1
+Base: 0x19e713 | length: 3 | before: 000000 | after: 408813
+Base: 0x19e717 | length: 4 | before: 00000000 | after: C0A0E719
+Base: 0x19e71c | length: 7 | before: 00000000000000 | after: 116501762043DE
+Base: 0x19e724 | length: 2 | before: 5703 | after: 0000
+Base: 0x19e728 | length: 7 | before: 84E7190028F119 | after: 0F0000C0010000
+Base: 0x19e730 | length: 3 | before: ECE619 | after: 010000
+Base: 0x19e734 | length: 3 | before: CCF019 | after: 6066DC
+Base: 0x19e738 | length: 4 | before: 18A85200 | after: F7600176
+Base: 0x19e740 | length: 1 | before: 00 | after: 01
+Base: 0x19e742 | length: 1 | before: 0A | after: 00
+Base: 0x19e744 | length: 13 | before: 67000020454E445F4348494C44 | after: 200B150000000000010000000F
+Base: 0x19e752 | length: 6 | before: 0A0061726174 | after: 00C050000000
+Base: 0x19e768 | length: 1 | before: 00 | after: 01
+Base: 0x19e76a | length: 5 | before: 630224E819 | after: 0000810200
+Base: 0x19e770 | length: 3 | before: 000000 | after: 6066DC
+Base: 0x19e79c | length: 7 | before: 0000000099F652 | after: 721B2671C0E719
+Base: 0x19e7a4 | length: 2 | before: 0000 | after: 6C37
+Base: 0x19e7a7 | length: 4 | before: 00000000 | after: 766066DC
+Base: 0x19e7ac | length: 1 | before: 20 | after: 00
+Base: 0x19e7b0 | length: 7 | before: E603ED0450E819 | after: 0F0000C0010000
+Base: 0x19e7b8 | length: 14 | before: 947F7218C0A573180F63DB776900 | after: 000000000100000008E81900D736
+Base: 0x19e7c7 | length: 1 | before: 00 | after: 76
+Base: 0x19e7c9 | length: 2 | before: 0000 | after: 0B15
+Base: 0x19e7cc | length: 2 | before: 2000 | after: 8102
+Base: 0x19e7d0 | length: 6 | before: 000063020000 | after: 1B370076E836
+Base: 0x19e7d7 | length: 8 | before: 0000000000645D53 | after: 7646142671181F59
+Base: 0x19e7e0 | length: 2 | before: 0000 | after: 8102
+Base: 0x19e7e4 | length: 3 | before: 000000 | after: 200B15
+Base: 0x19e7e8 | length: 1 | before: 00 | after: 01
+Base: 0x19e7ec | length: 1 | before: 28 | after: 00
+Base: 0x19e7f0 | length: 3 | before: D00775 | after: D8E719
+Base: 0x19e7f8 | length: 23 | before: FB8CDB7709ACDC77000063021CE81900 | after: 98EB1900302E027696613807FEFFFFFF
+Base: 0x19e810 | length: 3 | before: 18E819 | after: 200B15
+Base: 0x19e814 | length: 15 | before: 51BDFC2FB8056302D4E8190082684F | after: 81020000010000000F0000C0810200
+Base: 0x19e824 | length: 3 | before: 000000 | after: 200B15
+Base: 0x19e828 | length: 3 | before: 1CEB19 | after: 200B15
+Base: 0x19e82c | length: 3 | before: 70E819 | after: 6DE24A
+Base: 0x19e830 | length: 3 | before: 000000 | after: 200B15
+Base: 0x19e834 | length: 3 | before: B8E04F | after: 810200
+Base: 0x19e838 | length: 1 | before: 00 | after: 01
+Base: 0x19e83c | length: 7 | before: F2FFFFFF55974F | after: 0F0000C079E24A
+Base: 0x19e88c | length: 7 | before: DA825300000000 | after: 6106465615D241
+Base: 0x19e894 | length: 3 | before: 000000 | after: 200B15
+Base: 0x19e898 | length: 2 | before: 0000 | after: 8102
+Base: 0x19e89c | length: 1 | before: 00 | after: 01
+Base: 0x19e8a0 | length: 1 | before: 0E | after: 0F
+Base: 0x19e8a3 | length: 8 | before: 00ECEA190020EB19 | after: C08D064656810200
+Base: 0x19e8ac | length: 3 | before: 0E0000 | after: 200B15
+Base: 0x19e8b0 | length: 2 | before: 68EF | after: CCEB
+Base: 0x19e8b4 | length: 4 | before: FFFFFFFF | after: 36D24100
+Base: 0x19e8fc | length: 4 | before: 7F070000 | after: 09ACDC77
+Base: 0x19e904 | length: 19 | before: DF0CDB7701000000F86BAC18FF070000 | after: 1CE91900DB62D3752CE919001FAC7476
+Base: 0x19e918 | length: 11 | before: F06BAC18000063027E2600 | after: 34E919009314707658E919
+Base: 0x19e924 | length: 7 | before: 09ACDC777E2600 | after: 78407876C81B9A
+Base: 0x19e92c | length: 3 | before: 44E919 | after: 000000
+Base: 0x19e930 | length: 10 | before: DB62D3750700000040E9 | after: CCEB19004DB0747629EC
+Base: 0x19e93c | length: 10 | before: 79BCFC2FB8056302FCE9 | after: ECEB1900A8E9190080EC
+Base: 0x19e948 | length: 3 | before: 82684F | after: 80EC19
+Base: 0x19e94c | length: 4 | before: 00000000 | after: BFB77476
+Base: 0x19e958 | length: 7 | before: 00000000B8E04F | after: 78407876C81B9A
+Base: 0x19e960 | length: 3 | before: 000000 | after: B8059A
+Base: 0x19e964 | length: 1 | before: FC | after: 01
+Base: 0x19e96c | length: 4 | before: 00000000 | after: 09ACDC77
+Base: 0x19e971 | length: 10 | before: 8E63026828D212D4974F | after: 00000000000000270000
+Base: 0x19e97d | length: 2 | before: 4039 | after: 0000
+Base: 0x19e980 | length: 4 | before: E0EA1900 | after: FFFFFFFF
+Base: 0x19e985 | length: 2 | before: 0000 | after: EC19
+Base: 0x19e994 | length: 12 | before: CA50DB77B83B6302C01D6302 | after: 00000000ECEB190000000000
+Base: 0x19e9a8 | length: 1 | before: 00 | after: 5C
+Base: 0x19e9ac | length: 3 | before: 000000 | after: ACEE19
+Base: 0x19e9b0 | length: 1 | before: 00 | after: 01
+Base: 0x19ea18 | length: 1 | before: 08 | after: 5D
+Base: 0x19ea1c | length: 1 | before: 0E | after: 18
+Base: 0x19ea20 | length: 5 | before: 0000000005 | after: D007390264
+Base: 0x19ea2b | length: 2 | before: 7500 | after: 0018
+Base: 0x19ea34 | length: 3 | before: 528900 | after: 38699A
+Base: 0x19ea38 | length: 4 | before: 52890000 | after: 90C8A403
+Base: 0x19ea40 | length: 1 | before: 05 | after: 00
+Base: 0x19ea44 | length: 6 | before: FF070000FF07 | after: 000039020200
+Base: 0x19ea4c | length: 3 | before: 84EA19 | after: 000000
+Base: 0x19eab8 | length: 8 | before: 6D400856FEFFFFFF | after: 50C9A40300000000
+Base: 0x19ec8c | length: 7 | before: 5CFEFFFF000000 | after: 0000000048699A
+Base: 0x19ec94 | length: 1 | before: 00 | after: 06
+Base: 0x19ec98 | length: 1 | before: 30 | after: 00
+Base: 0x19ec9a | length: 1 | before: 19 | after: 00
+Base: 0x19ec9c | length: 1 | before: 07 | after: 1C
+Base: 0x19ec9e | length: 1 | before: 00 | after: 06
+Base: 0x19eca0 | length: 14 | before: 000000000000000078407876C81B | after: 90C8A40350C9A40338699A000000
+Base: 0x19ecb0 | length: 3 | before: B8059A | after: E4EC19
+Base: 0x19ed95 | length: 1 | before: 13 | after: 03
+Base: 0x19ee0c | length: 3 | before: F8F019 | after: 420000
+Base: 0x19ee28 | length: 3 | before: 70F119 | after: 6066DC
+Base: 0x19ee5c | length: 7 | before: 70EE190018F119 | after: 6C3700766066DC
+Base: 0x19eedc | length: 3 | before: 000000 | after: 200B15
+Base: 0x19eee0 | length: 3 | before: 000000 | after: 200B15
+Base: 0x19eee4 | length: 3 | before: 000000 | after: 6DE24A
+Base: 0x19eee8 | length: 3 | before: 000000 | after: 200B15
+Base: 0x19eeec | length: 8 | before: 3030313934303030 | after: 1502000000000000
+Base: 0x19eef8 | length: 3 | before: 000000 | after: 79E24A
+Base: 0x19eefc | length: 7 | before: 00000000000000 | after: 8AC77D76909D7B
+Base: 0x19ef04 | length: 3 | before: 000000 | after: 98F319
+Base: 0x19ef08 | length: 12 | before: 000000000000000000000000 | after: 302E0276365F3807FEFFFFFF
+Base: 0x19ef7c | length: 7 | before: 00000000000000 | after: 7F5801766066DC
+Base: 0x19efc4 | length: 3 | before: 000000 | after: 2CF019
+Base: 0x19efc8 | length: 1 | before: 00 | after: FC
+Base: 0x19eff5 | length: 1 | before: 13 | after: 03
+Base: 0x19f01c | length: 4 | before: 00000000 | after: 77ED28FD
+Base: 0x19f038 | length: 3 | before: F81000 | after: A4F019
+Base: 0x19f03c | length: 12 | before: F8100000F884DA77447BDF77 | after: CAA3DB771CF11900D0F01900
+Base: 0x19f054 | length: 4 | before: B461E075 | after: 74F01900
+Base: 0x19f05c | length: 3 | before: 000000 | after: 88F119
+Base: 0x19f060 | length: 3 | before: 020200 | after: FCF119
+Base: 0x19f064 | length: 1 | before: 0E | after: 70
+Base: 0x19f066 | length: 1 | before: 12 | after: 9A
+Base: 0x19f06c | length: 3 | before: 000000 | after: 54171A
+Base: 0x19f074 | length: 1 | before: 00 | after: 12
+Base: 0x19f078 | length: 3 | before: 000000 | after: C8F019
+Base: 0x19f0d4 | length: 1 | before: 00 | after: 5C
+Base: 0x19f0d6 | length: 1 | before: 00 | after: 57
+Base: 0x19f124 | length: 3 | before: 010000 | after: 48F119
+Base: 0x19f128 | length: 3 | before: 000000 | after: 18F319
+Base: 0x19f12c | length: 3 | before: 000000 | after: BCF119
+Base: 0x19f138 | length: 3 | before: 000000 | after: 70F219
+Base: 0x19f13c | length: 3 | before: 58F119 | after: 000000
+Base: 0x19f142 | length: 1 | before: 00 | after: 02
+Base: 0x19f144 | length: 3 | before: 000000 | after: 58F119
+Base: 0x19f148 | length: 3 | before: 000000 | after: 58F119
+Base: 0x19f14c | length: 3 | before: 000000 | after: 58F119
+Base: 0x19f150 | length: 1 | before: 00 | after: 02
+Base: 0x19f154 | length: 1 | before: 00 | after: 02
+Base: 0x19f15a | length: 1 | before: 00 | after: 19
+Base: 0x19f15c | length: 7 | before: 00000000000000 | after: 35A4FC2F98F119
+Base: 0x19f164 | length: 3 | before: 000000 | after: 18F319
+Base: 0x19f168 | length: 4 | before: 00000000 | after: 719CDB77
+Base: 0x19f198 | length: 1 | before: 01 | after: 00
+Base: 0x19f19c | length: 1 | before: 1B | after: 00
+Base: 0x19f1a0 | length: 1 | before: 01 | after: 02
+Base: 0x19f1a4 | length: 3 | before: 18F719 | after: 000000
+Base: 0x19f1a8 | length: 7 | before: 853A3D6DF81000 | after: 3E008000D8F119
+Base: 0x19f1b0 | length: 7 | before: AC990B17C0F919 | after: 00000000000000
+Base: 0x19f1b8 | length: 5 | before: 983A3D6DF8 | after: 3600190000
+Base: 0x19f1c0 | length: 3 | before: 1EF319 | after: 3E0080
+Base: 0x19f1c4 | length: 2 | before: 30F7 | after: 48F2
+Base: 0x19f1c8 | length: 3 | before: 4D5A90 | after: 000000
+Base: 0x19f1cc | length: 3 | before: 030000 | after: 48F219
+Base: 0x19f1d0 | length: 1 | before: 04 | after: 00
+Base: 0x19f1d4 | length: 2 | before: FFFF | after: 0000
+Base: 0x19f1d8 | length: 1 | before: B8 | after: 00
+Base: 0x19f1e0 | length: 1 | before: 40 | after: 00
+Base: 0x19f1e2 | length: 1 | before: 00 | after: 20
+Base: 0x19f230 | length: 7 | before: 83180F00001000 | after: 91A7FC2F68F319
+Base: 0x19f245 | length: 4 | before: 10000004 | after: E17D7680
+Base: 0x19f2a0 | length: 7 | before: 00000000000000 | after: 260F2671E0D74B
+Base: 0x19f2b5 | length: 2 | before: 0000 | after: F319
+Base: 0x19f3a8 | length: 2 | before: 1067 | after: 7066
+Base: 0x19f3b8 | length: 2 | before: 98C9 | after: B8CA
+Base: 0x19f3c8 | length: 1 | before: 6B | after: 87
+Base: 0x19f3cc | length: 1 | before: 93 | after: 8B
+Base: 0x19f3d4 | length: 1 | before: 6B | after: 87
+Base: 0x19f3d6 | length: 1 | before: 93 | after: 8B
+Base: 0x19f3de | length: 1 | before: 2E | after: 2A
+Base: 0x19f3e4 | length: 2 | before: 1067 | after: 7066
+Base: 0x19f404 | length: 1 | before: 6B | after: 87
+Base: 0x19f408 | length: 1 | before: 6B | after: 87
+Base: 0x19f40a | length: 1 | before: 93 | after: 8B
+Base: 0x19f40c | length: 1 | before: 93 | after: 8B
+Base: 0x19f448 | length: 1 | before: 6B | after: 87
+Base: 0x19f44a | length: 1 | before: 93 | after: 8B
+Base: 0x19f5c0 | length: 1 | before: 3A | after: 56
+Base: 0x19f5c2 | length: 1 | before: A2 | after: 9A
+Base: 0x19f620 | length: 1 | before: 3A | after: 56
+Base: 0x19f622 | length: 1 | before: A2 | after: 9A
+Base: 0x19f68c | length: 1 | before: 3A | after: 56
+Base: 0x19f68e | length: 1 | before: A2 | after: 9A
+Base: 0x19f6ac | length: 1 | before: 3A | after: 56
+Base: 0x19f6ae | length: 1 | before: A2 | after: 9A
+Base: 0x19f710 | length: 1 | before: 3A | after: 56
+Base: 0x19f712 | length: 1 | before: A2 | after: 9A
+Base: 0x19f8e0 | length: 1 | before: 03 | after: 20
+Base: 0x19f8e4 | length: 8 | before: F1FA1900FDFFFFFF | after: 106000803CC8DB77
+Base: 0x19f970 | length: 1 | before: 7F | after: 3B
+Base: 0x19f97c | length: 1 | before: 28 | after: 52
+Base: 0x19f980 | length: 4 | before: F14EDD77 | after: 48FA1900
+Base: 0x19f990 | length: 1 | before: 7F | after: 3B
+Base: 0x19f9a0 | length: 1 | before: E3 | after: E2
+Base: 0x19f9a2 | length: 1 | before: F3 | after: EA
+Base: 0x19f9a8 | length: 7 | before: 947F721838FA19 | after: 24000000010000
+Base: 0x19f9b0 | length: 5 | before: 0F63DB7764 | after: 0000000000
+Base: 0x19f9b8 | length: 1 | before: 20 | after: 70
+Base: 0x19f9bc | length: 19 | before: 200000000600000000000000E4F91900 | after: FFFFFFFFFFFFFFFF6E7C01769F800176
+Base: 0x19f9d0 | length: 3 | before: 2CFA19 | after: 000000
+Base: 0x19f9d4 | length: 3 | before: 616753 | after: C8111D
+Base: 0x19f9d8 | length: 3 | before: 28FA19 | after: 000200
+Base: 0x19f9dc | length: 2 | before: 0600 | after: 1060
+Base: 0x19f9df | length: 5 | before: 0000000000 | after: 803CC8DB77
+Base: 0x19f9e5 | length: 2 | before: FA19 | after: 0000
+Base: 0x19f9e8 | length: 3 | before: DDCF4E | after: 48131D
+Base: 0x19f9ec | length: 3 | before: 48FA19 | after: 000000
+Base: 0x19f9f0 | length: 3 | before: 616753 | after: 6066DC
+Base: 0x19f9f4 | length: 7 | before: 44FA19009C0000 | after: 54DDDB77E0D74B
+Base: 0x19f9fc | length: 3 | before: 69F24C | after: 000000
+Base: 0x19fa00 | length: 3 | before: 44FA19 | after: 010000
+Base: 0x19fa04 | length: 7 | before: FC407103616753 | after: 0D19465610FB19
+Base: 0x19fa0c | length: 23 | before: 30AC6E03606753000100000068EB7003 | after: 5F305200FFFFFFFF8B0E0276200B1500
+Base: 0x19fa24 | length: 7 | before: 28AC6E03132F4F | after: 56019A01200B15
+Base: 0x19fa2c | length: 7 | before: 9C000000006853 | after: CDABBADCE0D74B
+Base: 0x19fa34 | length: 7 | before: 28AC6E03B00D59 | after: 00020000200B15
+Base: 0x19fa3c | length: 3 | before: 980E59 | after: 20FB19
+Base: 0x19fa40 | length: 11 | before: 1500000000FA1900F40100 | after: 5A7E0176B5ACFC2F200B15
+Base: 0x19fa4c | length: 2 | before: 68FA | after: 20FB
+Base: 0x19fa50 | length: 15 | before: 4F314F00900E590090FA1900000000 | after: 9F8001769C7E01766E072671E0D74B
+Base: 0x19fa60 | length: 3 | before: 0A0000 | after: 6066DC
+Base: 0x19fa64 | length: 3 | before: 080000 | after: 200B15
+Base: 0x19fa68 | length: 7 | before: E0E87103E3F64E | after: 20000000200B15
+Base: 0x19fa70 | length: 1 | before: 06 | after: 01
+Base: 0x19fa73 | length: 1 | before: 00 | after: 02
+Base: 0x19fa7c | length: 11 | before: DDCF4E00DCFA1900616753 | after: 3A078B63830AFFFF200B15
+Base: 0x19fa88 | length: 3 | before: D8FA19 | after: 200000
+Base: 0x19fa8c | length: 3 | before: 4CFB19 | after: 200B15
+Base: 0x19fa90 | length: 5 | before: 69F24C00D8 | after: 01000002CC
+Base: 0x19fa98 | length: 7 | before: FC407103616753 | after: F9068B63200B15
+Base: 0x19faa0 | length: 7 | before: 30AC6E03606753 | after: 24000000010000
+Base: 0x19faa8 | length: 1 | before: 01 | after: 00
+Base: 0x19faac | length: 27 | before: 68EB700368EB70035ECF4A004CFB1900 | after: 0000000070000000FFFFFFFFFFFFFFFF
+Base: 0x19fac8 | length: 3 | before: 4CFB19 | after: 000000
+Base: 0x19facc | length: 3 | before: 230000 | after: C8111D
+Base: 0x19fad0 | length: 3 | before: 4CFB19 | after: 000000
+Base: 0x19fad4 | length: 2 | before: 1C00 | after: 1060
+Base: 0x19fad7 | length: 4 | before: 004CFB19 | after: 80000000
+Base: 0x19fadc | length: 1 | before: 1D | after: 00
+Base: 0x19fae0 | length: 3 | before: 4CFB19 | after: 48131D
+Base: 0x19fae4 | length: 1 | before: 03 | after: 00
+Base: 0x19fae8 | length: 3 | before: 88FB19 | after: 000000
+Base: 0x19faec | length: 1 | before: 01 | after: 00
+Base: 0x19faf0 | length: 3 | before: F68A50 | after: E0D74B
+Base: 0x19faf4 | length: 3 | before: FF3F13 | after: 000000
+Base: 0x19faf8 | length: 1 | before: 00 | after: 01
+Base: 0x19fafc | length: 1 | before: 01 | after: 00
+Base: 0x19fb00 | length: 3 | before: 000000 | after: 200B15
+Base: 0x19fb04 | length: 2 | before: 0000 | after: 1060
+Base: 0x19fb07 | length: 12 | before: 0029154656A8FB1900331350 | after: 8068FB190020978A6374FD19
+Base: 0x19fb14 | length: 15 | before: 89FB1900000000006CFB1900000000 | after: 302E0276365F3807FEFFFFFF58FB19
+Base: 0x19fb24 | length: 7 | before: 28FC1900961650 | after: 37750176E0D74B
+Base: 0x19fb2c | length: 3 | before: F0FB19 | after: 000000
+Base: 0x19fb30 | length: 3 | before: BFBF4A | after: 000200
+Base: 0x19fb38 | length: 4 | before: DCFB1900 | after: 56019A01
+Base: 0x19fb40 | length: 1 | before: 01 | after: 00
+Base: 0x19fb44 | length: 1 | before: 00 | after: 01
+Base: 0x19fb48 | length: 3 | before: 000000 | after: 200B15
+Base: 0x19fb4c | length: 15 | before: E4CA630D03000000506A7918010000 | after: 64FC1900830AFFFF0000000070FB19
+Base: 0x19fb5c | length: 7 | before: 81494D0008C258 | after: DB560176000200
+Base: 0x19fb64 | length: 11 | before: E4CA630D000000007C0943 | after: 0000000056019A01000000
+Base: 0x19fb70 | length: 18 | before: 9C8C630DC0F95F0D060000000CB2950F | after: 8CFB19003A078B63830AFFFF200B1500
+Base: 0x19fb84 | length: 3 | before: AE494D | after: 000000
+Base: 0x19fb88 | length: 15 | before: 08C25800C0F95F0D00000000060000 | after: 56019A01C4FB1900F9068B63200B15
+Base: 0x19fb98 | length: 5 | before: 30B47B0D4E | after: 0002000000
+Base: 0x19fba0 | length: 20 | before: 408E321801000000AE494D0008C25800 | after: C4FB190006078B630F078B6310788909
+Base: 0x19fbb8 | length: 3 | before: 4E0000 | after: 200B15
+Base: 0x19fbbc | length: 2 | before: 3202 | after: 0000
+Base: 0x19fbc0 | length: 7 | before: E1154656060000 | after: 830AFFFFE8FB19
+Base: 0x19fbc8 | length: 18 | before: E04F321888247B0300000000A00B4D00 | after: D6078B63E8FB1900E3078B6320008C63
+Base: 0x19fbdc | length: 7 | before: 00000000800C00 | after: A80CA103200B15
+Base: 0x19fbe4 | length: 2 | before: 2003 | after: 0002
+Base: 0x19fbe8 | length: 11 | before: 10CD7B0D37324B0044FC19 | after: 0CFC1900B8978A63000000
+Base: 0x19fbf4 | length: 11 | before: 907B7A0DA069321844324B | after: 56019A0102000000200B15
+Base: 0x19fc00 | length: 3 | before: 100000 | after: 64FC19
+Base: 0x19fc04 | length: 7 | before: FF000000100000 | after: 20978A63200B15
+Base: 0x19fc0c | length: 1 | before: 00 | after: 02
+Base: 0x19fc0e | length: 9 | before: 0000A0507403E0FC19 | after: 267110788909200B15
+Base: 0x19fc18 | length: 3 | before: B64652 | after: 000000
+Base: 0x19fc1c | length: 7 | before: FFFFFFFF120942 | after: 00000000000000
+Base: 0x19fc24 | length: 27 | before: E04F3218060000000000000000000000 | after: 06078B630F078B631078890910788909
+Base: 0x19fc41 | length: 1 | before: 00 | after: 02
+Base: 0x19fc44 | length: 11 | before: 3309420031384B00000000 | after: 106000803CC8DB7774FC19
+Base: 0x19fc50 | length: 11 | before: 2003000058020000641141 | after: 2C0A8B6320008C63000200
+Base: 0x19fc5c | length: 3 | before: 100000 | after: 200B15
+Base: 0x19fc60 | length: 5 | before: FFFFFFE3FF | after: 70098B6303
+Base: 0x19fc68 | length: 6 | before: A0507403A402 | after: 030000000000
+Base: 0x19fc70 | length: 23 | before: 32020000F84F3218E04F32186B000301 | after: 10788909A0FC19008B0E0276200B1500
+Base: 0x19fc88 | length: 7 | before: FFFFFFE3A40200 | after: 56019A01200B15
+Base: 0x19fc90 | length: 13 | before: 6D8F4D00E04F3218E0C34B0085 | after: CDABBADC70098B633066720316
+Base: 0x19fc9e | length: 13 | before: 4656F84F3218E04F3218000000 | after: 4B00F0EE7703306672035ED44B
+Base: 0x19fcac | length: 7 | before: FFFFFFFF34CF53 | after: F0EE770390FD19
+Base: 0x19fcb4 | length: 5 | before: 0000000001 | after: 6867720316
+Base: 0x19fcba | length: 17 | before: 4656CCFE190084345200FFFFFFFFCF0D | after: 4B0008EE770328B77E184E114B005601
+Base: 0x19fccc | length: 11 | before: 484B32180600000034CF53 | after: 75114B0090BEAB18080000
+Base: 0x19fcd8 | length: 20 | before: 000000006D124656C1124656F0127803 | after: 34B77E18B0AE73184E114B0056010000
+Base: 0x19fced | length: 32 | before: EE4C008061720306000000000000008C | after: 77691808000000BCAE731870A673184E
+Base: 0x19fd10 | length: 14 | before: 2003000058020000B51C01B70000 | after: 7CA67318F8DB2E184E114B005601
+Base: 0x19fd20 | length: 3 | before: 000000 | after: 75114B
+Base: 0x19fd24 | length: 15 | before: 2000CC00FFFFFFFF0000000011DE9F | after: 2877720308000000C8D52E18D2114B
+Base: 0x19fd34 | length: 6 | before: B51C01B73B00 | after: 080000005601
+Base: 0x19fd3c | length: 24 | before: B51C01B7F0C42976983A71036CFD1900 | after: 9A010000706B720308000000D4D52E18
+Base: 0x19fd58 | length: 3 | before: 000000 | after: 90FD19
+Base: 0x19fd70 | length: 2 | before: 11DE | after: B6EE
+Base: 0x19fdb0 | length: 4 | before: 00000000 | after: 47E0D375
+Base: 0x19fdee | length: 2 | before: C43B | after: D8B4
+Base: 0x19fe00 | length: 1 | before: 3A | after: 56
+Base: 0x19fe04 | length: 1 | before: A2 | after: 9A
+Base: 0x19fe28 | length: 1 | before: 3A | after: 56
+Base: 0x19fe2a | length: 1 | before: A2 | after: 9A
+Base: 0x19fe2c | length: 2 | before: 06DE | after: B0EE
+Base: 0x19fe30 | length: 1 | before: 6B | after: 87
+Base: 0x19fe34 | length: 1 | before: 93 | after: 8B
+Base: 0x1e7352 | length: 1 | before: 06 | after: 19
+Base: 0x1e7392 | length: 1 | before: 02 | after: 0A
+Base: 0x1e7412 | length: 1 | before: 06 | after: 04
+Base: 0x392808 | length: 1 | before: 00 | after: 02
+Base: 0x392870 | length: 1 | before: C9 | after: FA
+Base: 0x392874 | length: 1 | before: 00 | after: 08
+Base: 0x3937b2 | length: 1 | before: 20 | after: 24
+Base: 0x394fa8 | length: 1 | before: 01 | after: 02
+Base: 0x394faa | length: 2 | before: 8830 | after: A82E
+Base: 0x3a87b2 | length: 1 | before: B2 | after: B8
+Base: 0x3a9fa8 | length: 1 | before: 03 | after: 01
+Base: 0x3a9faa | length: 1 | before: BF | after: CD
+Base: 0x3cf7b2 | length: 1 | before: 3C | after: 60
+Base: 0x3d0fab | length: 1 | before: 5A | after: 1A
+Base: 0x3e8faa | length: 1 | before: BE | after: CB
+Base: 0x58c1c0 | length: 1 | before: 3A | after: 56
+Base: 0x58c1c4 | length: 1 | before: A2 | after: 9A
+Base: 0x591e98 | length: 2 | before: 11DE | after: B6EE
+Base: 0x591ea4 | length: 2 | before: 16B7 | after: B0C7
+Base: 0x591f68 | length: 2 | before: E2DB | after: 0AEE
+Base: 0x5920b4 | length: 2 | before: CFDA | after: FF00
+Base: 0x597a68 | length: 3 | before: D0496C | after: C8D52E
+Base: 0x597a6c | length: 4 | before: 00000000 | after: D0496C18
+Base: 0x597a74 | length: 2 | before: 11DE | after: B6EE
+Base: 0x597a88 | length: 4 | before: 00000000 | after: FEFFFFFF
+Base: 0x597a90 | length: 1 | before: 3A | after: 56
+Base: 0x597a94 | length: 1 | before: A2 | after: 9A
+Base: 0x597afc | length: 2 | before: 95DB | after: FEE1
+Base: 0x597b00 | length: 3 | before: D0496C | after: C8D52E
+Base: 0x780214 | length: 1 | before: 62 | after: 64
+Base: 0x780238 | length: 2 | before: FF0E | after: 010F
+Base: 0x78024c | length: 2 | before: 18C3 | after: 90C0
+Base: 0x7956cc | length: 1 | before: 0D | after: 0E
+Base: 0x7a792c | length: 1 | before: E9 | after: F1
+Base: 0x7a7a8c | length: 1 | before: 26 | after: 29
+Base: 0x7a9742 | length: 1 | before: 0D | after: 05
+Base: 0x7b6464 | length: 1 | before: 12 | after: 13
+Base: 0x7baeb0 | length: 2 | before: C8F5 | after: BEF7
+Base: 0x7baeb4 | length: 2 | before: C9F5 | after: BFF7
+Base: 0x7c2c38 | length: 1 | before: 53 | after: 54
+Base: 0x7c2c3c | length: 1 | before: BB | after: BC
+Base: 0x7c8734 | length: 1 | before: 01 | after: 04
+Base: 0x7c8738 | length: 2 | before: 6E03 | after: 0000
+Base: 0x7c873c | length: 2 | before: E302 | after: 0000
+Base: 0x7f1a3c | length: 1 | before: 32 | after: 43
+Base: 0x7f1ae0 | length: 3 | before: 88835C | after: 3AE59F
+Base: 0x7f1ae8 | length: 3 | before: 88835C | after: 3AE59F
+Base: 0x7f1af0 | length: 3 | before: 88835C | after: 3AE59F
+Base: 0x806820 | length: 2 | before: 143A | after: 8045
+Base: 0x806828 | length: 2 | before: 441B | after: F833
+Base: 0x806830 | length: 3 | before: 4C235D | after: FC765E
+Base: 0x806844 | length: 1 | before: 34 | after: 66
+Base: 0x8177d8 | length: 5 | before: 504CD77601 | after: 0000000000
+Base: 0x8177e0 | length: 5 | before: 78DCD77618 | after: 0001000000
+Base: 0x8177e6 | length: 1 | before: 10 | after: 00
+Base: 0x8177ed | length: 1 | before: 00 | after: 01
+Base: 0x8177f0 | length: 3 | before: D87781 | after: 000100
+Base: 0x817800 | length: 1 | before: 00 | after: 01
+Base: 0x817805 | length: 1 | before: 00 | after: 01
+Base: 0x817807 | length: 1 | before: 00 | after: 80
+Base: 0x817811 | length: 1 | before: 00 | after: 01
+Base: 0x817821 | length: 2 | before: 0000 | after: 0101
+Base: 0x817825 | length: 3 | before: 000000 | after: 010101
+Base: 0x817829 | length: 2 | before: 0000 | after: 0101
+Base: 0x81782c | length: 1 | before: 00 | after: 01
+Base: 0x817830 | length: 1 | before: 00 | after: 01
+Base: 0x817832 | length: 2 | before: 0000 | after: 0101
+Base: 0x817835 | length: 2 | before: 0000 | after: 0101
+Base: 0x817838 | length: 1 | before: 01 | after: 00
+Base: 0x81783a | length: 1 | before: 00 | after: 01
+Base: 0x81784c | length: 3 | before: 4C7881 | after: 000000
+Base: 0x817850 | length: 3 | before: 4C7881 | after: 000000
+Base: 0x817854 | length: 1 | before: 00 | after: 01
+Base: 0x817860 | length: 3 | before: 463D5C | after: 000000
+Base: 0x817870 | length: 7 | before: D05DD876D87781 | after: 00000000000000
+Base: 0x817879 | length: 6 | before: 4CD776D87781 | after: 000000000000
+Base: 0x817880 | length: 3 | before: 947881 | after: 000001
+Additional changed runs omitted: 5664
+
+This report compares only bytes captured at matching virtual addresses.
+It does not identify game variables by itself; correlate multiple controlled states.
+No process memory was modified.
