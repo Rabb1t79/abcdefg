@@ -38,6 +38,9 @@ constexpr std::uint32_t kPlayfieldCellsEndOffset = 0x20;
 constexpr std::uint32_t kPlayfieldCellsCapacityOffset = 0x24;
 constexpr std::uint32_t kCellStride = 0x14;
 constexpr std::uint32_t kCellOccupancyOffset = 0x0C;
+constexpr std::uint32_t kAiSnapshotDataOffset = 0x0CC;
+constexpr std::uint32_t kAiSnapshotWidthOffset = 0x0DC;
+constexpr std::uint32_t kAiSnapshotHeightOffset = 0x0E0;
 constexpr std::uint32_t kExpectedWidth = 10;
 constexpr std::uint32_t kExpectedHeight = 40;
 constexpr std::size_t kScanChunkBytes = 1024U * 1024U;
@@ -307,6 +310,43 @@ bool Snapshot(HANDLE p, const Candidate& c, std::vector<std::uint8_t>& board,
     }
     return true;
 }
+
+bool ReadAiSnapshot(HANDLE p, const Candidate& c, std::vector<std::uint8_t>& board,
+                    std::uint32_t& occupied, std::uint32_t& dataAddress,
+                    std::string& error) {
+    std::uint32_t dataAt = 0, widthAt = 0, heightAt = 0;
+    if (!Add(c.ai, kAiSnapshotDataOffset, dataAt) ||
+        !Add(c.ai, kAiSnapshotWidthOffset, widthAt) ||
+        !Add(c.ai, kAiSnapshotHeightOffset, heightAt) ||
+        !ReadU32(p, dataAt, dataAddress) ||
+        !ReadU32(p, widthAt, widthAt) ||
+        !ReadU32(p, heightAt, heightAt)) {
+        error = "Could not read the AI snapshot pointer/dimensions";
+        return false;
+    }
+    if (widthAt != c.width || heightAt != c.height) {
+        error = "AI snapshot dimensions do not match CPlayfield dimensions";
+        return false;
+    }
+    const std::size_t cells = (std::size_t)c.width * c.height;
+    std::vector<std::uint32_t> values(cells);
+    if (dataAddress < 0x10000 ||
+        !ReadRemote(p, dataAddress, values.data(), values.size() * sizeof(values[0]))) {
+        error = "AI snapshot vector data is not readable";
+        return false;
+    }
+    board.assign(cells, 0);
+    occupied = 0;
+    for (std::size_t i = 0; i < cells; ++i) {
+        if (values[i] > 1) {
+            error = "AI snapshot contains a value other than 0 or 1";
+            return false;
+        }
+        board[i] = static_cast<std::uint8_t>(values[i]);
+        occupied += board[i];
+    }
+    return true;
+}
 void PrintBoard(std::ostream& out, const Candidate& c, const std::vector<std::uint8_t>& board) {
     out << "Rows are raw memory indices y=0..39; visual top/bottom orientation is not yet verified.\n";
     for (std::uint32_t y = 0; y < c.height; ++y) {
@@ -365,7 +405,7 @@ int Run(DWORD requestedPid) {
     }
 
     const std::uint32_t aiVtable = module.base + kVtableAiRva;
-    std::cout << "TopRuntimeProbe 0.1 — read-only TOP CHS_05 runtime board probe\n"
+    std::cout << "TopRuntimeProbe 0.2 - read-only TOP CHS_05 runtime board probe\n"
               << "PID: " << pid << "\nImage: " << ToUtf8(path)
               << "\nSHA256: " << kExpectedSha256
               << "\nModule base: " << Hex32(module.base)
@@ -417,11 +457,18 @@ int Run(DWORD requestedPid) {
     }
 
     const Candidate& c = valid.front();
-    std::vector<std::uint8_t> board; std::uint32_t occupied = 0;
+    std::vector<std::uint8_t> board, aiBoard;
+    std::uint32_t occupied = 0, aiOccupied = 0, aiSnapshotAddress = 0;
     if (!Snapshot(process.value, c, board, occupied, error)) { std::cerr << error << "\n"; return 7; }
+    if (!ReadAiSnapshot(process.value, c, aiBoard, aiOccupied, aiSnapshotAddress, error)) {
+        std::cerr << "AI snapshot cross-check unavailable: " << error << "\n";
+        return 9;
+    }
+    std::uint32_t matchingCells = 0;
+    for (std::size_t i = 0; i < board.size(); ++i) matchingCells += (board[i] == aiBoard[i]);
 
     std::ostringstream report;
-    report << "TopRuntimeProbe 0.1 — read-only runtime board snapshot\n"
+    report << "TopRuntimeProbe 0.2 - read-only runtime board snapshot\n"
            << "Target SHA256: " << kExpectedSha256 << "\nPID: " << pid
            << "\nImage: " << ToUtf8(path) << "\nModuleBase: " << Hex32(module.base)
            << "\nAI: " << Hex32(c.ai) << "\nCGamePlay: " << Hex32(c.game)
@@ -430,7 +477,11 @@ int Run(DWORD requestedPid) {
            << "\nCellsBegin: " << Hex32(c.cells) << "\nCellsEnd: " << Hex32(c.cellsEnd)
            << "\nCellsCapacity: " << Hex32(c.cellsCap)
            << "\nCellStride: 0x14\nOccupancyDWORDOffset: 0x0C (0=occupied, nonzero=empty)"
-           << "\nOccupiedCells: " << occupied << " / 400\n\n";
+           << "\nMainBoardOccupiedCells: " << occupied << " / 400"
+           << "\nAISnapshotData: " << Hex32(aiSnapshotAddress)
+           << "\nAISnapshotOccupiedCells: " << aiOccupied << " / 400"
+           << "\nMainBoardVsAISnapshot: " << matchingCells << " / 400 cells match"
+           << "\n\n";
     PrintBoard(report, c, board);
 
     std::cout << "VALIDATED OBJECT CHAIN\n"
@@ -439,7 +490,10 @@ int Run(DWORD requestedPid) {
               << "  CPlayfield " << Hex32(c.field) << "\n"
               << "  CPlayer    " << Hex32(c.player) << "\n"
               << "  Cells      " << Hex32(c.cells) << " .. " << Hex32(c.cellsEnd) << "\n"
-              << "Board 10x40; occupied cells: " << occupied << " / 400\n\n";
+              << "Board 10x40; main board occupied: " << occupied << " / 400\n"
+              << "AI snapshot: " << Hex32(aiSnapshotAddress)
+              << "; occupied: " << aiOccupied << " / 400\n"
+              << "Main board vs AI snapshot: " << matchingCells << " / 400 cells match\n\n";
     PrintBoard(std::cout, c, board);
 
     const auto outputPath = std::filesystem::current_path() / L"TopRuntimeProbe-report.txt";
