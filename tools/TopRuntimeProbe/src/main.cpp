@@ -315,16 +315,17 @@ bool ReadAiSnapshot(HANDLE p, const Candidate& c, std::vector<std::uint8_t>& boa
                     std::uint32_t& occupied, std::uint32_t& dataAddress,
                     std::string& error) {
     std::uint32_t dataAt = 0, widthAt = 0, heightAt = 0;
+    std::uint32_t snapshotWidth = 0, snapshotHeight = 0;
     if (!Add(c.ai, kAiSnapshotDataOffset, dataAt) ||
         !Add(c.ai, kAiSnapshotWidthOffset, widthAt) ||
         !Add(c.ai, kAiSnapshotHeightOffset, heightAt) ||
         !ReadU32(p, dataAt, dataAddress) ||
-        !ReadU32(p, widthAt, widthAt) ||
-        !ReadU32(p, heightAt, heightAt)) {
+        !ReadU32(p, widthAt, snapshotWidth) ||
+        !ReadU32(p, heightAt, snapshotHeight)) {
         error = "Could not read the AI snapshot pointer/dimensions";
         return false;
     }
-    if (widthAt != c.width || heightAt != c.height) {
+    if (snapshotWidth != c.width || snapshotHeight != c.height) {
         error = "AI snapshot dimensions do not match CPlayfield dimensions";
         return false;
     }
