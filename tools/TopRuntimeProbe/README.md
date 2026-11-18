@@ -1,4 +1,4 @@
-# TopRuntimeProbe
+# TopRuntimeProbe 0.2
 
 Read-only external Windows x86 utility for validating the static `TO-P_CHS_05` board-object chain and exporting one 10x40 occupancy snapshot.
 
@@ -41,7 +41,7 @@ Each cell record is 20 bytes. The DWORD at record offset `+0x0C` is interpreted 
 - `0` = occupied
 - nonzero = empty
 
-The program prints and saves a 10x40 grid using `#` for occupied and `.` for empty. Rows are shown in raw memory order (`y=0` to `y=39`). The visual top/bottom orientation has not yet been dynamically verified; the probe does not flip rows or silently assume an origin.
+The program also reads the AI occupancy snapshot at `CTetrisLuaAI + 0xCC`, using the snapshot dimensions at `+0xDC` and `+0xE0`. It compares all 400 normalized values from that snapshot against the independently decoded `CPlayfield` cell records. The report includes both occupied-cell counts and the number of matching cells. A mismatch is diagnostic evidence that needs investigation; the probe does not hide or auto-correct it. The program prints and saves the 10x40 main-board grid using `#` for occupied and `.` for empty. Rows are shown in raw memory order (`y=0` to `y=39`). The visual top/bottom orientation has not yet been dynamically verified; the probe does not flip rows or silently assume an origin.
 
 ## Run
 
@@ -76,7 +76,7 @@ The probe needs sufficient permission to read the game process. Normally run it 
 
 ## Validation status
 
-The current object offsets and the cell-record decoding are static-analysis findings from the uploaded exact executable. The program's self-test covers the local 10x40 / 20-byte / `+0x0C` decoder only. It does not emulate a game process and cannot prove runtime validity in CI. The first run against the user's live game is the required dynamic validation step.
+The object offsets and cell-record decoding are static-analysis findings from the uploaded exact executable. The program's self-test covers the local 10x40 / 20-byte / `+0x0C` decoder only; it does not emulate a game process and cannot prove runtime validity in CI. The live-game cross-check compares the main board and the AI snapshot, but does not replace a comparison against the visible game board. A board with no locked pieces can legitimately report 0 occupied cells; the active piece is not assumed to be part of the settled-cell vector.
 
 ## Build
 
