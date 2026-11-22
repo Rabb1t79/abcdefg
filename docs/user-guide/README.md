@@ -1,10 +1,12 @@
 # 用户文档
 
+> 🌐 [English](../en/user-guide/README.md) · 简体中文
+
 这里写的是 Anomaly 的日常用法：怎么安装、去哪找插件、怎样更新，以及出问题时先看什么。如果你要从源码构建或自己写插件，请转到[开发者文档](../developer-guide/README.md)。
 
 ## 阅读顺序
 
-1. [安装与更新](installation.md) — 下载正确的运行包，用启动器完成首次安装、更新或实时附加。
+1. [安装与更新](installation.md) — 下载正确的运行包，用启动器完成首次接入（注入或代理模式）、更新或停用代理。
 2. [快速上手](quickstart.md) — 第一次启动、打开界面并启用插件。
 3. [内建插件](built-in-plugins.md) — 随运行包安装的插件分别做什么。
 4. [第三方插件](third-party-plugins.md) — 在游戏内下载、更新、卸载插件，以及管理插件源。
@@ -13,6 +15,7 @@
 7. [主题与背景](theme.md) — 换配色（含奶蛙主题）、贴背景图和贴纸，以及用网页编辑器做布局。
 8. [诊断 CLI](diagnostics-cli.md) — 用 `anomaly-cli` 查看 Runtime、Profile 和内存状态。
 9. [NTE Build Profile](nte-profiles.md) — 了解依赖游戏结构的功能为什么可能暂时不可用。
+10. [模组](mods.md) — 用启动器的模组页管理 `Paks/~mods`，并了解「启用模组加载」开关。
 
 ## 术语速查
 

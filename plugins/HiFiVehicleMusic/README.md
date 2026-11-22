@@ -1,15 +1,20 @@
 # HiFi Vehicle Music
 
 拦截游戏载具背景音乐（`UHTSoundSubsystem` 的 player music），用本地无损文件和独立输出后端
-播放，支持 WASAPI 独占 / WASAPI 共享 / DirectSound / ASIO。
+播放，支持 WASAPI 独占 / WASAPI 共享 / DirectSound / ASIO。另有 Meting 网络曲库：搜索歌曲或导入网易云
+歌单，作为独立的「Meting」专辑在游戏里播放，音频只在内存里，不写磁盘。
 
 ## 工作方式
 
 1. 通过 `anomaly.interop.signature` 在 `HTGame.exe` `.text` 中解析函数签名，用 `anomaly.interop.hook` 挂
-   detour（全部 30 个，见 `HookIndex`）。每个 detour 都有严格上界：读原子快照、有界内存读写、向音频引擎
-   投递命令、经缓存解析事件名、经 `CallUnderLease` 的嵌套租约调其他 Hook 的原函数；不做表遍历、行构建、
-   纹理导入或任何可能阻塞的调用——重活全部在后台 builder 线程（见第 5 条），保证宿主 1 秒停止预算内能
-   排空回调。必需签名或任一核心 Hook 失败则释放全部 Hook，插件退化为不接管。
+   detour（全部 30 个，见 `HookIndex`）。签名与字段偏移由 v2 布局声明解析：`PlayingID` / `Paused` /
+   `PlayerType` 一组，`CurrentID` / `OwnedIDs` 一组，字段偏移只取当次指令证据，不回退到常量。
+   必需 Hook（post / stop / pause / resume / 下车）任一失败则释放全部 Hook，插件退化为不接管；
+   `SetMusicPlayerType` 只是「切到非载具时立即停」，解析不到时只记录告警并跳过那一个 Hook，
+   其余 Hook 照常安装（界面显示「Hook：已安装（缺少 …）」）。每个 detour 都有严格上界：读原子快照、
+   有界内存读写、向音频引擎投递命令、经缓存解析事件名、经 `CallUnderLease` 的嵌套租约调其他 Hook
+   的原函数；不做表遍历、行构建、纹理导入或任何可能阻塞的调用——重活全部在后台 builder 线程
+   （见第 5 条），保证宿主 1 秒停止预算内能排空回调。
 2. `PostPlayerMusicSound` detour：读取 `PlayerType`（载具 = 1）与 `UAkAudioEvent` 的 FName，
    经 `anomaly.ue5.names` 解析出事件名。若插件启用、为载具音乐且曲库非空，则跳过原函数（Wwise 不发声），先调用原始 `StopPlayerMusicSound` 停掉正在播的 Wwise
    音乐，再把播放命令投递给音频引擎；否则停止引擎并调用原函数。
@@ -44,16 +49,39 @@
    - 查找/遍历：`FindRow` / `GetAlbumData` 命中合成名时返回合成行；两个 `ForeachRow` 用记录包装跑完
      原表（顺带捕获模板）后追加快照里的合成行。
    - 已拥有列表：`GetOwnedMusicListIDs` 的副本追加曲库 ID；`ReGenerateNewMusicListIDs` /
-     `SetCurrentMusicListID` 直接读 `+0x3E0`，调用前临时加入、调用后原位移除，存档不会写入合成 ID。
+     `SetCurrentMusicListID` 直接读 `+0x3F8`，调用前临时加入、调用后原位移除，存档不会写入合成 ID。
    - 播放：只有专辑里的歌（list ID 解析出曲库序号 k）走 HiFi 引擎播放曲库第 k 首；游戏自带歌曲照常由 Wwise 播放。
    - 重新扫描曲库后按新标题重建合成行（旧行泄漏，避免 UI 悬垂指针）。
    - 锁定状态：音乐面板 `RefreshItemStates`、载具音乐面板列表构建、`ResolveCurrentMusicListID`、
-     `SyncCurrentMusicListID` 也直接读 `+0x3E0`（不经 `GetOwnedMusicListIDs`），不加入就会被判为未拥有
+     `SyncCurrentMusicListID` 也直接读 `+0x3F8`（不经 `GetOwnedMusicListIDs`），不加入就会被判为未拥有
      （state 3 = 锁定）或把当前歌切回游戏歌曲；同样只在调用期间临时加入（嵌套调用只加一次）。
-   - 专辑封面：曲库根目录下的 `cover|folder|front|album` + `.png|.jpg|.jpeg|.bmp`，由 builder 线程用
-     游戏自带的 `ImportFileAsTexture2D` 导入为 Transient 纹理，`FUObjectItem::SetFlags(RootSet)` 防 GC，
-     封面 detour 只把已导入的纹理 `SetBrushFromTexture` 到显示的 UImage 上。没有图片或任一步失败则
-     保留模板封面。
+   - 专辑封面：曲库根目录下的 `cover|folder|front|album` + `.png|.jpg|.jpeg|.bmp`；没有时用插件包内的
+     `assets/library-cover.png`。由 builder 线程用游戏自带的 `ImportFileAsTexture2D` 导入为 Transient 纹理，
+     `FUObjectItem::SetFlags(RootSet)` 防 GC，封面 detour 只把已导入的纹理 `SetBrushFromTexture` 到专辑卡片的
+     UImage 上。任一步失败则保留模板封面。
+6. 转动的唱片：专辑卡片（`BPUI_MusicThumbnail_C`）与车载播放器（`BPUI_MusicDetailedView_C` 的 `AlbumCoverImg`）
+   上的唱片都是 MaterialInstanceDynamic，封面是贴图参数 `Tex1`；直接换控件画刷会被蓝图盖回，所以改写材质参数。
+   builder 线程按名字找到 `MaterialInstanceDynamic::SetTextureParameterValue`（对象表里 outer 为 MID 类的同名
+   UFunction）和 `Tex1` 的 FName；播放器唱片只在游戏显示专辑或接管播放后才在对象表里查找，找不到时按
+   1、2、4…32 个 builder 周期退避，最多 6 次。每帧 tick（游戏线程）只做有界读：参数已是目标纹理就跳过，
+   被蓝图写回时才经 `ProcessEvent` 调一次。专辑卡片显示插件专辑的封面；播放器唱片显示正在放的插件歌曲
+   的封面（Meting 单曲封面就绪前用 Meting 专辑封面），放游戏歌曲时不改。
+7. Meting 网络曲库（独立专辑「Meting」，与本地曲库并列，行名 Number 用 `0x48470000+k+1`、专辑 `0x4847FFFF`）：
+   - 接口 `https://api.qijieya.cn/meting/`，`server=netease`；搜索 `type=search&limit=30`，歌单
+     `type=playlist`。歌单输入框接受 ID 或分享链接（取 `?id=`/`&id=` 后的数字，其次 `playlist/` 后的数字）。
+   - 所有网络请求在插件自己的 Meting 线程上执行（WinHTTP，跟随重定向）；Hook 只往队列里放请求，不等网络。
+     Stop/Unload 先关闭在途请求句柄再 join 线程，停止时间有上界。
+   - 播放：音频整首下载到内存后交给引擎（`ma_decoder_init_memory`），不写磁盘；换歌即释放。同一首歌
+     下载中不重复排队。下载失败自动跳到下一首，连续失败 3 次后停止跳过（成功或手动点歌后重新计数）。
+   - 播放队列按当前歌所属专辑隔离：放 Meting 歌时队列只含 Meting 歌，放本地歌时只含本地歌，游戏的
+     上一首/下一首与播完自动下一首都不会跨专辑。Meting 歌播完由插件下载下一首（末尾回到第一首）。
+   - 接管后原始 Stop 会清空子系统当前歌 ID，暂停后再播放会提示「专辑未解锁」；接管时立即写回刚投递的
+     插件歌，每帧同步遇到空 ID 也立即纠正。
+   - 封面：Meting 专辑用 `assets/meting-cover.png`；每首歌的封面按 `pic` 下载到内存，游戏线程 tick 用
+     `ImportBufferAsTexture2D`（`KismetRenderingLibrary` 默认对象上经 `ProcessEvent` 调用，调用前核对
+     UFunction 的 NumParms=3、ParmsSize=0x20、ReturnValueOffset=0x18）导入并 RootSet，换歌时解除上一首的
+     RootSet，同时最多保留一张单曲封面。
+   - 上次成功的搜索词或歌单 ID 写入设置，加载时自动重新拉取；只存这条请求，不存歌曲列表和音频。
 
 ## 开源依赖
 
@@ -79,27 +107,37 @@ MSB 在前；不支持 DST 压缩的 DFF），用 `ASIOFuture(kAsioSetIoFormat, 
 
 WASAPI 独占模式按文件原生采样率打开设备，设备不支持时由 miniaudio 回退到设备原生格式并重采样。
 
-## 逆向记录（HTGame 1.4a，UE 5.6.1）
+## 逆向记录（HTGame 1.4b，UE 5.6.1，国服 / 国际服通用）
+
+国服与国际服 1.4b 的 CppSDK 导出逐类比对后，除 `UHTSoundSubsystem` 里与 FFmpeg 相邻的字段外完全
+一致；下列签名在运行中的国服 1.4b 客户端里逐个验证为**唯一命中**（`anomaly-cli` 经 Core 的诊断管道
+扫描 `.text`，每个声明 1 个匹配）。国际服没有安装，同一套声明按同一构建来源发布。
+磁盘上的 `HTGame.exe` 不能用来取签名：受保护器处理，节名是 `.std`、代码段是密文，只有进程里的
+镜像才是明文，所以签名必须对着运行中的客户端扫（`.local/htsig` 里留着这次的脚本）。
 
 | 函数 | 地址 | 签名 |
 | --- | --- | --- |
-| PostPlayerMusicSound(this, UAkAudioEvent*, FName* listId, float pos) | 0x148A45C40 | `48 8B C4 4C 89 40 18 55 53 56 57 41 54 41 56 41 57 48 8D 68 88 48 81 EC 40 01 00 00 0F 29 70 B8` |
-| StopPlayerMusicSound(this, uint8 bNoTransition) | 0x148A4EB30 | `48 83 EC 28 0F B6 C2 48 89 5C 24 38` |
-| Pause(this) | 0x148A442A0 | `40 53 48 83 EC 20 8B 91 20 04 00 00 48 8B D9 85 D2 7E ?? 33 C9 41 B1 04 44 8D 41 64 E8 ?? ?? ?? ?? 48 8D 8B 80 03 00 00 C6 83 24 04 00 00 01` |
-| Resume(this) | 0x148A4B7B0 | 同 Pause，末尾为 `C6 83 24 04 00 00 00` |
-| SetMusicPlayerType(this, type) | 0x148A4CFC0 | `48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 48 83 EC 20 48 8D 99 90 04 00 00 4C 89 74 24 30 48 8D B1 28 04 00 00 8B EA 48 8B F9 39 91 28 04 00 00` |
-| AHTPlayerCharacter::EndGetOffVehicle(this, bool)（vtable +0x15A0） | 0x147E01600 | `40 55 53 56 57 41 54 41 55 41 57 48 8D AC 24 10 FF FF FF 48 81 EC F0 01 00 00 44 0F B6 EA 48 8B F9 E8` |
-| FText::FromString(FText* out, const TCHAR*) | 0x141554E60 | 序言不唯一，取 `UHTUI_MusicListItem::SetListItem`（`40 55 41 56 48 83 EC 58 4C 8B F2 48 8B E9 E8`）`+0xB8` 处 `E8 rel32` |
+| PostPlayerMusicSound(this, UAkAudioEvent*, FName* listId, float pos) | 0x148A55330 | `48 8B C4 4C 89 40 18 55 53 56 57 41 54 41 56 41 57 48 8D 68 88 48 81 EC 40 01 00 00 0F 29 70 B8` |
+| StopPlayerMusicSound(this, uint8 bNoTransition) | 0x148A5E220 | `48 83 EC 28 0F B6 C2 48 89 5C 24 38` |
+| Pause(this) | 0x148A53990 | `40 53 48 83 EC 20 8B 91 38 04 00 00 … C6 83 3C 04 00 00 01` |
+| Resume(this) | 0x148A5AEA0 | 同 Pause，末尾为 `C6 83 3C 04 00 00 00` |
+| SetMusicPlayerType(this, type) | 0x148A5C6B0 | `48 89 5C 24 10 … 48 8D 99 A8 04 00 00 4C 89 74 24 30 48 8D B1 40 04 00 00 8B EA 48 8B F9 39 91 40 04 00 00` |
+| AHTPlayerCharacter::EndGetOffVehicle(this, bool)（vtable +0x15A0） | 0x147E08670 | `40 55 53 56 57 41 54 41 55 41 57 48 8D AC 24 10 FF FF FF 48 81 EC F0 01 00 00 44 0F B6 EA 48 8B F9 E8` |
+| FText::FromString(FText* out, const TCHAR*) | 0x141554E60 起签名不唯一，取 `UHTUI_MusicListItem::SetListItem`（0x149311FB0）`+0xB8` 处 `E8 rel32` | |
 
-专辑相关函数（FindRow、两个 ForeachRow 取调用点 `E8 rel32`；GetGameInstance、GetAlbumData、
-`TArray<FName>::AddUnique`、GetOwnedMusicListIDs、ReGenerateNewMusicListIDs、SetCurrentMusicListID）
-的签名及行结构偏移见 `hifi_vehicle_music_profile.hpp`。GameInstance 音乐表 `+0x1840`、专辑表 `+0x1848`。
+专辑相关函数（FindRow 0x148A5622A、两个 ForeachRow 0x14932739F / 0x149313F9F 取调用点 `E8 rel32`；
+GetGameInstance 0x1487F49E0、GetAlbumData 0x148A55CB0、`TArray<FName>::AddUnique` 0x1415FDC20、
+GetOwnedMusicListIDs 0x148FED6D0、ReGenerateNewMusicListIDs 0x148A56140、SetCurrentMusicListID
+0x148A3C020）的签名及行结构偏移见 `profile/compatibility.profile.json`。音乐表 `+0x1840`、
+专辑表 `+0x1848`（1.4a→1.4b 未变；1.5a 起这两个字段属于 `UHTGameData` 的
+`PlayerMusicDataTable` / `MusicAlbumDataTable`，分别移到 `+0x1960` / `+0x1968`）。
 
-`UHTSoundSubsystem` 偏移：AkComponent `0x3D8`、ListID `0x400`、EventName `0x418`、
-PlayingID `0x420`、Paused `0x424`、PendingSeek `0x425`、PlayerType `0x428`；
+`UHTSoundSubsystem` 偏移（1.4b = 1.4a + 0x18，因为 1.4b 在 0x3D8 插入了 0x18 字节的
+`SingleFFmpegMusicNode`）：`PlayerMusicAkComp` `0x3F0`、ListID `0x418`、EventName `0x430`、
+PlayingID `0x438`、Paused `0x43C`、PendingSeek `0x43D`、PlayerType `0x440`；
 `UAkAudioEvent` 名称 FName 在 `0x18`。本地玩家判定：`APawn::Controller` `0x2F8`、
 `APlayerController::Player` `0x368`、`UPlayer::PlayerController` `0x30`。已拥有歌单 ID
-`TArray<FName>` 在 `0x3E0`。签名与偏移统一定义在 `hifi_vehicle_music_profile.hpp`。
+`TArray<FName>` 在 `0x3F8`（Num 在 `+0x400`）。签名与偏移统一定义在 `profile/compatibility.profile.json`，`hifi_vehicle_music_profile.hpp` 负责解析和校验实现合同。
 
 ## 设置
 
@@ -111,6 +149,8 @@ PlayingID `0x420`、Paused `0x424`、PendingSeek `0x425`、PlayerType `0x428`；
 | `bufferMs` | 输出缓冲时长 |
 | `volume` | 0–1 线性音量（独占/ASIO 下为数字域音量，1.0 为 bit-perfect） |
 | `musicFolder` | 曲库绝对路径，通过窗口里的「浏览...」（Windows 选择文件夹对话框）选择；相对路径会被忽略，因为插件包每次加载都在不同的 `.cache/<pid>/` 目录 |
+| `metingKind` | 上次成功的 Meting 请求类型：`search` / `playlist`，空为没有 |
+| `metingQuery` | 对应的搜索词或歌单 ID（最长 512 字符），加载时自动重新拉取 |
 
 设置经 config 服务持久化：任何修改后由 scheduler 延迟 500 ms 合并写入，Stop 时再补写一次。
 
@@ -238,7 +278,38 @@ PlayingID `0x420`、Paused `0x424`、PendingSeek `0x425`、PlayerType `0x428`；
   `TakenOver` 闸门之前（`+0x420` 恰在该帧被游戏重写，原先唯一的新鲜推送被闸门永久吞掉）；
   条带自身的时长缓存 `+0xFA4` 在 SetText 前先写（BP 从它重排标签文本，不写则模板 30 秒被改回）；
   无效的每帧 tick 自愈一并移除（该 tick 由 BP Timeline 驱动，正常播放期间从不执行）；已实测修复
-- [ ] 游戏播放器界面（歌名、进度条、拖动、上一首/下一首）接到插件引擎：函数已定位，未实现
-- [ ] 专辑封面：两种写法（只写路径 / 弱指针 + 路径）实测都会让专辑从列表消失，已停用，
-  专辑沿用模板封面；导入代码保留未调用
+- [x] Meting 网络曲库：搜索、网易云歌单（ID 或分享链接）、独立「Meting」专辑、内存播放；暂停/继续、
+  拖动、上一首/下一首、播完自动下一首；歌单重启后自动恢复。已实测
+- [x] 播放队列按专辑隔离：旧版队列「本地 194 首 + Meting 2 首」连在一起，Meting 上按下一首会跳进本地；
+  改为按当前歌所属专辑建队列。已实测
+- [x] 专辑封面改为专辑卡片换画刷（替代早先改行数据、会让专辑消失的两种写法）；Meting 与本地专辑都有
+  默认封面。已实测
+- [x] 转动的唱片：专辑卡片和车载播放器的唱片改写材质参数 `Tex1`，Meting 每首歌显示自己的封面
+  （`ImportBufferAsTexture2D` 内存导入，不写磁盘）。已实测；会话第一首歌的封面修复（下载不再等导入
+  函数解析）待实测
+- [ ] 下载失败自动跳过：需要遇到无法下载的歌才能触发，未实测
+- [x] 签名升级到 1.4b（国服 + 国际服同一套声明）：1.4b 在 `UHTSoundSubsystem` 的 0x3D8 插入了
+  0x18 字节的 `SingleFFmpegMusicNode`，音乐块整体后移 0x18，于是 pause / resume /
+  SetMusicPlayerType / GetOwnedMusicListIDs / SetCurrentMusicListID / SyncCurrentMusicListID /
+  ChangePlayerMusicSound / ResolveCurrentMusicListID 这些把位移写进 pattern 的声明全部失效（旧的
+  学习记录也救不了：它们只放开「被绑定的成员位移」，而未绑定的 0x490 之类同样变了）。现在 pattern
+  与种子都按 1.4b 更新，并在运行中的国服 1.4b 客户端里逐个验证：header 里 39 个声明全部**唯一命中**
+  （经 Core 诊断管道扫 `.text`）。国际服没有安装在机器上，但两份 CppSDK 导出除 FFmpeg 相邻字段外
+  完全一致，因此共用同一套声明；实际差异会在日志里以 `signature witness not found:` 出现而不是静默
+  失效
+- [x] 修复「Hook 全部失效、签名偏移自学习也没生效」（#74 引入）：v2 布局解析把「每个声明的函数都必须
+  找到」当成整组的前提，而游戏里 `SetMusicPlayerType` 的 prologue 已经与声明不一致，日志是
+  `signature not found: player-type: member signature not found` —— 整组播放布局失败，`InstallHooks`
+  直接返回，30 个 Hook 一个都没装，学习记录也永远写不出来。现在：框架把找不到的函数作为「地址 0、
+  不提供字段证据」发布，只有某字段完全没有已验证证据才失败（歧义仍返回 CONFLICT）；`PlayerType`
+  多了一个独立 witness（`ResolveCurrentMusicListID` 里的读取点），单个函数改写不影响该字段；
+  `SetMusicPlayerType` 归为可降级 Hook，缺失只跳过它并告警；布局服务没有给出地址的 Hook 回退到
+  address-only 解析（含学习恢复）。验证方式：把声明放到合成 `.text` 镜像上解析（声明与指令一致、
+  成员位移整体变化→学习记录重新推导偏移、单个函数被改写→其余字段照常发布、字段无任何证据→
+  拒绝发布），再对着运行中的 1.4b 客户端逐个扫描确认唯一命中；游戏内实测待做
+- [ ] 本地专辑封面只在专辑行首次创建时导入，若当时导入函数未就绪不会重试（尚未遇到）
 - [ ] 游戏内实测（需用户执行）：确认事件名、seek 语义、各后端独占/ASIO 打开情况
+
+### 1.4b / 1.5a 兼容数据
+
+启动时由宿主 `anomaly.profile` 读取同一份 `profile/compatibility.profile.json`，通过唯一签名和入口字节选取候选。音乐表和专辑表的差异随候选布局生效；详情封面的 1.4b FName 值参数和 1.5a FName 指针参数分别遵循各自调用 ABI。1.4b 有只读运行进程字节核对，1.5a 为所给 SDK 和 IDA 映像的静态核对，尚未完成 1.5 实机播放验证。

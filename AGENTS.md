@@ -21,17 +21,6 @@ Agent 请在会话开始时手动引用本文件。它是仓库唯一的自动�
 `.build/`、`data/`、`runtime/` 都是本机或生成状态，不能作为源码输入。不要修改生成的
 CMake 文件、构建产物或正在运行的游戏文件来掩盖源码问题。
 
-## NTE V1 基底与原生 Dump 证据规则（强制）
-
-- 当前主框架基底是用户提供的 `Anomaly-2.3.0-alpha.1.zip`：它是已修缮的 V1 源码，不能用旧 Git 分支整目录覆盖。后续工作必须在此基底上做最小合并，保留 ZIP 内已有的修复；此前新增的 SDK ABI、服务表、Profile、validator、宿主桥接、ABI snapshot 与文档，要逐项迁移并验证，不得假定它们已存在。
-- NTE / UE 原生类、UFunction 所属模块及类、函数名、参数顺序/大小/偏移、继承和对象布局的唯一证据源，是用户提供的 `5.6.1-0+UE5-HT.zip` 原生 Dump。优先核对其中 `CppSDK/SDK/HTGame_*`、相应插件模块的 `*_classes.hpp`、`*_parameters.hpp`、`*_functions.cpp` 及 `Dumpspace` 反射 JSON。不要用通用 Unreal 文档、其他游戏版本、无关仓库/旧插件或名称相似性替代 Dump。
-- 每个原生绑定必须核实完整路径/owner、参数 ABI、receiver、所属模块及必要布局。若 Dump 没有足够证据，标注为未验证、关闭该能力并给出可诊断状态；禁止以猜测实现写入、调用或宣称成功。
-- 公开 C ABI 变更必须同步更新 `include/anomaly/sdk/`、`apps/abi_snapshot/`、`abi/anomaly-sdk-v1-windows-x64.json`、服务能力/Manifest/Schema/Profile/validator 与文档；使用 `struct_size` 保护可选尾字段，并验证旧消费者前缀布局。
-- Attack Replay 必须以真实且相关联的 player→enemy DamageEvent 验证每次额外攻击；`ProcessEvent` 被调用或一个伤害回调返回并不等于实际扣血。Vehicle 必须按 Dump 的真函数 owner 分别调用车速、运动组件与召唤接口，并核验召唤实体、位置与 Owner。
-- 交付前必须对当前 V1 合并树执行受影响的 Windows x64 构建、ABI/Schema 验证和包内容检查。插件独立编译成功不能替代宿主构建；源码检查不能替代 DLL 构建；构建成功不能冒充真实游戏内验证。未完成上述必要检查时，不得标记为可交付。
-
-详见 `docs/developer-guide/nte-dump-contract.md`。
-
 ## 必经交付流程
 
 1. 开始前执行 `git status --short --branch`，保留与当前任务无关的已修改和未跟踪文件。
@@ -54,6 +43,7 @@ CMake 文件、构建产物或正在运行的游戏文件来掩盖源码问题�
 
 ## 实现与测试纪律
 
+- 所有的fixture、test、smoke都放在`.local/`目录，禁止提交。
 - 禁止过度防御代码。只为已知合同、明确故障模型或可复现问题增加校验；同一事实在同一同步调用中
   不得反复验证，不得为纯假设竞态堆叠状态机、重试、缓存或分支。新增防御分支时，必须能说明它
   防止的具体故障、所属边界以及为何现有边界不能处理。
@@ -87,15 +77,110 @@ CMake 文件、构建产物或正在运行的游戏文件来掩盖源码问题�
   包、加载 DLL、等待生命周期任务或同步执行文件/网络 I/O。
 - `include/anomaly/sdk/` 是公开 DLL 边界：仅纯 C ABI、定宽类型、opaque handle、清晰所有权以及
   version/`struct_size` 检查。不得暴露 STL、异常、RTTI 对象、裸 UE 对象、`ImGuiContext*` 或内部头文件。
+- Core 以手工映射方式运行，映像不能携带 loader-managed 静态 TLS。链接进 `anomaly_core` 的代码禁止
+  `thread_local`，也禁止会拉入 `_Init_thread_epoch` 的函数级动态初始化局部静态；线程本地状态一律改用
+  `include/anomaly/thread_local_value.hpp` 的 FLS 封装，新链接进 Core 的 target 必须登记到
+  `CMakeLists.txt` 的 `ANOMALY_MANUAL_MAP_TLS_FREE_TARGETS`，并确认构建出的核心映像没有 `.tls` 段、
+  TLS 目录为空。
 
 完整的模块、线程和变更影响图见 `.agents/architecture.md`。
+
+## 插件文案与本地化（强制）
+
+每个插件都必须走 i18n。新增插件、修改插件文案、审查插件 PR 时按下面执行；接口与目录格式以
+`docs/api-reference/lifecycle-and-core.md#anomalylocalization` 为准。
+
+- **每个插件都要有本地化路径**：带任何用户可见文本的插件，包目录里必须有 `locales/zh-CN.json`
+  （`schemaVersion: 1`、`locale: "zh-CN"`、`messages`），并在 `manifest.json` 的 `services` 声明
+  `{"id": "anomaly.localization", "minVersion": 1}`（capability 仍是共用的 `ui`）。没有 UI 的纯诊断
+  插件可以不带目录，但同样禁止任何中文字符串字面量。
+- **不许硬编码文案**：所有用户可见文本经 `anomaly.localization` 取，C++ 用 SDK 的
+  `anomaly::sdk::Localizer`（`include/anomaly/sdk/localization.hpp`）；C++ 字面量一律写成英文回退，
+  中文只存在于 `locales/<locale>.json`。中文注释可以保留，受约束的只有字符串字面量。
+- **manifest 交英文回退**：`name` / `description` 写英文，中文显示名放目录的 `window.title`、中文简介
+  放 `plugin.description`——宿主用这两个 key 渲染管理界面，缺失时才回退到 manifest。
+- **单一 Localizer 来源**：在 `Load(host, …)` 里从 host 查一次并保存，不得新增第二个实例，也不得在
+  静态初始化阶段调用本地化服务；语言在进程内固定，文案可以在产生它的位置解析。
+- **占位符必须与英文回退逐字对齐**：只允许 `{0}`..`{7}`，字面花括号写 `{{` / `}}`；集合不一致时宿主
+  静默回退英文，不报错——所以 `+` 拼接数值一律改成 `Format` 加 `{N}`。
+- **目录整体生效**：任何一条不合规（key 字符集/长度、空消息、花括号未转义）都会让整个目录失效、该插件
+  全部回退英文。改完必须整体校验 key 覆盖、占位符掩码、残留中文字面量、manifest 回退语言——统一用
+  `pwsh -NoProfile -File tools/check_plugin_i18n.ps1 -Plugin <名字>`（省略 `-Plugin` 则检查全部插件），
+  它必须全绿。
+- **游戏数据不是文案**：DataTable 行名、游戏对话框原文、外部格式的原始标识（如 MMD 骨骼/表情名）必须与
+  运行时数据逐字匹配，不参与本地化；保持原样或写成 `\uXXXX` 转义，并就地注明它是数据。判断标准是
+  「改变它会不会破坏匹配」。
+- **打包时机**：`anomaly_add_plugin` 在 configure 期决定是否镜像 `locales/`。新增本地化目录后必须重新
+  configure 再构建，否则包目录里不会出现 `zh-CN.json`；manifest 与目录是 POST_BUILD 拷贝，改完要重建对应
+  target 才会更新构建树里的包。
+
+## 插件配置持久化（强制）
+
+插件中由用户调整的设置（开关、数值、尺寸、筛选等）必须通过宿主 `anomaly.config` 服务持久化：
+声明 `configuration` capability 和服务依赖，注册 schema，加载时恢复，修改后在 Worker 保存，停止时保存尚未落盘的改动。
+禁止仅保存在内存中或在 Game/Render 回调中执行配置文件 I/O；临时运行状态和游戏对象句柄不属于持久化设置。
+
+## 内建插件注册
+
+内建插件的一切构建信息都写在**仓库根 `CMakeLists.txt`** 的 `if(ANOMALY_BUILD_BUILTIN_PLUGINS)` 块内。
+插件目录里**不放**自己的 `CMakeLists.txt`——那是 SDK 独立消费者的入口（`find_package(AnomalySDK)`），
+放进 `plugins/<名字>/` 会被误当成独立工程。
+
+新增一个内建插件必须在根 `CMakeLists.txt` 登记**三处**，缺任意一处都会在构建或打包阶段出问题：
+
+| # | 位置 | 作用 | 漏掉的后果 |
+| --- | --- | --- | --- |
+| 1 | `anomaly_add_plugin(<target> SOURCES … MANIFEST … PACKAGE_NAME … OUTPUT_DIRECTORY …)` | 定义 target、产出 `plugin.dll`、POST_BUILD 镜像 `locales/`/`assets/`/`profile/`、install 进 `Anomaly/plugins/<包名>` | 插件根本不存在 |
+| 2 | `target_compile_options(<target> PRIVATE /utf-8)` 等 target 级设置 | 仅在该 target 需要的选项；`UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX` 与源码根 include **不要**在这里写 | 重复定义或缺失编译选项 |
+| 3 | `set(ANOMALY_BUILTIN_PLUGIN_TARGETS …)` 列表 | `foreach` 统一给每个插件加源码根 include 与 Win32 宏；`anomaly_test_host`、`anomaly-platform-preview` 也依赖这份列表 | 缺 include/宏，或 preview 镜像因 target 未构建而 stage 失败 |
+
+- **测试包**用 `TEST_PLUGIN` 标记：默认不构建，只在 `ANOMALY_BUILD_TEST_PLUGINS=ON` 时构建并装进
+  `TestPlugins` 组件，同时加入第 3 处列表的 `list(APPEND …)` 分支，而不是主 `set(…)`。
+- **只在开发者模式展示**靠 manifest 的 `"audience": "developer"`，与 `TEST_PLUGIN` 无关：前者决定
+  管理界面是否列出，后者决定是否随发布包产出。
+
+## 插件 Profile（强制）
+
+采用「Profile 保存兼容数据，宿主统一加载，插件校验后使用」的设计模式。可参考
+[`plugins/SummonLab/profile/compatibility.profile.json`](plugins/SummonLab/profile/compatibility.profile.json)
+和 [`plugins/SummonLab/native_layout.hpp`](plugins/SummonLab/native_layout.hpp) 的职责划分。
+
+- 兼容配置放在与 `manifest.json` 同级的 `profile/`；相关功能优先共用一个 profile，通过 `symbols`
+  与 `candidates` 组织。`anomaly_add_plugin` 统一复制、安装，禁止插件专用的重复打包逻辑。
+- 所有插件使用仓库 [`schemas/plugin-profile.schema.json`](schemas/plugin-profile.schema.json)，
+  禁止自行定义另一套 JSON 根结构。公共格式需要扩展时，统一修改 schema、宿主、SDK 与文档。
+- 通过宿主 `anomaly.profile` 读取和校验文件；manifest 声明 `anomaly.profile`、`anomaly.json` v1
+  和 `json` capability。C++ 使用 `anomaly::sdk::LoadProfile`（`include/anomaly/sdk/profile.hpp`），
+  禁止插件自己打开 profile 文件、引入 JSON parser 或复制解析逻辑。
+- 公共加载、扫描和快照管理统一使用公开 SDK `anomaly/sdk/profile.hpp`：`ProfileSnapshot`、
+  `ProfileScanCache`、`Profile::Value` 与 `MatchesProfileEntry`。不得另建插件私有的通用封装；
+  游戏/模块/语义合同由调用方传入，插件只保留自身布局、反射与 ABI 校验，第三方插件不依赖源码树。
+- 仅在 Lifecycle/Worker 加载；宿主从当前 DLL generation 的包快照读取 `profile/`，拒绝越界路径、
+  reparse、超限文档和不合规 schema。启动时加载一次，Game/Render 回调只读解析后的快照。
+- **signature / offset 只能放在 Profile**：扫描签名、入口字节、相对调用位置、游戏对象字段偏移、
+  虚表槽位偏移、版本相关的记录尺寸和步长等兼容数据，禁止硬编码在 `.cpp`/`.hpp`、宏、
+  `constexpr` 数组或嵌入的 JSON 中；移到另一个头文件不算配置化。
+- **Profile 必须参与实际执行**：启动时把所需字段解析成具名布局快照，后续读写和 Hook 使用该快照，
+  或使用经名称、类型和尺寸校验的运行时反射结果。禁止只在 JSON 声明偏移，实际仍使用数字字面量；
+  禁止缺项、解析失败或签名失配后回退到代码中的默认偏移或签名。
+- **多版本共用一份兼容配置**：已核对相同的值放公共 `layout`，差异放对应符号的 `candidates[].values`，
+  以唯一签名和入口校验选择候选。增加新版候选时保留仍支持的旧版。`contract` 表示实现支持的语义合同，不含或匹配
+  Build identity，也不通过版本号分支选择硬编码布局。
+- **代码保留实现合同与安全校验**：固定调用 ABI 的具名参数结构、`sizeof` / `offsetof`、指令解码规则，
+  以及范围、对齐、字段重叠、反射类型和对象生命周期校验属于代码。不得借此保留游戏偏移的第二份
+  数值副本，也不得为了配置化删除这些校验；只有实现支持且校验通过的布局才能用于内存访问。
+- 需要扫描的符号用公共 `ResolveProfileSymbol` 完成唯一候选、可选 E8 rel32 和入口字节校验；
+  已由受控对象或虚表取得地址的入口，按 Profile 校验实际入口字节，不把不唯一的短函数体用于全局扫描。
+  插件再检查所需字段与自身语义合同，全部通过后才安装依赖的 Hook。失败时停用相关功能，禁止猜测布局或地址。
+- 新增目录后重新 configure 并构建；更新配置随包的新 generation 生效。Profile 是发布兼容数据，
+  用户可写配置仍走 `anomaly.config` / `plugin-state`，不写回 profile。
 
 ## 构建与测试约定
 
 主仓库统一使用 `windows-vs2022` 配置预设与 `windows-relwithdebinfo` 构建预设。
 `build.cmd` 只是 CI 同一命令序列的便捷包装。禁止新建临时 NMake、Ninja、`build/` 或按阶段命名的
-主构建树。默认构建只产出 Runtime、Tools、SDK 三个发布组件；开发夹具、诊断探针与 PDB 不属于
-发布内容，需要 `build.cmd fixtures|probes|symbols` 显式开启。精确命令与产物路径见
+主构建树。默认构建只产出 Runtime、Tools、SDK 三个发布组件；开发夹具与 PDB 不属于
+发布内容，需要 `build.cmd fixtures|symbols` 显式开启。精确命令与产物路径见
 `.agents/tooling.md`。
 
 ## 冗余清理约定
@@ -121,6 +206,7 @@ ABI/线程/回调最外层 `catch (...)`、Dispatcher 锁外销毁 callback 等�
 | Runtime 启动与生命周期 | `src/bootstrap/dwmapi/proxy_main.cpp`、`src/runtime/core_main.cpp`、`src/runtime/runtime_session.cpp` |
 | 服务与所有权 | `src/runtime/service_graph.cpp`、`src/runtime/runtime_dispatchers.cpp` |
 | 插件 ABI 与热重载 | `include/anomaly/sdk/`、`src/plugin/`、`examples/` |
+| 插件文案与本地化 | `include/anomaly/sdk/localization.hpp`、`plugins/*/locales/`、`tools/check_plugin_i18n.ps1` |
 | UE5/NTE 兼容 | `src/game/ue5/`、`src/game/nte/`、`profiles/nte/` |
 | 渲染与 UI | `src/render/dx12/`、`src/ui/` |
 | 验证与发布门禁 | `CMakeLists.txt`、`.agents/tooling.md` |

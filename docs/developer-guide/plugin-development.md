@@ -13,16 +13,14 @@ Anomaly\plugins\MyPlugin\
   manifest.json     声明 ID、版本、API 范围、依赖、所需服务与 capability
   plugin.dll        导出 AnomalyPluginEntryV1
   assets\           （可选）资源
+  locales\          （可选）本地化目录
+  profile\          （可选）签名、布局与兼容配置
   dependency.dll    （可选）native 依赖
 ```
 
 - 加载时整个包被复制到**不可变影子代际**，资源与 native 依赖与 DLL 使用同一快照。
 - 根级 DLL 与没有 Manifest 的目录**不会被加载**。
 - 插件通过导出 `AnomalyPluginEntryV1` 并填写 `AnomalyPluginDescriptorV1` 接入。ABI v1 入口只承担**生命周期**与 **`query_service`**。
-- Runtime 在进程内**手工映射**插件镜像，不经过 `LoadLibrary`：插件 DLL 不出现在进程模块列表中。镜像必须满足下列契约，否则在映射前被预检拒绝（`static-tls` / `static-crt` / `missing-cxx-throw-bridge` 等诊断码）：
-  - 禁用 loader 管理的静态 TLS——不要使用 `thread_local` / `__declspec(thread)`；需要每线程状态时用 `anomaly::ThreadLocalScalar<T>`（`anomaly/thread_local_value.hpp`）。
-  - C++ 插件必须动态链接 CRT（`/MD`，SDK 默认）并携带 SDK 异常桥（`anomaly_add_plugin` 自动编译 `plugin_cxx_throw_bridge.cpp`）；异常经由桥以正确的镜像基址穿越映射边界。
-  - 不要用 `GetModuleHandleExW` / `GetModuleFileNameW` / `DllMain` 的模块句柄自定位——映射镜像没有 loader 模块身份；包目录经 `anomaly.core` 的 `plugin_directory` 或 `anomaly.plugin-state` 的 `directory` 服务查询。
 
 ## 1. 安装 SDK
 
@@ -44,11 +42,67 @@ anomaly_add_plugin(my_plugin
   PACKAGE_NAME MyPlugin)
 ```
 
-`anomaly_add_plugin` 固定输出 `plugin.dll`，把 Manifest 与 Manifest 同级的 `locales` 目录放进包目录，
+`anomaly_add_plugin` 固定输出 `plugin.dll`，把 Manifest 与同级的 `locales/`、`assets/`、`profile/`
+目录放进包目录，
 并负责这个包的安装：默认装到 `<prefix>/Anomaly/plugins/<PACKAGE_NAME>`（`GameRuntime` 组件）。
 两个可选关键字改变安装行为：`NO_RELEASE` 只构建、不产生安装规则；`TEST_PLUGIN` 装进独立的
 `TestPlugins` 组件，并只在 `ANOMALY_BUILD_TEST_PLUGINS=ON` 时构建与安装。插件自己的额外资源
 （例如 `data\`）仍需在工程里显式列出。
+
+`profile/` 是所有插件共用的目录约定，由 CMake 自动复制和安装。相关功能优先放在一个 JSON 文件，
+通过 `symbols` 和 `candidates` 区分符号与兼容候选。格式必须符合
+[`plugin-profile.schema.json`](../../schemas/plugin-profile.schema.json)。签名、入口字节、调用位置、
+偏移种子与版本差异写在 profile 中，不能硬编码到 C++；代码保留调用协议、语义合同与必要的布局校验。
+
+在 manifest 中声明 `anomaly.profile`、`anomaly.json` v1 和 `json` capability，启动时调用
+`anomaly::sdk::LoadProfile(host, "my-plugin.profile.json")`。宿主从当前 DLL generation 的包快照
+加载 `profile/` 下的文件，统一检查目录边界和 schema；插件不再自行打开文件或解析 JSON。
+返回的 C++ `Profile` 是插件自有快照，临时 JSON 句柄已释放。仅在 Lifecycle/Worker 加载，后续回调
+只读快照；路径参数不带 `profile/` 前缀。
+
+```cpp
+#include <anomaly/sdk/profile.hpp>
+
+const auto loaded = anomaly::sdk::LoadProfile(host, "my-plugin.profile.json",
+    {"my-game", "Game.exe", ".text", "my-plugin-v1"});
+if (!loaded) { /* 记录 loaded.error()，停用依赖功能 */ return; }
+const auto& profile = loaded.value();
+// 检查所需 layout/values 与自身实现匹配，再解析地址和安装 Hook。
+const auto symbol = anomaly::sdk::ResolveProfileSymbol(signature, core, profile, "query");
+if (!symbol) { /* 记录 symbol.error，停用依赖功能 */ return; }
+```
+
+公共 resolver 验证唯一候选、可选 E8 相对调用和精确入口字节；多匹配或入口改变会拒绝结果。
+`contract` 是语义合同，不是 Build identity。
+
+需要缓存解析结果时，使用同一公开头文件中的 `ProfileSnapshot`，无需下载 Anomaly 源码或引用
+`plugins/` 下的文件。它是插件 DLL 内的 C++ 辅助类，仍只通过纯 C 服务 ABI 访问宿主：
+
+```cpp
+anomaly::sdk::ProfileSnapshot compatibility; // 插件 Context 的成员
+if (!compatibility.Load(api, "my-plugin.profile.json",
+        {"my-game", "Game.exe", ".text", "my-plugin-v1"},
+        {"owned-entry"}, true, "layout-selector")) return;
+const auto offset = compatibility.Value("actor.component", 65536, alignof(void*));
+const auto address = compatibility.Address("query");
+if (!address) return; // 普通符号可以独立失败，调用方决定依赖功能的降级。
+```
+
+`known_entries` 指定从受控对象或虚表取得地址的符号，只跳过全局扫描；使用前仍需调用
+`MatchesEntry(core, name, address)`。`batch_signatures=true` 优先使用 V3 批量扫描，服务不可用或
+批量请求失败时回退 V1；单个签名冲突仍被拒绝。最后的 `layout_symbol` 可省略，指定时必须声明且
+唯一解析成功，它的候选 `values` 覆盖公共 `layout`。SDK 不预设游戏名、模块或布局符号名称。
+
+`Load` 成功后才替换快照；失败保留旧快照，但调用方必须处理失败，不能当作新配置成功加载。
+`Selected`、`Pattern`、`Document` 返回借用数据，其有效期到快照下一次成功加载、赋值或销毁为止。
+`Pattern` 在单候选未解析时仍可返回学习种子，这不表示地址或布局可用。初始化完成后回调只读快照，
+不能与 `Load` 并发。需要分阶段校验的插件可使用 `ProfileScanCache` 扫描指定符号，之后逐个
+`Resolve`；合同校验、字段范围检查和入口校验分别共用 `LoadProfile(..., ProfileContract)`、
+`Profile::Value` 和 `MatchesProfileEntry`。
+
+新增目录后重新 configure 并构建；配置更新随新的包 generation 生效，不写回 profile。
+完整字段与 C ABI 见 [profile 服务](../api-reference/platform-services.md#anomalyprofile)，
+单文件示例见 [`SummonLab/profile/compatibility.profile.json`](../../plugins/SummonLab/profile/compatibility.profile.json)。
 
 源码入口：`<anomaly/sdk/anomaly_sdk.h>`（C）或 `<anomaly/sdk/cpp.hpp>`（C++，提供 `Host`、`ServiceRef`、`UiWindow` 等轻量 wrapper）。
 
@@ -87,10 +141,11 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     *descriptor = {
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
-        anomaly::sdk::StringView("anomaly.example.my-plugin"),
+        anomaly::sdk::StringView("example.my-plugin"),
         anomaly::sdk::StringView("My Plugin"),
         anomaly::sdk::StringView("Me"), anomaly::sdk::StringView("1.0.0"),
-        Load, Start, Stop, Unload, /*on_update*/ nullptr, Draw};
+        Load, Start, Stop, Unload, /*on_update*/ nullptr, Draw,
+        /*on_overlay*/ nullptr};
     return anomaly::sdk::Ok();
 }
 ```
@@ -103,10 +158,11 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
 | `on_start` | 激活 | Lifecycle |
 | `on_update(delta)` | 每 tick 逻辑更新 | Game |
 | `on_draw(ui)` | 每帧绘制 | Render |
+| `on_overlay(ui)` | 每个渲染帧绘制持久覆盖层，窗口关闭时仍调用 | Render |
 | `on_stop(deadline)` | 停止，提交状态 | Lifecycle |
 | `on_unload` | 卸载前清理 | Lifecycle |
 
-Render 回调必须保持为纯绘制路径。游戏语义服务查询、cursor 推进、分页、名称解析和统计应在 Game 域 `on_update` 完成，并转换为插件自有的不可变展示快照；`on_draw` 仅在短锁内复制快照，锁外调用 UI。[`nte_combat_demo`](../../examples/nte_combat_demo/plugin.cpp) 展示了该边界：新伤害到达时才解析来源与参与者，静止帧不会重复调用 NTE 服务。
+Render 回调必须保持为纯绘制路径。游戏语义服务查询、cursor 推进、分页、名称解析和统计应在 Game 域 `on_update` 完成，并转换为插件自有的不可变展示快照；`on_draw` 和 `on_overlay` 仅在短锁内复制快照，锁外调用 UI。持续存在的世界标记应使用 `on_overlay`，普通插件窗口内容使用 `on_draw`。[`nte_combat_demo`](../../examples/nte_combat_demo/plugin.cpp) 展示了该边界：新伤害到达时才解析来源与参与者，静止帧不会重复调用 NTE 服务。
 
 完整入口 / 描述符定义见 [生命周期与 Core 服务](../api-reference/lifecycle-and-core.md)。
 
@@ -132,7 +188,7 @@ if (!config) { /* 该服务不可用，降级处理 */ }
 ```json
 {
   "schemaVersion": 2,
-  "id": "anomaly.example.my-plugin",
+  "id": "example.my-plugin",
   "name": "My Plugin",
   "description": "Shows current player and session diagnostics.",
   "author": "Me",
@@ -153,10 +209,50 @@ if (!config) { /* 该服务不可用，降级处理 */ }
 
 字段完整定义见 [Manifest 与 capability](../api-reference/manifest-and-capabilities.md) 与 [`schemas/plugin-manifest.schema.json`](../../schemas/plugin-manifest.schema.json)。
 
-- `id` 是规范化 ID（点分小写）。
+- `id` 是插件 ID：`<作者>.<插件名>`，固定两段小写 kebab 标签。第一段是作者命名空间（写法随作者署名，如 `CCYellowStar` 写作 `ccyellowstar`），第二段是插件名；不再有第三段，`local` / `builtin` / `plugin` 前缀与反域名形式会被 manifest 校验拒绝。
 - `description` 是管理界面“关于”区域使用的插件简介；插件可通过本地化目录中的 `plugin.description` 提供翻译。
 - `builds` 是 build 兼容性声明，可以写 `nte-*` 或精确 fingerprint。当前生产 Runtime 不计算 fingerprint，加载时也不用该字段拦截插件，因此不能把它当作运行时安全检查。
 - `license` 是单个 SPDX identifier（公开分发时必填）。
+
+### 文本本地化
+
+插件的用户可见文案走 [`anomaly.localization`](../api-reference/lifecycle-and-core.md#anomalylocalization)（共用 `ui` capability），SDK 提供 C++ 封装 `anomaly::sdk::Localizer`：
+
+```cpp
+#include "anomaly/sdk/localization.hpp"
+
+anomaly::sdk::Localizer localizer;  // 未查询到服务时一律返回英文回退
+
+// on_load 里查询一次：
+localizer = anomaly::sdk::Localizer(host);
+
+const std::string title = localizer.Text("window.title", "My Plugin");
+const std::array arguments{std::string_view(std::to_string(count))};
+const std::string status =
+    localizer.Format("status.cached", "Cached {0} entries", arguments);
+```
+
+文案源是与 `manifest.json` 同级的包目录里的 `locales/<locale>.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "locale": "zh-CN",
+  "messages": {
+    "window.title": "我的插件",
+    "plugin.description": "展示当前玩家与会话诊断。",
+    "status.cached": "已缓存 {0} 条"
+  }
+}
+```
+
+- `key` 只允许 `[a-z0-9._-]`、长度 ≤255，消息不得为空。
+- 中文消息里的 `{0}`..`{7}` 占位符必须与英文回退**完全一致**，否则宿主静默回退英文；字面花括号写 `{{` 与 `}}`。
+- 宿主用 `window.title` 作管理界面的显示名、`plugin.description` 作简介，缺失时才回退到 manifest 的 `name`/`description`。所以这两个 manifest 字段写英文回退值，中文放进目录。
+- `manifest.services` 里要声明 `{"id": "anomaly.localization", "minVersion": 1}`。
+- 当前语言在进程生命周期内固定，切换语言需重启游戏；因此文案可以在产生它的位置直接取，不必推迟到绘制。
+- 仓库自带的校验脚本会一次性检查 key 覆盖、占位符掩码、残留中文字面量和 manifest 回退语言：
+  `pwsh -NoProfile -File tools/check_plugin_i18n.ps1 -Plugin <插件名>`（省略 `-Plugin` 检查全部插件）。
 
 ## 6. Capability 与授权
 
@@ -242,6 +338,58 @@ if (sequence != 0 && sequence != cached_sequence) {
 
 ## 7. 资源与所有权
 
+`anomaly.interop.signature` v1 在允许同步状态 I/O 的调用域中，会自动学习成功命中的指令并在原签名
+零匹配时尝试恢复。知识存放在插件 state 目录的 `signature-knowledge/signatures.json`，
+插件原有签名定义、源码、manifest 与 C ABI 无需改动。Game/Render 回调跳过这条学习和恢复路径；
+插件应在启动阶段解析签名。
+原签名多匹配仍返回 `CONFLICT`，证据不足或无法唯一恢复仍返回 `NOT_FOUND`。
+
+原始签名接口只提供地址，没有布局 validator 或字段更新合同，因此只通配 RIP 相对地址和
+相对分支操作数，保留对象成员与栈位移字节；原 pattern 已有的通配符仍遵循原声明。
+学习窗口零匹配时，框架还会尝试从原 pattern 的完整指令重新推导，无需手写备用 pattern。
+已有 DLL 的编译期字段偏移常量不能由签名恢复替换；窗口外或原签名未约束的布局变化也无法
+由地址解析接口验证。直接绕过该服务自行扫描的插件不经过这条恢复路径。
+
+需要自动学习字段偏移的插件可选择 signature v2，并包含 `anomaly/sdk/signature.hpp`。
+manifest 中将该服务的 `minVersion` 设为 `2`。签名和偏移种子从上述公共 profile 加载；
+启动阶段调用一次框架 API，后续回调只读取本地快照。例如已验证 `profile` 包含单候选的 `pause` / `resume`：
+
+```cpp
+const AnomalySignatureFieldV2 fields[]{
+    anomaly::sdk::FieldSeed("PlayingID", profile.layout.at("PlayingID"), 4),
+    anomaly::sdk::FieldSeed("Paused", profile.layout.at("Paused")),
+};
+inline constexpr AnomalySignatureMemberV2 members[]{
+    anomaly::sdk::MemberUse(0, 4, ANOMALY_SIGNATURE_MEMBER_READ_V2),
+    anomaly::sdk::MemberUse(1, 1, ANOMALY_SIGNATURE_MEMBER_WRITE_V2),
+};
+const AnomalySignatureWitnessV2 witnesses[]{
+    anomaly::sdk::Witness("pause", profile.symbol("pause").candidates.front().pattern, members),
+    anomaly::sdk::Witness("resume", profile.symbol("resume").candidates.front().pattern, members),
+};
+const anomaly::sdk::LayoutSchema schema{
+    profile.module, profile.section, fields, witnesses};
+
+// Lifecycle / Worker；signature 是已查询的 AnomalySignatureServiceV2。
+auto resolved = anomaly::sdk::ResolveLayout(signature, schema);
+if (resolved) {
+    const auto& layout = resolved.value();
+    const auto pause_address = layout.address("pause");
+    const auto paused_offset = layout.offset("Paused");
+    // 将地址和偏移保存到插件 Context，后续字段访问使用 paused_offset。
+}
+// 失败时使用 resolved.error() 报告原因，并停用依赖该组布局的功能。
+```
+
+框架验证对象来源、访问宽度、对齐、唯一匹配及多个提取点的一致性，整组字段成功后才发布和学习。
+一个函数被游戏改写、原签名与学习记录都找不到时，它在结果里是地址 0，其余字段和地址照常发布：
+给同一个字段声明第二个独立函数（如 `pause` 之外的读取点）即可让该字段在单个函数失效时仍然成立，
+需要该地址的 Hook 自己用 `resolve` 再找一次，仍失败就只跳过那一个 Hook。
+种子不是失败兜底值。完整限制、C ABI 输出所有权和错误码见
+[Interop 与内存](../api-reference/interop-and-memory.md#版本-2同时解析地址与字段布局)。
+HiFi 已接入 PlayingID、Paused、PlayerType、CurrentID、OwnedIDs；核心播放和可选专辑分组解析，
+专辑组失败保留原有专辑降级行为。其他字段仍遵循原有兼容约束。
+
 所有由 Platform / Interop / IPC 创建的 handle 都**绑定 plugin generation**：
 
 - Scheduler / IPC 的未开始工作在 stop / reload 时取消。
@@ -258,7 +406,7 @@ cmake -S . -B build -DAnomalySDK_DIR=C:\AnomalySDK\lib\cmake\AnomalySDK
 cmake --build build --config Debug
 anomaly-plugin validate build\package\MyPlugin
 anomaly-plugin pack build\package\MyPlugin --output .\dist
-anomaly-test-host --plugin .\dist\anomaly.example.my-plugin --reload 10 --ticks 60
+anomaly-test-host --plugin .\dist\example.my-plugin --reload 10 --ticks 60
 ```
 
 `anomaly-test-host` 是**无游戏**的离线 fixture：它加载你的包、跑若干 tick 和 reload，用来验证生命周期与降级行为。该环境没有真实游戏适配器，NTE 服务会保持 `UNAVAILABLE`，但插件包本身仍应能够正常加载和卸载。
@@ -271,7 +419,7 @@ anomaly-test-host --plugin .\dist\anomaly.example.my-plugin --reload 10 --ticks 
 2. 停止旧 Scope；
 3. 只重载**变更包及其依赖闭包中的下游包**。
 
-管理界面的 **Reload all** 可显式触发全量重载。激活前会预检 static / 受支持的 delay-load import、private CRT / system DLL、同名已加载模块，以及手工映射镜像契约（静态 TLS、静态链接 CRT、缺失异常桥）；动态 `LoadLibrary` 的模块不在预检范围，插件必须自行避免进程级 DLL 名称冲突。
+管理界面的 **Reload all** 可显式触发全量重载。激活前会预检 static / 受支持的 delay-load import、private CRT / system DLL 与同名已加载模块；动态 `LoadLibrary` 的模块不在预检范围，插件必须自行避免进程级 DLL 名称冲突。
 
 ## 10. 分发
 

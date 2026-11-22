@@ -1,15 +1,11 @@
 include(CMakeParseArguments)
 
-# The SDK distribution installs the bridge source next to this file
-# (share/anomaly/cpp), so installed-package consumers find it through the same
-# relative path as the in-tree build.
-set(ANOMALY_CXX_THROW_BRIDGE "${CMAKE_CURRENT_LIST_DIR}/../../sdk/cpp/plugin_cxx_throw_bridge.cpp"
-    CACHE FILEPATH "Plugin C++ exception bridge source compiled into every plugin package")
-
 # anomaly_add_plugin(<target>
 #     SOURCES <source>...
 #     MANIFEST <manifest.json>
 #     [PACKAGE_NAME <name>] [OUTPUT_DIRECTORY <directory>]
+#     [RESOURCE_DIRECTORIES <directory>...]
+#     [BUNDLED_TARGETS <target>...]
 #     [C_ONLY] [NO_RELEASE] [TEST_PLUGIN])
 #
 # Builds one plugin package and owns its packaging rules, so a package can never be
@@ -17,21 +13,18 @@ set(ANOMALY_CXX_THROW_BRIDGE "${CMAKE_CURRENT_LIST_DIR}/../../sdk/cpp/plugin_cxx
 # directory, and the same package directory is what gets installed.
 #
 #   - the package installs into `Anomaly/plugins/<PACKAGE_NAME>` of the GameRuntime
-#     component, and the `locales` directory next to the manifest is mirrored into the
-#     package directory and installed with it;
+#     component, and the `locales`, `assets` and `profile` directories next to the manifest are
+#     mirrored into the package directory and installed with it;
 #   - TEST_PLUGIN marks a developer test package: it is built and installed only when
 #     ANOMALY_BUILD_TEST_PLUGINS is ON, and it then installs into the TestPlugins component
 #     instead of GameRuntime;
 #   - NO_RELEASE builds the package without installing it at all.
-#
-# C++ packages additionally compile the SDK exception bridge
-# (`sdk/cpp/plugin_cxx_throw_bridge.cpp` unless ANOMALY_CXX_THROW_BRIDGE overrides the
-# path) because the runtime maps plugins without the Windows loader, whose services
-# vcruntime's _CxxThrowException depends on.
+#   - RESOURCE_DIRECTORIES adds package data beside the standard resource folders;
+#     BUNDLED_TARGETS adds companion executables/libraries to the same package.
 function(anomaly_add_plugin target)
     set(options C_ONLY NO_RELEASE TEST_PLUGIN)
     set(oneValueArgs MANIFEST PACKAGE_NAME OUTPUT_DIRECTORY)
-    set(multiValueArgs SOURCES)
+    set(multiValueArgs SOURCES RESOURCE_DIRECTORIES BUNDLED_TARGETS)
     cmake_parse_arguments(ANOMALY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     # A test package is opt-in: without the switch it is not built at all, so nothing has to
     # depend on, install or validate a target that does not exist. ANOMALY_BUILD_TEST_PLUGINS
@@ -74,32 +67,48 @@ function(anomaly_add_plugin target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 $<$<COMPILE_LANGUAGE:CXX>:/permissive->)
         if(NOT ANOMALY_C_ONLY)
-            # The runtime maps plugin images without the Windows loader, so a plugin
-            # image must not depend on loader services:
-            #   - /EHsc C++ plugins throw through the SDK exception bridge source below
-            #     instead of vcruntime's loader-assisted _CxxThrowException;
-            #   - /Zc:threadSafeInit- keeps function-local static guards out of the
-            #     loader-managed TLS slot the mapper cannot reserve.
-            target_compile_options(${target} PRIVATE /EHsc /Zc:threadSafeInit-)
-            target_sources(${target} PRIVATE "${ANOMALY_CXX_THROW_BRIDGE}")
+            target_compile_options(${target} PRIVATE /EHsc)
         endif()
     endif()
-    # The manifest sits in the plugin source directory, so that directory describes the
-    # package contents: the manifest itself, plus `locales` when the plugin ships
-    # localized catalogs. Both are mirrored into the build-tree package and installed.
+    # Package data stays beside the manifest in both the build tree and installation.
+    # Profiles hold plugin-owned signatures and layouts, separate from other assets.
     get_filename_component(anomaly_package_source_directory "${ANOMALY_MANIFEST}" DIRECTORY)
+    set(anomaly_package_resource_directories locales assets profile ${ANOMALY_RESOURCE_DIRECTORIES})
+    list(REMOVE_DUPLICATES anomaly_package_resource_directories)
+    set(anomaly_existing_resource_directories)
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "${ANOMALY_MANIFEST}" "$<TARGET_FILE_DIR:${target}>/manifest.json"
         VERBATIM)
-    if(EXISTS "${anomaly_package_source_directory}/locales")
-        add_custom_command(TARGET ${target} POST_BUILD
-            COMMAND "${CMAKE_COMMAND}" -E copy_directory
-                    "${anomaly_package_source_directory}/locales"
-                    "$<TARGET_FILE_DIR:${target}>/locales"
-            VERBATIM)
-    endif()
+    foreach(anomaly_resource_directory IN LISTS anomaly_package_resource_directories)
+        if(EXISTS "${anomaly_package_source_directory}/${anomaly_resource_directory}")
+            list(APPEND anomaly_existing_resource_directories "${anomaly_resource_directory}")
+            if(anomaly_resource_directory STREQUAL "profile")
+                add_custom_command(TARGET ${target} POST_BUILD
+                    COMMAND "${CMAKE_COMMAND}" -E rm -rf "$<TARGET_FILE_DIR:${target}>/profile"
+                    VERBATIM)
+            endif()
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                        "${anomaly_package_source_directory}/${anomaly_resource_directory}"
+                        "$<TARGET_FILE_DIR:${target}>/${anomaly_resource_directory}"
+                VERBATIM)
+        endif()
+    endforeach()
     set_property(TARGET ${target} PROPERTY ANOMALY_PACKAGE_DIRECTORY "${ANOMALY_OUTPUT_DIRECTORY}")
+    set_target_properties(${target} PROPERTIES
+        ANOMALY_PACKAGE_NAME "${ANOMALY_PACKAGE_NAME}"
+        ANOMALY_PACKAGE_MANIFEST "${ANOMALY_MANIFEST}"
+        ANOMALY_PACKAGE_RESOURCE_DIRECTORIES "${anomaly_existing_resource_directories}"
+        ANOMALY_PACKAGE_BUNDLED_TARGETS "${ANOMALY_BUNDLED_TARGETS}")
+    foreach(anomaly_bundled_target IN LISTS ANOMALY_BUNDLED_TARGETS)
+        add_dependencies(${target} ${anomaly_bundled_target})
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "$<TARGET_FILE:${anomaly_bundled_target}>"
+                    "$<TARGET_FILE_DIR:${target}>/$<TARGET_FILE_NAME:${anomaly_bundled_target}>"
+            VERBATIM)
+    endforeach()
     if(ANOMALY_NO_RELEASE)
         return()
     endif()
@@ -109,15 +118,23 @@ function(anomaly_add_plugin target)
     else()
         set(anomaly_package_component GameRuntime)
     endif()
+    set_property(TARGET ${target} PROPERTY ANOMALY_PACKAGE_INSTALL_COMPONENT "${anomaly_package_component}")
     set(anomaly_package_directory "Anomaly/plugins/${ANOMALY_PACKAGE_NAME}")
     install(TARGETS ${target}
         RUNTIME DESTINATION "${anomaly_package_directory}" COMPONENT ${anomaly_package_component}
         LIBRARY DESTINATION "${anomaly_package_directory}" COMPONENT ${anomaly_package_component})
+    if(ANOMALY_BUNDLED_TARGETS)
+        install(TARGETS ${ANOMALY_BUNDLED_TARGETS}
+            RUNTIME DESTINATION "${anomaly_package_directory}" COMPONENT ${anomaly_package_component}
+            LIBRARY DESTINATION "${anomaly_package_directory}" COMPONENT ${anomaly_package_component})
+    endif()
     install(FILES "${ANOMALY_MANIFEST}"
         DESTINATION "${anomaly_package_directory}" COMPONENT ${anomaly_package_component})
-    if(EXISTS "${anomaly_package_source_directory}/locales")
-        install(DIRECTORY "${anomaly_package_source_directory}/locales/"
-            DESTINATION "${anomaly_package_directory}/locales"
-            COMPONENT ${anomaly_package_component})
-    endif()
+    foreach(anomaly_resource_directory IN LISTS anomaly_package_resource_directories)
+        if(EXISTS "${anomaly_package_source_directory}/${anomaly_resource_directory}")
+            install(DIRECTORY "${anomaly_package_source_directory}/${anomaly_resource_directory}/"
+                DESTINATION "${anomaly_package_directory}/${anomaly_resource_directory}"
+                COMPONENT ${anomaly_package_component})
+        endif()
+    endforeach()
 endfunction()

@@ -11,6 +11,7 @@
 #include "config.hpp"
 
 #include <filesystem>
+#include <array>
 #include <functional>
 #include <cstdint>
 #include <chrono>
@@ -58,6 +59,10 @@ struct PlatformDiagnostics {
     std::function<std::string()> profile_json;
     std::function<anomaly::NteCompatibilitySnapshot()> nte_compatibility;
     std::function<std::vector<anomaly::HookRecordView>()> hooks;
+    // Driven by the platform worker: retries a game tick hook that failed during runtime
+    // startup and republishes the framework services once it comes up. Returns true when the
+    // retry is settled, which lets the worker drop the callback and stop polling.
+    std::function<bool()> retry_profile_hooks;
     std::function<anomaly::RepositoryCoordinatorSnapshot()> repository_snapshot;
     std::function<anomaly::RepositoryOperationSubmission()> repository_refresh;
     std::function<anomaly::RepositoryOperationSubmission(
@@ -71,6 +76,8 @@ struct PlatformDiagnostics {
     std::function<anomaly::PlatformSettingsApplyResult(
         const anomaly::PlatformSettingsApplyRequest&)> settings_apply;
     std::function<bool(std::string_view route)> settings_record_route;
+    // Persists the notice acceptance; false keeps it pending.
+    std::function<bool(std::uint32_t version)> settings_record_notice;
     // Phase 10 production evidence. The capture provider gates the GPU
     // readback work; the remaining callbacks are cheap no-op observations
     // when the evidence session is idle.
@@ -108,6 +115,17 @@ struct PlatformDiagnostics {
     std::shared_ptr<anomaly::StructuredLogger> logger;
 };
 
+struct PlatformWindowAppearance {
+    // Standalone hosts stay transparent unless their caller supplies an opaque backdrop.
+    std::array<float, 4> clear_color{};
+    bool show_in_taskbar{};
+    bool close_exits{};
+    // Native handles are HWND values. These hooks run on the window's UI thread.
+    std::function<void(void*)> setup_window;
+    std::function<void(void*, std::uint32_t)> menu_command;
+    std::function<std::array<float, 4>()> background_color;
+};
+
 void RunPlatform(
     const std::filesystem::path& root,
     const AnalyzerConfig& config,
@@ -115,7 +133,8 @@ void RunPlatform(
     anomaly::CoreMemoryServices memory_services = {},
     std::shared_ptr<anomaly::Ue5NteAdapter> adapter = {},
     PlatformDiagnostics diagnostics = {},
-    std::shared_ptr<PluginManager> plugins = {});
+    std::shared_ptr<PluginManager> plugins = {},
+    PlatformWindowAppearance appearance = {});
 void RunEmbeddedPlatform(
     const std::filesystem::path& root,
     const AnalyzerConfig& config,

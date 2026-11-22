@@ -24,13 +24,12 @@
 | 参数 | 作用 |
 | --- | --- |
 | （无参数） | 构建 Runtime、Tools、SDK target，并安装可直接部署的运行包 |
-| `fixtures` | 额外构建开发夹具（`anomaly-platform-preview`、`anomaly-render-fixture`、`anomaly-d3d11-fixture`、BetterPose 与自动战斗测试程序） |
-| `probes` | 额外构建诊断探针插件包（传输 trace、BidKing 探针） |
+| `fixtures` | 额外构建开发夹具（`anomaly-platform-preview`、BetterPose 与自动战斗测试程序） |
 | `symbols` | 额外生成 linker PDB 并暂存 Symbols 组件，只用于本地调试 |
 | `testplugins` | 额外构建并安装开发者测试插件包（`MapSpawnExporter`、`NteMovementHold`、`NteNavmeshDemo`、`NtePickupDemo`、`TeleportLandmarksProbe`）；它们属于独立的 `TestPlugins` 组件，发布包永远不含 |
 | `package` | 额外把 Tools、SDK（开启 `symbols` 时含 Symbols）安装到 `.build\windows-vs2022\package`，与发布打包一致 |
 
-参数可以组合，例如 `.\build.cmd fixtures package`。开发夹具、诊断探针与 PDB 都不属于发布的
+参数可以组合，例如 `.\build.cmd fixtures package`。开发夹具与 PDB 都不属于发布的
 三个组件，默认不构建，只有显式开启时才会出现在构建树中。
 
 ### 手动执行（等价）
@@ -43,7 +42,7 @@ cmake --install .build\windows-vs2022 --config RelWithDebInfo `
 ```
 
 可选开关只在需要时于 configure 阶段显式开启：
-`-DANOMALY_BUILD_TEST_FIXTURES=ON`、`-DANOMALY_BUILD_DIAGNOSTIC_PROBES=ON`、
+`-DANOMALY_BUILD_TEST_FIXTURES=ON`、
 `-DANOMALY_BUILD_SYMBOLS=ON`、`-DANOMALY_BUILD_TEST_PLUGINS=ON`（等价于 `build.cmd testplugins`，
 且需要额外执行 `--component TestPlugins` 的安装步骤）。
 
@@ -62,6 +61,23 @@ cmake --install .build\windows-vs2022 --config RelWithDebInfo `
 `anomaly-platform-preview.exe` 属于开发夹具，需要先开启 `ANOMALY_BUILD_TEST_FIXTURES`
 （`.\build.cmd fixtures`）。开启后直接运行它，可以在独立进程通过与游戏内相同的 Platform 与
 PluginManager 路径预览和调试界面与插件。
+预览窗口的原生菜单栏提供绿色（`#00FF00`）、白色预设与自定义取色，控件不占用预览画布。
+“窗口”菜单提供“始终置顶”开关，预览可从任务栏和 Win+Tab 切换。
+默认绿色且不置顶，关闭窗口正常退出时将选择保存到 `anomaly.ini` 的
+`[Preview] BackgroundColor` 和 `AlwaysOnTop`。
+
+预览目录的插件直接同步 `GameRuntime` 安装清单，包含插件 DLL、manifest、本地化与资源，
+不包含 `NO_RELEASE` 示例或 `TestPlugins` 测试包。构建预览 target 时会刷新这些文件，并移除
+已不在安装清单中的预览插件包；已有的 `anomaly.ini`、配置和运行状态会保留。
+仅更新预览时使用：
+
+```powershell
+cmake --preset windows-vs2022 -DANOMALY_BUILD_TEST_FIXTURES=ON
+cmake --build --preset windows-relwithdebinfo --target anomaly-platform-preview --parallel
+```
+
+更新宿主本地化目录后也要构建预览，确保 EXE 中的消息定义与目录一致；只复制新目录给旧 EXE
+可能因未知 key 校验失败而整体回退英文。
 
 ## 发布打包
 
@@ -99,7 +115,7 @@ attestation。PDB 不属于发布内容：默认构建不生成 PDB，需要本�
 | `anomaly-abi-snapshot.exe` | ABI 基线生成与校验 |
 | `anomaly-test-host.exe` | 无游戏的插件 fixture 宿主 |
 
-`AnomalyLauncher.exe` 与 `AnomalyCrashCoordinator.exe` 随 Runtime 分发；`anomaly-render-fixture.exe` 与 `anomaly-platform-preview.exe` 属于开发夹具，只在 `build.cmd fixtures` 之后出现在构建目录中。
+`AnomalyLauncher.exe` 随 Runtime 分发；`anomaly-platform-preview.exe` 属于开发夹具，只在 `build.cmd fixtures` 之后出现在构建目录中。
 
 ## 相关
 

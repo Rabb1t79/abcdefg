@@ -28,9 +28,7 @@
         "anomaly.nte.pickup",
         "anomaly.nte.combat",
         "anomaly.nte.skills",
-        "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.skill-invocation"
       ]
     },
     "ue5.FNamePool": {
@@ -59,9 +57,7 @@
         "anomaly.nte.ui-buttons",
         "anomaly.nte.combat",
         "anomaly.nte.skills",
-        "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.skill-invocation"
       ]
     },
     "ue5.FTextData.GetDisplayString": {
@@ -136,9 +132,7 @@
         "anomaly.nte.ui-buttons",
         "anomaly.nte.combat",
         "anomaly.nte.skills",
-        "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.skill-invocation"
       ]
     },
     "ue5.StaticFindObject": {
@@ -188,9 +182,7 @@
         "anomaly.nte.ui-buttons",
         "anomaly.nte.combat",
         "anomaly.nte.skills",
-        "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.skill-invocation"
       ]
     },
     "ue5.ProcessEvent": {
@@ -213,9 +205,7 @@
         "anomaly.nte.ui-buttons",
         "anomaly.nte.combat",
         "anomaly.nte.skills",
-        "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.skill-invocation"
       ]
     },
     "nte.ClientIgnoreGameAndUiInput": {
@@ -287,7 +277,8 @@
       },
       "validators": [
         "address-in-module",
-        "executable"
+        "executable",
+        "call-target:nte.HTUI_MenuExtension.AddMenuPage:escMenu.execAddMenuPageCallOffset"
       ],
       "requiredBy": [
         "anomaly.nte.esc-menu-button"
@@ -321,6 +312,282 @@
       ],
       "requiredBy": [
         "anomaly.nte.esc-menu-button"
+      ]
+    },
+    "ue5.AssetRegistry.GetDerivedClassNames": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "4C 8B DC 55 49 8D 6B 98 48 81 EC 60 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 10 49 89 5B F0 48 8B D9 49 89 73 E8 49 89 7B E0 48 8D B9 A8 0B 00 00",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.assets"
+      ]
+    },
+    "ue5.FMemory.Free": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 85 C9 74 2E 53 48 83 EC 20 48 8B D9 48 8B 0D ?? ?? ?? ?? 48 85 C9 75 0C E8 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 48 8B 01 48 8B D3 FF 50 48 48 83 C4 20 5B C3",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.assets"
+      ]
+    },
+    "ue5.FPlatformFileManager.Get": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "E8 ?? ?? ?? ?? 48 8B C8 E8 ?? ?? ?? ?? 83 7C 24 50 00 48 8B D3 48 0F 45 54 24 48 48 8B 08 4C 8B 41 78 48 8B C8 41 FF D0 84 C0 0F 84",
+      "resolve": {
+        "kind": "rip-rel32",
+        "offset": 1,
+        "instructionSize": 5
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.FPakPlatformFile.Mount": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 83 EC 48 0F B6 44 24 70 48 89 54 24 20 48 8D 54 24 20 44 89 44 24 28 45 33 C0 4C 89 4C 24 30 4C 8B 4C 24 78 88 44 24 3C C7 44 24 38 00 00 00 00 E8 ?? ?? ?? ?? 48 83 C4 48 C3",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.PakContainerSignatureVerify": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 F1 48 81 EC 88 00 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 FF",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.PakSignatureGate": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "74 6B F6 C3 04 75 6F 48 8D 05 ?? ?? ?? ?? 8B CF",
+      "resolve": {
+        "kind": "direct",
+        "addend": 0
+      },
+      "validators": [
+        "address-in-module",
+        "executable"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.FPakPlatformFile.MountWithStatus": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 83 EC 48 0F B6 44 24 70 48 89 54 24 20 48 8D 54 24 20 44 89 44 24 28 45 33 C0 4C 89 4C 24 30 4C 8B 4C 24 78 88 44 24 3C C7 44 24 38 00 00 00 00 E8 ?? ?? ?? ?? 48 83 C4 48 C3",
+      "resolve": {
+        "kind": "rip-rel32",
+        "offset": 50,
+        "instructionSize": 54
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.FPakFile.Release": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "40 53 48 83 EC 20 48 8D 41 08 BB FF FF FF FF F0 0F C1 18 83 FB 01 75 15 33 D2 48 85 C0 48 0F 44 CA 48 85 C9 74 07 48 8B 01 8B D3 FF 10 8D 43 FF 48 83 C4 20 5B C3",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.FlushAsyncLoading": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "40 55 53 48 8D AC 24 68 F8 FF FF 48 81 EC 98 08 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 85 70 07 00 00 48 83 3D ?? ?? ?? ?? 00 48 8B D9 48 89 4C 24 40 0F 84",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.FPakPlatformFile.Unmount": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 8B C4 48 89 50 10 53 57 41 55 48 81 EC 90 00 00 00 48 89 68 20 48 8D 79 38 48 89 70 E0 33 DB 4C 89 60 D8 40 32 ED 4C 89 70 D0 4C 8B E1 48 8B CF 4C 89 78 C8 4C 8B F2 FF 15 ?? ?? ?? ?? 33 F6",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.PakBlockCacheComplete": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 54 41 56 41 57 48 83 EC 20 49 63 F9 4D 8B F0 44 0F B6 E2 48 8B F1 E8 ?? ?? ?? ?? 48 8D 5E 08 48 8B CB FF 15 ?? ?? ?? ?? 48 8B EF 4C 8D 7F 0C 48 C1 E5 05 48 03 EE 49 C1 E7 05 4C 89 B5 68 01 00 00",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.PakBlockCacheVerify": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "40 55 53 56 57 41 54 41 55 41 56 48 8D 6C 24 D0 48 81 EC 30 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 20 0F 57 C0 49 63 F9 48 8D 59 08 48 89 4C 24 50 4C 8B F1 89 7C 24 48 48 8B CB 4C 89 44 24 70 49 8B F0 88 54 24 30",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.FPakFile.Find": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 54 41 56 41 57 48 83 EC 30 80 B9 F2 02 00 00 00 4D 8B F8 48 8B FA 48 8B D9 0F 84 ?? ?? ?? ?? 8B 81 D0 00 00 00 48 8D 35 ?? ?? ?? ?? 8B 69 7C 45 33 E4 4C 8B B1 D0 02 00 00",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.FEncryptionKeyManager.Get": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "E8 ?? ?? ?? ?? 4C 8D 44 24 30 48 8B D3 48 8B C8 E8 ?? ?? ?? ?? 84 C0 0F 85 ?? ?? ?? ?? 8B 43 0C 0B 43 08 0B 43 04 0B 03",
+      "resolve": {
+        "kind": "rip-rel32",
+        "offset": 1,
+        "instructionSize": 5
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.FEncryptionKeyManager.TryGetKey": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 48 83 EC 20 48 8B D9 49 8B F8 B9 01 00 00 00 48 8B F2 33 C0 F0 0F B0 0B 74 ?? 48 8B CB E8 ?? ?? ?? ?? BA 10 00 00 00 48 8B CE E8 ?? ?? ?? ?? 4C 8B C6 48 8D 4B 08 8B D0 E8 ?? ?? ?? ?? 83 F8 FF",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.FCompression.UncompressMemory": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 89 5C 24 10 48 89 74 24 18 48 89 7C 24 20 48 89 4C 24 08 55 41 54 41 55 41 56 41 57 48 8D 6C 24 E1 48 81 EC D0 00 00 00 4C 8B E2 48 8B D9 BA 01 01 00 00 48 8D 4D A7 4D 8B E9 4D 8B F0 40 32 FF E8 ?? ?? ?? ??",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
+      ]
+    },
+    "ue5.FName.FromEName": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 89 5C 24 08 57 48 83 EC 20 80 3D ?? ?? ?? ?? 00 48 8B D9 48 8D 0D ?? ?? ?? ?? 8B FA 75 ?? E8 ?? ?? ?? ?? 48 8B C8 C6 05 ?? ?? ?? ?? 01 8B 8C B9 40 40 01 00 48 8B C3 89 0B 48 8B 5C 24 30 48 83 C4 20 5F",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable",
+        "function-prologue-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.pak"
       ]
     }
   },
@@ -386,20 +653,6 @@
       "ue5.ProcessEvent",
       "nte.ClientIgnoreGameAndUiInput"
     ],
-    "nte.vehicle": [
-      "ue5.GWorld",
-      "ue5.GameTick",
-      "ue5.FNamePool",
-      "ue5.GObjects",
-      "ue5.ProcessEvent"
-    ],
-    "nte.attack-input": [
-      "ue5.GWorld",
-      "ue5.GameTick",
-      "ue5.FNamePool",
-      "ue5.GObjects",
-      "ue5.ProcessEvent"
-    ],
     "nte.player-esp": [
       "ue5.GWorld",
       "ue5.GameTick"
@@ -463,6 +716,27 @@
       "ue5.GameTick",
       "ue5.FNamePool",
       "ue5.GObjects"
+    ],
+    "ue5.assets": [
+      "ue5.AssetRegistry.GetDerivedClassNames",
+      "ue5.FMemory.Free"
+    ],
+    "ue5.pak": [
+      "ue5.FPlatformFileManager.Get",
+      "ue5.FPakPlatformFile.Mount",
+      "ue5.FPakPlatformFile.MountWithStatus",
+      "ue5.FPakFile.Release",
+      "ue5.FlushAsyncLoading",
+      "ue5.PakSignatureGate",
+      "ue5.FPakPlatformFile.Unmount",
+      "ue5.PakContainerSignatureVerify",
+      "ue5.FPakFile.Find",
+      "ue5.PakBlockCacheVerify",
+      "ue5.PakBlockCacheComplete",
+      "ue5.FEncryptionKeyManager.Get",
+      "ue5.FEncryptionKeyManager.TryGetKey",
+      "ue5.FCompression.UncompressMemory",
+      "ue5.FName.FromEName"
     ]
   },
   "optionalFeatures": [
@@ -484,8 +758,8 @@
     "nte.skills",
     "nte.skill-invocation",
     "ue5.streaming-source",
-    "nte.vehicle",
-    "nte.attack-input"
+    "ue5.assets",
+    "ue5.pak"
   ],
   "featureLayoutValidators": {
     "ue5.ftext": [
@@ -549,11 +823,11 @@
     "ue5.streaming-source": [
       "ue5-streaming-source-layout-v1"
     ],
-    "nte.vehicle": [
-      "nte-vehicle-layout-v1"
+    "ue5.assets": [
+      "ue5-assets-abi-v1"
     ],
-    "nte.attack-input": [
-      "nte-attack-input-layout-v1"
+    "ue5.pak": [
+      "ue5-pak-mount-v1"
     ]
   },
   "featureDependencies": {
@@ -640,20 +914,39 @@
     "ue5.streaming-source": [
       "nte.player"
     ],
-    "nte.vehicle": [
-      "nte.player",
+    "ue5.assets": [
       "ue5.names",
-      "ue5.objects",
-      "ue5.process-event"
-    ],
-    "nte.attack-input": [
-      "nte.player",
-      "ue5.names",
-      "ue5.objects",
+      "ue5.object-find",
       "ue5.process-event"
     ]
   },
   "layout": {
+    "pak.managerTopmostOffset": 0,
+    "pak.getLowerLevelVtableOffset": 96,
+    "pak.getNameVtableOffset": 112,
+    "pak.signedFlagOffset": 48,
+    "pak.listEntryPakFileOffset": 8,
+    "pak.mountedListOffset": 16,
+    "pak.mountedListLockOffset": 56,
+    "pak.pakFileFilenameOffset": 24,
+    "pak.pakFileMountPointOffset": 200,
+    "pak.openReadVtableOffset": 232,
+    "pak.iterateDirectoryVtableOffset": 304,
+    "pak.fileHandleReadVtableOffset": 32,
+    "pak.fileHandleSizeVtableOffset": 80,
+    "pak.fileHandlePakFileOffset": 16,
+    "pak.cacheLockOffset": 8,
+    "pak.cacheSliceStride": 32,
+    "pak.cacheRecordIndexOffset": 368,
+    "pak.cacheOwnerMaskOffset": 260,
+    "pak.cacheRecordsOffset": 224,
+    "pak.recordStride": 48,
+    "pak.cacheElementsOffset": 168,
+    "pak.elementStride": 152,
+    "pak.elementSignatureTableOffset": 136,
+    "pak.elementHandleOffset": 0,
+    "pak.elementContainerOffset": 8,
+    "pak.fileHandleDestroyVtableOffset": 0,
     "world.gameInstance": 560,
     "world.persistentLevel": 48,
     "world.levels": 464,
@@ -667,15 +960,11 @@
     "gameInstance.localPlayers": 56,
     "localPlayer.controller": 48,
     "controller.controlRotation": 832,
-    "controller.getPlayerCharacterVtableOffset": 5272,
     "controller.pawn": 776,
     "controller.playerState": 720,
-    "playerState.roleName": 1120,
     "controller.cameraManager": 896,
     "controller.streamingSourceVtableOffset": 3168,
     "actor.rootComponent": 456,
-    "vehicle.movementComponent": 888,
-    "vehicle.maxEngineTorque": 2616,
     "object.internalIndex": 12,
     "object.class": 16,
     "object.nameOffset": 24,
@@ -693,6 +982,7 @@
     "ufunction.execFunction": 216,
     "fstack.locals": 32,
     "escMenu.buttonClickedVtableOffset": 1392,
+    "escMenu.execAddMenuPageCallOffset": 110,
     "ffield.class": 8,
     "ffield.name": 32,
     "ffield.next": 24,
@@ -718,8 +1008,8 @@
     "damageEvent.damage": 16,
     "damageEvent.damageGEDef": 312,
     "damageEvent.damageTags": 328,
-    "abilitySpawnActor.triggerAbilityHandle": 1152,
-    "abilitySpawnActor.savedTriggerSkillCDO": 1160,
+    "abilitySpawnActor.triggerAbilityHandle": 1160,
+    "abilitySpawnActor.savedTriggerSkillCDO": 1168,
     "abilitySystem.tryActivateAbilityStack": 8280,
     "gameplayEffectSpec.size": 664,
     "gameplayEffectSpec.def": 0,
@@ -745,30 +1035,18 @@
     "damageTextInfo.reactionDisplayType": 69,
     "gameplayEffect.uiData": 768,
     "gameplayEffectUIData.description": 40,
-    "abilityCharacter.abilitySystemComponent": 2208,
-    "abilityCharacter.characterConfigId": 7544,
-    "playerCharacter.defaultCharacterId": 10040,
-    "playerCharacter.currentDisplayCharacterId": 10084,
+    "abilityCharacter.abilitySystemComponent": 2368,
     "abilitySystem.activeGameplayEffects": 2200,
     "activeGameplayEffects.size": 768,
     "activeGameplayEffects.arrayReplicationKey": 84,
     "activeGameplayEffects.items": 304,
-    "abilitySystem.currentDamageCauserOrInstigator": 9064,
-    "abilitySystem.currentDamageGameplayEffect": 9072,
-    "gameData.abilityDataAsset": 952,
     "abilityData.skillDamageDataTable": 1112,
     "skillDamage.gaName": 24,
-    "gameData.gameplayAbilityTipsDataTable": 3352,
-    "gameData.gameplayEffectTipsDataTable": 3360,
     "gameplayAbilityTips.name": 8,
     "gameplayAbilityTips.gameplayAbility": 144,
     "gameplayEffectTips.name": 8,
     "gameplayEffectTips.geParamName": 120,
-    "gameData.monsterInfoDataTable": 8368,
-    "gameData.characterDataTable": 8936,
-    "gameData.characterDataAsset": 152,
     "staticItemData.itemName": 160,
-    "gameData.survivalGamePlayDataAsset": 9224,
     "characterDataAsset.mapCharacterFileDataTable": 48,
     "characterFileData.abilityName": 72,
     "survivalData.monsterDataTable": 80,
@@ -828,7 +1106,6 @@
     "skillEffect.belongSkillId": 16,
     "skillEffect.name": 24,
     "monsterData.textName": 24,
-    "gameData.teleportPointDataTable": 408,
     "teleportPoint.belongsLevel": 8,
     "teleportPoint.floor": 40,
     "teleportPoint.transformTranslation": 96,
@@ -857,7 +1134,7 @@
     "objects.itemStride": 24,
     "objects.objectOffset": 0,
     "objects.serialOffset": 16,
-    "pickup.actor.interactFinish": 976,
+    "pickup.actor.interactFinish": 984,
     "pickup.trigger.numParms": 3,
     "pickup.trigger.parmsSize": 13,
     "pickup.trigger.actor": 0,
@@ -911,6 +1188,102 @@
     "htuiRadioBox.radioBox": 4960,
     "htuiRadioBox.radioText": 4968,
     "htuiRadioBox.blockButton": 4976,
-    "htuiListItem.clickButton": 1616
-  }
+    "htuiListItem.clickButton": 1616,
+    "abilitySpawnActor.size": 1192,
+    "dataTable.size": 176,
+    "skillDamage.size": 120,
+    "gameplayAbilityTips.size": 184,
+    "gameplayEffectTips.size": 136,
+    "monsterData.size": 296,
+    "assets.pathSize": 16,
+    "assets.setSize": 80,
+    "assets.setElementStride": 24,
+    "assets.setFlags": 16,
+    "assets.setHeapFlags": 32,
+    "assets.setFlagCount": 40,
+    "assets.setFlagCapacity": 44,
+    "assets.setFirstFree": 48,
+    "assets.setFreeCount": 52,
+    "assets.setHeapHash": 64,
+    "assets.setHashSize": 72,
+    "assets.setInlineFlagBits": 128,
+    "assets.derivedClassesVtableSlot": 368,
+    "pak.compressionZlibName": 257,
+    "pak.compressionGzipName": 258,
+    "pak.compressionLz4Name": 259,
+    "pak.compressionOodleName": 261,
+    "account.digits": 12,
+    "account.scanBatch": 2048,
+    "account.source0.size": 8,
+    "account.source1.size": 8,
+    "account.source2.size": 16
+  },
+  "layoutCandidates": [
+    {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 80 B9 50 2A 00 00 00 48 8B F2 48 8B F9 0F 84 A4 00 00 00",
+      "entry": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20",
+      "values": {
+        "abilityCharacter.characterConfigId": 7736,
+        "abilityCharacter.size": 5376,
+        "abilityData.size": 3432,
+        "abilitySystem.currentDamageCauserOrInstigator": 9104,
+        "abilitySystem.currentDamageGameplayEffect": 9112,
+        "abilitySystem.size": 9816,
+        "aiCharacter.size": 10464,
+        "controller.getPlayerCharacterVtableOffset": 5272,
+        "gameData.abilityDataAsset": 952,
+        "gameData.characterDataAsset": 152,
+        "gameData.characterDataTable": 8936,
+        "gameData.gameplayAbilityTipsDataTable": 3352,
+        "gameData.gameplayEffectTipsDataTable": 3360,
+        "gameData.monsterInfoDataTable": 8368,
+        "gameData.size": 9296,
+        "gameData.survivalGamePlayDataAsset": 9224,
+        "gameData.teleportPointDataTable": 408,
+        "playerCharacter.currentDisplayCharacterId": 10724,
+        "playerCharacter.defaultCharacterId": 10664,
+        "playerState.roleName": 1120,
+        "playerState.size": 4952
+      },
+      "symbolPatterns": {
+        "nte.ClientIgnoreGameAndUiInput": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 41 0F B6 F8 0F B6 EA 40 0F B6 D7 41 B0 01 41 0F B6 F1 48 8B D9 E8 ?? ?? ?? ?? 48 8B 03 48 8B CB FF 90 98 14 00 00",
+        "nte.HTUI_MenuExtension.execAddMenuPage": "48 89 5C 24 08 48 89 74 24 18 57 48 83 EC 20 33 FF 48 8B DA 89 7C 24 38 48 8B F1 E8 ?? ?? ?? ?? 48 8B CB 48 39 7B 20 74 10 48 8B 53 18 4C 8D 44 24 38 E8 ?? ?? ?? ?? EB 1C 4C 8B 83 88 00 00 00 48 8D 54 24 38 49 8B 40 18 48 89 83 88 00 00 00 E8 ?? ?? ?? ?? 48 8B 43 20 48 8B CE 8B 54 24 38 48 85 C0 40 0F 95 C7 48 03 F8 48 89 7B 20 E8 ?? ?? D5 01"
+      }
+    },
+    {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 80 B9 48 2B 00 00 00 48 8B F2 48 8B F9 0F 84 A4 00 00 00",
+      "entry": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20",
+      "values": {
+        "abilityCharacter.characterConfigId": 7800,
+        "abilityCharacter.size": 5440,
+        "abilityData.size": 3448,
+        "abilitySystem.currentDamageCauserOrInstigator": 9144,
+        "abilitySystem.currentDamageGameplayEffect": 9152,
+        "abilitySystem.size": 9856,
+        "aiCharacter.size": 10528,
+        "controller.getPlayerCharacterVtableOffset": 5320,
+        "gameData.abilityDataAsset": 1040,
+        "gameData.characterDataAsset": 160,
+        "gameData.characterDataTable": 9224,
+        "gameData.gameplayAbilityTipsDataTable": 3480,
+        "gameData.gameplayEffectTipsDataTable": 3488,
+        "gameData.monsterInfoDataTable": 8656,
+        "gameData.size": 9600,
+        "gameData.survivalGamePlayDataAsset": 9512,
+        "gameData.teleportPointDataTable": 416,
+        "playerCharacter.currentDisplayCharacterId": 10956,
+        "playerCharacter.defaultCharacterId": 10896,
+        "playerState.roleName": 1136,
+        "playerState.size": 4968
+      },
+      "symbolPatterns": {
+        "nte.ClientIgnoreGameAndUiInput": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 41 0F B6 F8 0F B6 EA 40 0F B6 D7 41 B0 01 41 0F B6 F1 48 8B D9 E8 ?? ?? ?? ?? 48 8B 03 48 8B CB FF 90 C8 14 00 00 48 8B D8 48 85 C0 74 ?? 40 84 ED",
+        "nte.HTUI_MenuExtension.execAddMenuPage": "48 89 5C 24 08 48 89 74 24 18 57 48 83 EC 20 33 FF 48 8B DA 89 7C 24 38 48 8B F1 E8 ?? ?? 5C FA 48 8B CB 48 39 7B 20 74 10 48 8B 53 18 4C 8D 44 24 38 E8 ?? ?? ?? ?? EB 1C 4C 8B 83 88 00 00 00 48 8D 54 24 38 49 8B 40 18 48 89 83 88 00 00 00 E8 ?? ?? ?? ?? 48 8B 43 20 48 8B CE 8B 54 24 38 48 85 C0 40 0F 95 C7 48 03 F8 48 89 7B 20 E8 ?? ?? ?? ??"
+      }
+    }
+  ]
 }

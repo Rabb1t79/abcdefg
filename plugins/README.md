@@ -1,27 +1,39 @@
 # 内建插件
 
-本目录拥有随 `GameRuntime` 组件发布的产品插件。默认安装包含这些包目录：
+本目录拥有随 `GameRuntime` 组件发布的产品插件。默认安装的面向用户插件包括：
 
 - `NtePosition`
 - `EntityESP`
 - `PinkPawHeistESP`
+- `NteVehicle`
 - `FakeUID`
 - `CameraTools`
 - `CameraBlurFix`
 - `BetterPose`
+- `HiFiVehicleMusic`
 - `BoxAuto`
 - `CombatBox`
 - `CloneEnter`
+- `SceneLoader`
 - `QuickUltimate`
 - `WalletCollector`
-- `FreeFly`
+- `NteFreeFly`
+- `AutoFish`
+- `SkinChanger`
+- `ModelScale`
+- `UiButtons`
+- `Jelly`
+- `Night999`
+- `NpcSummon`
+- `SummonLab`
+- `Deserted`
 
 随运行包安装、仅在会话开发者模式启用时显示的调试插件：
 
 - `NteTeleport`
 - `DllLoader`
 - `TimeAccel`
-- `HiFiVehicleMusic`
+- `MemoryDump`
 
 开发者测试插件：默认不构建、不安装，只有 `build.cmd testplugins`（或
 `-DANOMALY_BUILD_TEST_PLUGINS=ON` 加 `--component TestPlugins` 安装）才会构建并放进运行包；

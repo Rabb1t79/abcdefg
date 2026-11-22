@@ -13,10 +13,10 @@ cmake --install .build\windows-vs2022 --config RelWithDebInfo `
   --prefix .build\windows-vs2022\game-package --component GameRuntime
 ```
 
-默认构建只产出 Runtime、Tools、SDK 三个发布组件所需的 target。开发夹具（`fixtures`）、诊断探针
-（`probes`）、开发者测试插件包（`testplugins`）与 PDB（`symbols`）都不属于任何发布组件，默认
-不构建，只在需要时显式开启：`build.cmd fixtures|probes|testplugins|symbols`，或在 configure
-阶段传入 `ANOMALY_BUILD_TEST_FIXTURES=ON`、`ANOMALY_BUILD_DIAGNOSTIC_PROBES=ON`、
+默认构建只产出 Runtime、Tools、SDK 三个发布组件所需的 target。开发夹具（`fixtures`）、
+开发者测试插件包（`testplugins`）与 PDB（`symbols`）都不属于任何发布组件，默认
+不构建，只在需要时显式开启：`build.cmd fixtures|testplugins|symbols`，或在 configure
+阶段传入 `ANOMALY_BUILD_TEST_FIXTURES=ON`、
 `ANOMALY_BUILD_TEST_PLUGINS=ON`、`ANOMALY_BUILD_SYMBOLS=ON`。测试插件包
 （`MapSpawnExporter`、`NteMovementHold`、`NteNavmeshDemo`、`NtePickupDemo`、
 `TeleportLandmarksProbe`）通过独立的 `TestPlugins` 组件安装，任何发布组件都不含该组件。
@@ -36,6 +36,7 @@ cmake --install .build\windows-vs2022 --config RelWithDebInfo `
 | --- | --- |
 | 仅 Markdown | `git diff --check`，并检查链接和路径 |
 | 单个实现单元或模块内行为 | 构建直接受影响的 target，并运行对应的独立验证程序或 fixture |
+| 插件文案或本地化目录 | 构建该插件 target，运行 `pwsh -NoProfile -File tools/check_plugin_i18n.ps1 -Plugin <名字>` 与相关 fixture |
 | 跨共享模块边界或公共合同 | 构建受影响模块及直接依赖方，运行两侧相关契约与集成验证 |
 | CMake 或构建图 | 重新 configure，构建受影响 target，并运行受影响验证；仅在影响无法界定时扩大范围 |
 | 公开 SDK/ABI | 构建 SDK 直接依赖方，运行 ABI、外部消费者及相关集成验证 |
@@ -52,12 +53,14 @@ cmake --install .build\windows-vs2022 --config RelWithDebInfo `
 | `anomaly-profile` | 离线诊断 fingerprint 和 Profile 校验 | fingerprint 只用于诊断/证据/cache，不作为 Profile 激活条件 |
 | `anomaly-plugin` | 校验或打包本地插件包 | 只处理受控目录；真实热重载前必须先校验 |
 | `anomaly-test-host` | 无游戏进程的插件生命周期测试 | 真实游戏进程之前的首选验证方式 |
+| `anomaly-inject` | 把 Runtime Core 手工映射进已经在运行的目标（`--list`、`--pid`、`--delivery`） | 目标只能是自有进程或玩家自己启动的本机游戏；失败不重启、不结束目标进程 |
 | `anomaly-cli` 只读命令 | `status`、`modules`、`sections`、`regions`、`scan`、`ue`、`read`、`chain`、`snapshot` | 目标只能是自有进程；snapshot 和日志可能含敏感路径/数据 |
 | `anomaly-cli` 修改命令 | `write`、`patch`、`protect`、`alloc`、`free` | 需要用户明确授权和自有测试目标；不得作为常规诊断手段 |
 | `diagnose_nte_profile.ps1`、`rescan_profile_signatures.ps1`、`scan_nte_entities.ps1` | 检查实时 NTE 目标和活动 Profile | 必须有明确请求、正确 PID/Profile；生成数据分享前需审查 |
-| `start-coordinate-tracker.ps1` | 启动常驻后台 tracker | 仅在明确请求时使用；结束前必须运行 `stop-coordinate-tracker.ps1` |
 | `collect_diagnostics.ps1` | 生成脱敏诊断包 | 用 `pwsh -NoProfile -File` 启动；检查输入 Runtime 和输出路径，dump 必须人工审查 |
 | `package_release.ps1` | staging Runtime、Tools、SDK 三个组件，并覆盖发布输出 | 用 `pwsh -NoProfile -File` 启动；仅在干净标准构建后，且指定明确版本/输出目录时运行 |
+| `check_plugin_i18n.ps1` | 校验插件本地化：key 覆盖（含 `ScopedLabel`/`TextLocalized`/`LocalizedStatus` 等 helper 调用与 `window.`/`settings.` 等命名空间字面量）、`{N}` 占位符掩码与英文回退一致、残留中文字面量、manifest 回退语言与 `anomaly.localization` 声明 | 只读；`-Plugin A,B` 指定插件，省略则检查 `plugins/` 下全部插件 |
+| `migrate_plugin_ids/`（双击 `Migrate-Plugin-Ids.cmd`） | 把运行时数据里的旧插件 id 迁到 `<作者>.<插件名>`：`config/plugin-enablement.json` 键、`config/plugins/<id>`、`state/plugins/<id>`、`config-<配置键>.json`（[使用说明](../tools/migrate_plugin_ids/README.md)） | 改用户数据；双击走"预览→确认"；命令行先加 `-WhatIf`；`-Root` 缺省用脚本目录（与 AnomalyLauncher.exe 同级），已移除插件与第三方 id 只报告不动 |
 | `run_stability_suite.ps1` | 显式 opt-in 的 soak 证据；需要先 `build.cmd fixtures` | 用 `pwsh -NoProfile -File` 启动；`-Quick` 只用于脚本冒烟，不是发布证据 |
 
 所有工具脚本默认使用 `.build/windows-vs2022` 和其中的 `RelWithDebInfo` 二进制。只在有意使用

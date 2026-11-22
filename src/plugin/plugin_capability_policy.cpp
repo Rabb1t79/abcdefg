@@ -11,7 +11,8 @@ struct ServiceCapabilityMapping {
     std::string_view capability;
 };
 
-constexpr std::array<std::string_view, 46> kKnownCapabilities{
+constexpr std::array<std::string_view, 47> kKnownCapabilities{
+    "mods",
     "commands",
     "configuration",
     "diagnostics",
@@ -24,7 +25,6 @@ constexpr std::array<std::string_view, 46> kKnownCapabilities{
     "memory-read",
     "memory-write",
     "nte-actor-snapshot",
-    "nte-attack-input",
     "nte-build",
     "nte-combat-read",
     "nte-entity-snapshot",
@@ -36,7 +36,6 @@ constexpr std::array<std::string_view, 46> kKnownCapabilities{
     "nte-navigation",
     "nte-pickup",
     "nte-ui-buttons",
-    "nte-vehicle",
     "nte-skill-invocation",
     "nte-skills-read",
     "nte-session-snapshot",
@@ -47,6 +46,7 @@ constexpr std::array<std::string_view, 46> kKnownCapabilities{
     "storage",
     "input",
     "ui-font",
+    "ui-overlay",
     "ui-texture",
     "ui-window",
     "ue5-build",
@@ -55,12 +55,14 @@ constexpr std::array<std::string_view, 46> kKnownCapabilities{
     "ue5-objects",
     "ue5-world",
     "ue5-streaming-source",
+    "ue5-assets",
     "ui",
     "json",
     "websocket",
 };
 
-constexpr std::array<ServiceCapabilityMapping, 46> kServiceCapabilities{{
+constexpr std::array<ServiceCapabilityMapping, 47> kServiceCapabilities{{
+    {"anomaly.mods", "mods"},
     {"anomaly.plugin-state", "configuration"},
     {"anomaly.config", "configuration"},
     {"anomaly.storage", "storage"},
@@ -81,6 +83,7 @@ constexpr std::array<ServiceCapabilityMapping, 46> kServiceCapabilities{{
     {"anomaly.texture", "ui-texture"},
     {"anomaly.input", "input"},
     {"anomaly.json", "json"},
+    {"anomaly.profile", "json"},
     {"anomaly.ue5.build", "ue5-build"},
     {"anomaly.ue5.ahud", "ue5-ahud"},
     {"anomaly.ue5.framework", "game-events"},
@@ -89,6 +92,7 @@ constexpr std::array<ServiceCapabilityMapping, 46> kServiceCapabilities{{
     {"anomaly.ue5.objects", "ue5-objects"},
     {"anomaly.ue5.world", "ue5-world"},
     {"anomaly.ue5.streaming-source", "ue5-streaming-source"},
+    {"anomaly.ue5.assets", "ue5-assets"},
     {"anomaly.nte.build", "nte-build"},
     {"anomaly.nte.session", "nte-session-snapshot"},
     {"anomaly.nte.metrics", "nte-snapshot-metrics"},
@@ -105,8 +109,6 @@ constexpr std::array<ServiceCapabilityMapping, 46> kServiceCapabilities{{
     {"anomaly.nte.skill-invocation", "nte-skill-invocation"},
     {"anomaly.nte.esc-menu-button", "nte-esc-menu-button"},
     {"anomaly.nte.actors", "nte-actor-snapshot"},
-    {"anomaly.nte.vehicle", "nte-vehicle"},
-    {"anomaly.nte.attack-input", "nte-attack-input"},
 }};
 
 [[nodiscard]] bool IsKnownCapability(const std::string_view capability) noexcept {

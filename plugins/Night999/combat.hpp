@@ -1,0 +1,319 @@
+#pragma once
+// 自动战斗：复用 plugins/common/combat 的共享状态机（静态库 anomaly_plugin_combat）。
+// 策略：技能优先（大招 → 小技能 → 平A），三项各由一个勾选框控制。
+// 结束判据（命中任一即结束本点）：模块报 cleared（半径内连续 3 秒无怪，不要求先见过怪）、
+// 开打 15 秒一次怪都没遇到（面板值设到 3 秒以下才会先生效）；脚本侧另有 5 分钟兜底。判定不看
+// 伤害读数——伤害流读不到时（偏移失效或参与者句柄对不上），「多久没伤害」会在怪还活着时成立。
+
+namespace {
+
+using anomaly::plugins::combat::Host;
+using anomaly::plugins::combat::Result;
+using anomaly::plugins::combat::State;
+
+// 技能输入号与 NTE 战斗示例一致：2 = 小技能，3 = 大招。
+constexpr std::int32_t kCombatSmallInputId = 2;
+constexpr std::int32_t kCombatUltimateInputId = 3;
+// 搜索半径（米）：模块只认这个范围内的怪。
+constexpr double kCombatRadiusDefaultMeters = 15.0;
+constexpr double kCombatRadiusMinimumMeters = 5.0;
+constexpr double kCombatRadiusMaximumMeters = 300.0;
+// 首次接敌超时（秒）：开打后一次怪都没遇到过超过它 ⇒ 判定这个点没怪，直接进下一步。
+constexpr double kCombatFirstContactDefaultSeconds = 15.0;
+constexpr double kCombatFirstContactMinimumSeconds = 1.0;
+constexpr double kCombatFirstContactMaximumSeconds = 120.0;
+// 无怪判据（秒）：半径内连续这么久无怪 ⇒ 本点打完（模块侧计数，不要求先见过怪）。
+constexpr std::uint32_t kCombatNoMonsterSeconds = 3;
+constexpr std::size_t kCombatSecondsTextCapacity = 16;
+constexpr std::size_t kCombatRadiusTextCapacity = 8;
+
+// 自动战斗的收尾原因。脚本循环据此决定下一步（none 以外的值都可走下一步）。
+enum class CombatResult : std::int32_t {
+    none = 0,
+    cleared = 1,
+    first_contact_timeout = 2,
+    stopped = 3,
+};
+
+// on_draw 置位、on_update 消费。
+std::atomic_bool g_combat_start_requested{};
+std::atomic_bool g_combat_stop_requested{};
+std::atomic_bool g_combat_active{};
+// 三个勾选框：自动战斗中是否使用 平A / 小技能 / 大招。
+std::atomic_bool g_combat_use_attack{true};
+std::atomic_bool g_combat_use_small{true};
+std::atomic_bool g_combat_use_ultimate{true};
+// 结束原因（打完后由调用方读取；CombatTakeResult 取走并清零）。
+std::atomic<std::int32_t> g_combat_result{static_cast<std::int32_t>(CombatResult::none)};
+// 面板参数：on_draw 解析后写进原子量，on_update 只读原子量，避免跨线程读 char 缓冲。
+std::atomic<double> g_combat_first_contact_seconds{kCombatFirstContactDefaultSeconds};
+std::atomic<std::uint32_t> g_combat_radius_meters{
+    static_cast<std::uint32_t>(kCombatRadiusDefaultMeters)};
+
+State g_combat_state;
+std::mutex g_combat_mutex;
+std::string g_combat_status;
+
+// 本次自动战斗的开始时刻：首次接敌超时以它为基准。
+std::chrono::steady_clock::time_point g_combat_started_at{};
+// 开打那一刻模块记下的「最近一次玩家命中」：只有本次战斗内被刷新，才说明伤害流真的在工作。
+std::chrono::steady_clock::time_point g_combat_hit_baseline{};
+
+// 两个参数的输入缓冲（on_draw 线程独占，ImGui 文本存储必须跨帧保留）。
+std::array<char, kCombatSecondsTextCapacity> g_combat_first_contact_text{"15"};
+std::array<char, kCombatRadiusTextCapacity> g_combat_radius_text{"15"};
+
+void CombatPublish(std::string text) {
+    std::scoped_lock lock(g_combat_mutex);
+    g_combat_status = std::move(text);
+}
+
+std::string CombatStatusText() {
+    std::scoped_lock lock(g_combat_mutex);
+    return g_combat_status;
+}
+
+// 模块的状态回显入口（模块不直接写面板）。
+void CombatSetStatus(void*, const std::string& text) noexcept {
+    try {
+        CombatPublish(text);
+    } catch (...) {
+    }
+}
+
+// 解析一个数值输入框；非法输入回落到默认值，再夹到 [minimum, maximum]。
+double CombatParseNumber(const char* text, const double fallback, const double minimum,
+                         const double maximum) {
+    if (text == nullptr || text[0] == '\0') return fallback;
+    char* end{};
+    const double value = std::strtod(text, &end);
+    if (end == text || *end != '\0' || !std::isfinite(value)) return fallback;
+    return std::min(std::max(value, minimum), maximum);
+}
+
+// 面板 → 原子量（在 on_draw 里调用；on_update 只读原子量）。
+void CombatSyncParameters() {
+    g_combat_first_contact_seconds.store(CombatParseNumber(
+        g_combat_first_contact_text.data(), kCombatFirstContactDefaultSeconds,
+        kCombatFirstContactMinimumSeconds, kCombatFirstContactMaximumSeconds));
+    g_combat_radius_meters.store(static_cast<std::uint32_t>(CombatParseNumber(
+        g_combat_radius_text.data(), kCombatRadiusDefaultMeters, kCombatRadiusMinimumMeters,
+        kCombatRadiusMaximumMeters)));
+}
+
+// actors / entities / combat / skills / skill_invocation / pickup 会在世界加载后才发布，
+// 本插件 Load 时查询可能静默拿到空指针。这里只补空的，非空不重查。
+void CombatRequireServices() {
+    if (g_context.actors != nullptr && g_context.entities != nullptr &&
+        g_context.combat != nullptr && g_context.skills != nullptr &&
+        g_context.skill_invocation != nullptr && g_context.pickup != nullptr) {
+        return;
+    }
+    const auto view = anomaly::sdk::Host(g_context.host);
+    if (g_context.actors == nullptr) {
+        g_context.actors = view.Query<AnomalyNteActorsServiceV1>(
+            ANOMALY_NTE_ACTORS_SERVICE_V1_ID, ANOMALY_NTE_ACTORS_SERVICE_V1_VERSION).get();
+    }
+    if (g_context.entities == nullptr) {
+        g_context.entities = view.Query<AnomalyNteEntitiesServiceV1>(
+            ANOMALY_NTE_ENTITIES_SERVICE_V1_ID, ANOMALY_NTE_ENTITIES_SERVICE_V1_VERSION).get();
+    }
+    if (g_context.combat == nullptr) {
+        g_context.combat = view.Query<AnomalyNteCombatServiceV1>(
+            ANOMALY_NTE_COMBAT_SERVICE_V1_ID, ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION).get();
+    }
+    if (g_context.skills == nullptr) {
+        g_context.skills = view.Query<AnomalyNteSkillsServiceV1>(
+            ANOMALY_NTE_SKILLS_SERVICE_V1_ID, ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION).get();
+    }
+    if (g_context.skill_invocation == nullptr) {
+        g_context.skill_invocation = view.Query<AnomalyNteSkillInvocationServiceV1>(
+            ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID,
+            ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_VERSION).get();
+    }
+    if (g_context.pickup == nullptr) {
+        g_context.pickup = view.Query<AnomalyNtePickupServiceV1>(
+            ANOMALY_NTE_PICKUP_SERVICE_V1_ID, ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION).get();
+    }
+}
+
+Host CombatMakeHost() {
+    CombatRequireServices();
+    Host host;
+    host.combat = g_context.combat;
+    host.navigation = g_context.navigation;
+    host.actors = g_context.actors;
+    host.entities = g_context.entities;
+    host.names = g_context.names;
+    host.objects = g_context.objects;
+    host.player = g_context.player;
+    host.teleport = g_context.teleport;
+    host.session = g_context.session;
+    host.signature = g_context.signature;
+    host.skills = g_context.skills;
+    host.skill_invocation = g_context.skill_invocation;
+    host.pickup = g_context.pickup;
+    host.search_radius_m = g_combat_radius_meters.load();
+    host.no_monster_seconds = kCombatNoMonsterSeconds;
+    // 半径内连续 3 秒无怪就收工，不要求先见过怪：空点也照这个时间走。
+    host.require_seen_monster = false;
+    host.developer_mode = false;
+    // 清空那一刻由模块发一次范围拾取。
+    host.loot_after_kill = true;
+    // 本插件的策略：技能优先、平A 兜底。
+    host.policy_custom = true;
+    host.use_normal_attack = g_combat_use_attack.load();
+    host.use_skill_small = g_combat_use_small.load();
+    host.use_skill_ultimate = g_combat_use_ultimate.load();
+    host.skill_small_input_id = kCombatSmallInputId;
+    host.skill_ultimate_input_id = kCombatUltimateInputId;
+    host.set_status = &CombatSetStatus;
+    host.status_user = nullptr;
+    return host;
+}
+
+void CombatResetState() {
+    Host host = CombatMakeHost();
+    anomaly::plugins::combat::Reset(host, g_combat_state);
+    g_combat_started_at = {};
+}
+
+// 供生命周期调用：只清状态，不打日志、不改状态行。
+void CombatShutdown() {
+    g_combat_start_requested.store(false);
+    g_combat_stop_requested.store(false);
+    g_combat_active.store(false);
+    g_combat_result.store(static_cast<std::int32_t>(CombatResult::none));
+    CombatResetState();
+}
+
+void CombatFinish(const CombatResult result, const std::string& reason) {
+    // 本次战斗内伤害流是否报过玩家命中（只做诊断，不参与判定）。
+    const bool saw_player_hit = g_combat_state.last_player_hit_at > g_combat_hit_baseline;
+    g_combat_active.store(false);
+    g_combat_result.store(static_cast<std::int32_t>(result));
+    CombatResetState();
+    CombatPublish(reason);
+    Log(ANOMALY_CORE_LOG_LEVEL_V1_INFO,
+        "night999 combat: " + reason +
+            (saw_player_hit ? " [damage observed]" : " [damage never observed]"));
+}
+
+// 取走并清零本次结果（脚本循环用它决定下一步）。
+CombatResult CombatTakeResult() {
+    return static_cast<CombatResult>(g_combat_result.exchange(
+        static_cast<std::int32_t>(CombatResult::none)));
+}
+
+std::string CombatResultName(const CombatResult result) {
+    switch (result) {
+    case CombatResult::cleared:
+        return g_context.localizer.Text("combat.result.cleared", "Cleared");
+    case CombatResult::first_contact_timeout:
+        return g_context.localizer.Text("combat.result.first_contact_timeout",
+                                        "First contact timed out");
+    case CombatResult::stopped:
+        return g_context.localizer.Text("combat.result.stopped", "Stopped");
+    default: return "";
+    }
+}
+
+void AdvanceCombat() {
+    if (g_combat_start_requested.exchange(false)) {
+        g_combat_result.store(static_cast<std::int32_t>(CombatResult::none));
+        // 先重置再打时间戳：`CombatResetState` 会把 `g_combat_started_at` 清零，顺序反了它就在
+        // 同一帧里变成「开打于 epoch」，首次接敌超时立刻成立、怪还没动就去下一个点。
+        CombatResetState();
+        g_combat_started_at = std::chrono::steady_clock::now();
+        g_combat_hit_baseline = g_combat_state.last_player_hit_at;
+        g_combat_active.store(true);
+        CombatPublish(g_context.localizer.Text(
+            "combat.status.started",
+            "Combat: started (skills first, normal attack as fallback)"));
+        // 伤害流入口是否随服务发布：缺失是能力问题，齐全却收不到事件才是偏移或句柄问题。
+        const bool stream_api = g_context.combat != nullptr &&
+            g_context.combat->latest_damage_sequence != nullptr &&
+            g_context.combat->next_damage_event != nullptr;
+        Log(ANOMALY_CORE_LOG_LEVEL_V1_INFO,
+            std::string("night999 combat: started, damage stream ") +
+                (stream_api ? "present" : "absent"));
+    }
+    if (g_combat_stop_requested.exchange(false)) {
+        CombatFinish(CombatResult::stopped,
+                     g_context.localizer.Text("combat.status.stopped", "Combat: stopped"));
+        return;
+    }
+    if (!g_combat_active.load()) return;
+
+    const auto now = std::chrono::steady_clock::now();
+    Host host = CombatMakeHost();
+    const Result result = anomaly::plugins::combat::Tick(host, g_combat_state);
+
+    if (result == Result::cleared) {
+        CombatFinish(CombatResult::cleared,
+                     g_context.localizer.Text(
+                         "combat.status.cleared",
+                         "Combat: cleared (no monsters within the radius for 3 seconds)"));
+        return;
+    }
+    // 首次接敌超时：开打至今没遇到过怪 ⇒ 判定这个点没怪。
+    const double first_contact = g_combat_first_contact_seconds.load();
+    if (!g_combat_state.met_monster &&
+        now - g_combat_started_at >
+            std::chrono::milliseconds(static_cast<long long>(first_contact * 1000.0))) {
+        char seconds[32]{};
+        std::snprintf(seconds, sizeof(seconds), "%.0f", first_contact);
+        const std::array<std::string_view, 1> arguments{std::string_view(seconds)};
+        CombatFinish(CombatResult::first_contact_timeout,
+                     g_context.localizer.Format(
+                         "combat.status.first_contact_timeout",
+                         "Combat: first contact timed out ({0}s without a monster), moving on",
+                         arguments));
+    }
+}
+
+void CombatContent(const AnomalyUiServiceV1* ui) {
+    DrawText(ui, g_context.localizer.Text(
+        "combat.title", "Auto combat (skills first, normal attack as fallback)"));
+
+    if (ui->checkbox != nullptr) {
+        int use_attack = g_combat_use_attack.load() ? 1 : 0;
+        const std::string attack_label =
+            g_context.localizer.Text("combat.option.normal_attack", "Normal attack");
+        if (ui->checkbox(ui->user, StringView(attack_label), &use_attack) != 0) {
+            g_combat_use_attack.store(use_attack != 0);
+        }
+        if (ui->same_line != nullptr) ui->same_line(ui->user, 0.0F, 14.0F);
+        int use_small = g_combat_use_small.load() ? 1 : 0;
+        const std::string small_label =
+            g_context.localizer.Text("combat.option.small_skill", "Small skill (input 2)");
+        if (ui->checkbox(ui->user, StringView(small_label), &use_small) != 0) {
+            g_combat_use_small.store(use_small != 0);
+        }
+        if (ui->same_line != nullptr) ui->same_line(ui->user, 0.0F, 14.0F);
+        int use_ultimate = g_combat_use_ultimate.load() ? 1 : 0;
+        const std::string ultimate_label =
+            g_context.localizer.Text("combat.option.ultimate", "Ultimate (input 3)");
+        if (ui->checkbox(ui->user, StringView(ultimate_label), &use_ultimate) != 0) {
+            g_combat_use_ultimate.store(use_ultimate != 0);
+        }
+    }
+
+    // 单位写进标签：输入框已占掉窗口宽度的 65%，后面挂说明会被挤出窗口。
+    LabeledField(ui, g_context.localizer.Text("combat.label.first_contact",
+                                              "First contact timeout (s)"),
+                 "##night999-combat-first-contact",
+                 g_combat_first_contact_text.data(), g_combat_first_contact_text.size());
+    // 半径就是「打完」的定义：半径内连续 3 秒无怪才收工。
+    LabeledField(ui, g_context.localizer.Text("combat.label.radius", "Search radius (m)"),
+                 "##night999-combat-radius", g_combat_radius_text.data(),
+                 g_combat_radius_text.size());
+    // 解析进原子量：on_update 只读原子量，不跨线程读这些 char 缓冲。
+    CombatSyncParameters();
+
+    // 自动战斗由脚本循环驱动，面板不再提供独立的开始/停止按钮。
+    const std::string status = CombatStatusText();
+    if (!status.empty()) DrawText(ui, status);
+}
+
+}  // namespace

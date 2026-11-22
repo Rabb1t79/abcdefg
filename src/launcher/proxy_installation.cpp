@@ -3,6 +3,7 @@
 #include "anomaly/artifact_crypto.hpp"
 
 #include <Windows.h>
+#include <TlHelp32.h>
 
 #include <algorithm>
 #include <array>
@@ -48,6 +49,97 @@ bool IsTransientMoveFailure(DWORD error) noexcept {
 }
 
 // Filesystem filters can briefly deny delete sharing after Runtime inventory reads.
+
+// A running game keeps Anomaly.Core.dll mapped, which makes the runtime directory impossible to
+// rename (MoveFileEx then fails with ERROR_ACCESS_DENIED instead of a sharing violation).
+
+
+// A directory cannot be renamed while any process keeps it as its working directory, or while a
+// filter holds a handle to it. Files stay writable in that state, so publish by copying over the
+// installed tree instead of moving it.
+bool PublishRuntimeInPlace(
+    const std::filesystem::path& staging, const std::filesystem::path& installed,
+    std::string& failure) {
+    std::error_code error;
+    for (std::filesystem::recursive_directory_iterator iterator(staging, error), end;
+         iterator != end && !error; iterator.increment(error)) {
+        const auto relative = std::filesystem::relative(iterator->path(), staging, error);
+        if (error || relative.empty()) {
+            failure = "staged path is not confined";
+            return false;
+        }
+        const auto target = installed / relative;
+        if (iterator->is_directory(error)) {
+            std::filesystem::create_directories(target, error);
+        } else if (iterator->is_regular_file(error)) {
+            std::filesystem::create_directories(target.parent_path(), error);
+            if (!error) {
+                std::filesystem::copy_file(iterator->path(), target,
+                    std::filesystem::copy_options::overwrite_existing, error);
+            }
+        }
+        if (error) {
+            failure = "could not write " + target.string();
+            return false;
+        }
+    }
+
+    std::vector<std::filesystem::path> stale;
+    for (std::filesystem::recursive_directory_iterator iterator(installed, error), end;
+         iterator != end && !error; iterator.increment(error)) {
+        if (!iterator->is_regular_file(error)) continue;
+        const auto relative = std::filesystem::relative(iterator->path(), installed, error);
+        if (error || relative.empty()) continue;
+        if (!std::filesystem::exists(staging / relative, error) &&
+            !PreservesInstalledRuntimeFile(relative)) {
+            stale.push_back(iterator->path());
+        }
+    }
+    for (const auto& path : stale) std::filesystem::remove(path, error);
+    return true;
+}
+
+// Renaming a directory fails as a whole, which hides which file is actually held open. Probe each
+// file with an exclusive open (no mutation) so the failure can name the offender.
+std::filesystem::path FirstLockedFile(const std::filesystem::path& root) noexcept {
+    std::error_code error;
+    std::filesystem::recursive_directory_iterator iterator(root, error);
+    const std::filesystem::recursive_directory_iterator end;
+    for (; !error && iterator != end; iterator.increment(error)) {
+        if (!iterator->is_regular_file(error)) continue;
+        const std::filesystem::path file = iterator->path();
+        const HANDLE handle = CreateFileW(file.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            const DWORD probe_error = GetLastError();
+            if (probe_error == ERROR_ACCESS_DENIED || probe_error == ERROR_SHARING_VIOLATION) {
+                return file;
+            }
+            continue;
+        }
+        CloseHandle(handle);
+    }
+    return {};
+}
+
+bool GameExecutableRunning() noexcept {
+    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return false;
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    bool running = false;
+    if (Process32FirstW(snapshot, &entry) != FALSE) {
+        do {
+            if (::_wcsicmp(entry.szExeFile, L"HTGame.exe") == 0) {
+                running = true;
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry) != FALSE);
+    }
+    CloseHandle(snapshot);
+    return running;
+}
+
 DWORD MovePath(
     const std::filesystem::path& source,
     const std::filesystem::path& destination) noexcept {
@@ -195,18 +287,6 @@ bool CopyRuntimeTree(
     return true;
 }
 
-bool PreservesInstalledFile(const std::filesystem::path& relative) noexcept {
-    if (relative == L"anomaly.ini" || relative == L"repository.json" ||
-        relative == L"plugin-repositories.json" ||
-        relative == L"anomaly-platform.log") {
-        return true;
-    }
-    const auto first = relative.begin();
-    return first != relative.end() &&
-        (*first == L"config" || *first == L"state" || *first == L"logs" ||
-         *first == L"crashes");
-}
-
 bool MergeInstalledRuntime(
     const std::filesystem::path& installed,
     const std::filesystem::path& staging,
@@ -229,7 +309,7 @@ bool MergeInstalledRuntime(
             std::filesystem::create_directories(target, error);
         } else if (!error && entry.is_regular_file(error)) {
             const bool target_exists = std::filesystem::exists(target, error);
-            if (!error && (!target_exists || PreservesInstalledFile(relative))) {
+            if (!error && (!target_exists || PreservesInstalledRuntimeFile(relative))) {
                 std::filesystem::create_directories(target.parent_path(), error);
                 if (!error) {
                     std::filesystem::copy_file(
@@ -263,6 +343,18 @@ std::filesystem::path UniqueSibling(
 }
 
 }  // namespace
+
+bool PreservesInstalledRuntimeFile(const std::filesystem::path& relative) noexcept {
+    if (relative == L"anomaly.ini" || relative == L"repository.json" ||
+        relative == L"plugin-repositories.json" ||
+        relative == L"anomaly-platform.log") {
+        return true;
+    }
+    const auto first = relative.begin();
+    return first != relative.end() &&
+        (*first == L"config" || *first == L"state" || *first == L"logs" ||
+         *first == L"crashes");
+}
 
 ProxyInstallationStatus InspectProxyInstallation(
     const std::filesystem::path& game_directory,
@@ -340,13 +432,13 @@ ProxyInstallationStatus InspectProxyInstallation(
     if (!runtime_current || !proxy_current) {
         return {ProxyInstallationState::UpdateAvailable,
                 ProxyInstallationError::None, game_directory,
-                "Anomaly installation is incomplete or out of date and can be repaired"};
+                "Anomaly installation is incomplete or out of date and can be repaired", has_enabled};
     }
     return {has_enabled ? ProxyInstallationState::Enabled
                         : ProxyInstallationState::Disabled,
             ProxyInstallationError::None, game_directory,
             has_enabled ? "Anomaly proxy is enabled"
-                        : "Anomaly proxy is disabled for the next launch"};
+                        : "Anomaly proxy is disabled for the next launch", has_enabled};
 }
 
 ProxyInstallationStatus InstallProxyRuntime(
@@ -455,20 +547,50 @@ ProxyInstallationStatus InstallProxyRuntime(
             static_cast<void>(MovePath(runtime_backup, runtime_target));
         }
     };
+    bool runtime_published_in_place{};
     if (replace_runtime && has_runtime) {
+        if (GameExecutableRunning()) {
+            std::filesystem::remove_all(runtime_staging, error);
+            std::filesystem::remove(proxy_staging, error);
+            return Failure(
+                game_directory, ProxyInstallationState::Unavailable,
+                ProxyInstallationError::IoFailure,
+                "the game is still running; close HTGame.exe before updating the runtime");
+        }
         const DWORD move_error = MovePath(runtime_target, runtime_backup);
-        if (move_error != ERROR_SUCCESS) {
+        if (move_error == ERROR_ACCESS_DENIED) {
+            std::string in_place_failure;
+            if (PublishRuntimeInPlace(runtime_staging, runtime_target, in_place_failure)) {
+                // Nothing was moved, so there is no backup to roll back to; the runtime is already
+                // replaced and the staging copy is no longer needed.
+                std::filesystem::remove_all(runtime_staging, error);
+                runtime_published_in_place = true;
+            } else {
+                std::filesystem::remove_all(runtime_staging, error);
+                std::filesystem::remove(proxy_staging, error);
+                return Failure(
+                    game_directory, ProxyInstallationState::Unavailable,
+                    ProxyInstallationError::IoFailure,
+                    "installed runtime could not be prepared for update; " + in_place_failure);
+            }
+        }
+        if (move_error != ERROR_SUCCESS && !runtime_published_in_place) {
             std::filesystem::remove_all(runtime_staging, error);
             std::filesystem::remove(proxy_staging, error);
             return Failure(
                 game_directory, ProxyInstallationState::Unavailable,
                 ProxyInstallationError::IoFailure,
                 Win32Failure(
-                    "installed runtime could not be prepared for update", move_error));
+                    FirstLockedFile(runtime_target).empty()
+                        ? std::string("installed runtime could not be prepared for update")
+                        : "installed runtime could not be prepared for update; locked: " +
+                            FirstLockedFile(runtime_target).string(),
+                    move_error));
         }
         runtime_backed_up = true;
     }
-    const DWORD publish_runtime_error = replace_runtime
+    const bool publish_by_move = replace_runtime && !runtime_published_in_place;
+    const DWORD publish_runtime_error = publish_by_move
         ? MovePath(runtime_staging, runtime_target) : ERROR_SUCCESS;
     if (publish_runtime_error != ERROR_SUCCESS) {
         rollback_runtime();
@@ -480,7 +602,7 @@ ProxyInstallationStatus InstallProxyRuntime(
             Win32Failure(
                 "runtime directory could not be published", publish_runtime_error));
     }
-    runtime_published = replace_runtime;
+    runtime_published = publish_by_move;
 
     const auto proxy_destination = has_disabled ? disabled_target : proxy_target;
     const auto proxy_backup = UniqueSibling(game_directory, L".dwmapi.dll.backup");
@@ -522,11 +644,11 @@ ProxyInstallationStatus SetProxyEnabled(
     bool enabled) {
     const auto current = InspectProxyInstallation(game_directory, source);
     if (current.state != ProxyInstallationState::Enabled &&
-        current.state != ProxyInstallationState::Disabled) {
+        current.state != ProxyInstallationState::Disabled &&
+        current.state != ProxyInstallationState::UpdateAvailable) {
         return current;
     }
-    if ((enabled && current.state == ProxyInstallationState::Enabled) ||
-        (!enabled && current.state == ProxyInstallationState::Disabled)) {
+    if (enabled == current.proxy_enabled) {
         return current;
     }
 
@@ -535,9 +657,65 @@ ProxyInstallationStatus SetProxyEnabled(
     const auto destination = game_directory /
         (enabled ? kProxyName : kDisabledProxyName);
     if (MovePath(proxy_source, destination) != ERROR_SUCCESS) {
-        return Failure(
-            game_directory, current.state, ProxyInstallationError::IoFailure,
-            "proxy state could not be changed");
+        auto failure = current;
+        failure.error = ProxyInstallationError::IoFailure;
+        failure.message = "proxy state could not be changed";
+        return failure;
+    }
+    return InspectProxyInstallation(game_directory, source);
+}
+
+ProxyInstallationStatus UninstallProxy(
+    const std::filesystem::path& game_directory,
+    const ProxyInstallationSource& source) {
+    auto current = InspectProxyInstallation(game_directory, source);
+    if (current.state != ProxyInstallationState::Enabled &&
+        current.state != ProxyInstallationState::Disabled &&
+        current.state != ProxyInstallationState::UpdateAvailable) return current;
+    if (GameExecutableRunning()) {
+        current.error = ProxyInstallationError::IoFailure;
+        current.message = "close HTGame.exe before completely uninstalling Anomaly";
+        return current;
+    }
+    const auto runtime = game_directory / kRuntimeDirectoryName;
+    std::error_code error;
+    const bool has_runtime = std::filesystem::exists(runtime, error);
+    if (IsReparsePoint(runtime)) {
+        current.error = ProxyInstallationError::Conflict;
+        current.message = "installed runtime is a reparse point";
+        return current;
+    }
+    if (has_runtime && !error) {
+        // Check the entire tree before deleting anything; junctions must not lead outside Anomaly.
+        for (std::filesystem::recursive_directory_iterator iterator(runtime, error), end;
+             iterator != end && !error; iterator.increment(error)) {
+            if (IsReparsePoint(iterator->path())) {
+                current.error = ProxyInstallationError::Conflict;
+                current.message = "installed runtime contains a reparse point";
+                return current;
+            }
+        }
+    }
+    if (error) {
+        current.error = ProxyInstallationError::IoFailure;
+        current.message = "installed runtime could not be inspected: " + error.message();
+        return current;
+    }
+    // Keep the recognized proxy until the runtime is gone, so a partial removal can be retried.
+    std::filesystem::remove_all(runtime, error);
+    if (error) {
+        current = InspectProxyInstallation(game_directory, source);
+        current.error = ProxyInstallationError::IoFailure;
+        current.message = "installed runtime could not be completely removed: " + error.message();
+        return current;
+    }
+    const auto proxy = game_directory / (current.proxy_enabled ? kProxyName : kDisabledProxyName);
+    if (!DeleteFileW(proxy.c_str())) {
+        const DWORD delete_error = GetLastError();
+        current = InspectProxyInstallation(game_directory, source);
+        current.error = ProxyInstallationError::IoFailure;
+        current.message = Win32Failure("proxy could not be removed", delete_error);
+        return current;
     }
     return InspectProxyInstallation(game_directory, source);
 }

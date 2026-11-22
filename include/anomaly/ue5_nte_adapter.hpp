@@ -16,6 +16,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -76,6 +77,17 @@ struct NteCombatExecFunctionTargetsSnapshot {
     bool discovery_complete{};
 };
 
+// Internal owned account observation; never contains live engine pointers.
+// Canonical text, accepted width and the source priority are profile-driven and
+// belong to the adapter, so this only carries the sampled values.
+struct NteAccountSample {
+    std::uint64_t hud_value{};
+    std::uint64_t replicated_value{};
+    [[nodiscard]] bool SourcesDisagree() const noexcept {
+        return hud_value != 0 && replicated_value != 0 && hud_value != replicated_value;
+    }
+};
+
 class Ue5NteAdapter final {
 public:
     using TickCallback = std::function<void(double)>;
@@ -107,6 +119,14 @@ public:
         bool framework_hook_ready,
         bool ahud_hook_ready = false,
         bool process_event_hook_ready = false);
+    // Republishes services after framework hooks only came up later than Start. Every flag
+    // may only turn from false to true, and already published tables stay untouched, so this
+    // is safe to call repeatedly instead of restarting the adapter (which would revoke and
+    // republish every service table and disturb loaded plugins).
+    [[nodiscard]] bool AttachHooks(
+        bool framework_hook_ready,
+        bool process_event_hook_ready,
+        bool actor_process_event_ready);
     // Closes cached service tables, detaches callbacks, and revokes registry
     // entries before draining state/callback work. Callback target destruction
     // is deferred off the lifecycle caller. A false result keeps the generation
@@ -157,6 +177,8 @@ public:
     [[nodiscard]] NteCombatDiagnosticsSnapshot CombatDiagnostics() const noexcept;
     // Read-only diagnostic view used by anomaly-cli's ue combat/buffs commands.
     [[nodiscard]] std::string CombatEventsJson(bool buffs_only = false) const;
+    // Worker reads a fresh owned snapshot; absent/stopped sessions return nullopt.
+    [[nodiscard]] std::optional<std::string> AccountKey(bool* sources_disagree = nullptr) const;
     [[nodiscard]] ProfileResolutionSnapshot Resolution() const;
 
 private:

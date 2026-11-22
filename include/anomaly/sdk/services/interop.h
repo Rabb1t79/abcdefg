@@ -4,6 +4,13 @@
 
 #define ANOMALY_SIGNATURE_SERVICE_V1_ID "anomaly.interop.signature"
 #define ANOMALY_SIGNATURE_SERVICE_V1_VERSION 1u
+#define ANOMALY_SIGNATURE_SERVICE_V2_ID ANOMALY_SIGNATURE_SERVICE_V1_ID
+#define ANOMALY_SIGNATURE_SERVICE_V2_VERSION 2u
+#define ANOMALY_SIGNATURE_SERVICE_V3_ID ANOMALY_SIGNATURE_SERVICE_V1_ID
+#define ANOMALY_SIGNATURE_SERVICE_V3_VERSION 3u
+#define ANOMALY_SIGNATURE_BATCH_MAX_PATTERNS_V3 128u
+#define ANOMALY_SIGNATURE_LAYOUT_MAX_FIELDS_V2 32u
+#define ANOMALY_SIGNATURE_LAYOUT_MAX_WITNESSES_V2 32u
 #define ANOMALY_HOOK_SERVICE_V1_ID "anomaly.interop.hook"
 #define ANOMALY_HOOK_SERVICE_V1_VERSION 1u
 #define ANOMALY_PATCH_SERVICE_V1_ID "anomaly.interop.patch"
@@ -39,6 +46,86 @@ typedef struct AnomalySignatureServiceV1 {
         AnomalyStringViewV1 pattern,
         uintptr_t* address);
 } AnomalySignatureServiceV1;
+
+typedef enum AnomalySignatureMemberAccessV2 {
+    ANOMALY_SIGNATURE_MEMBER_READ_V2 = 1,
+    ANOMALY_SIGNATURE_MEMBER_WRITE_V2 = 2,
+    ANOMALY_SIGNATURE_MEMBER_ADDRESS_V2 = 4
+} AnomalySignatureMemberAccessV2;
+
+/* Seeds identify fields in the original instructions; they are never fallback values. */
+typedef struct AnomalySignatureFieldV2 {
+    uint32_t struct_size;
+    AnomalyStringViewV1 id;
+    uint32_t seed_offset;
+    uint32_t alignment;
+} AnomalySignatureFieldV2;
+
+typedef struct AnomalySignatureMemberV2 {
+    uint32_t struct_size;
+    uint32_t field_index;
+    int32_t addend; /* instruction member offset = field offset + addend */
+    uint32_t width; /* bytes read/written; address-only uses do not access the field */
+    uint32_t access; /* AnomalySignatureMemberAccessV2 flags */
+} AnomalySignatureMemberV2;
+
+/* Witnesses begin at function entry with the object in RCX (Windows x64). */
+typedef struct AnomalySignatureWitnessV2 {
+    uint32_t struct_size;
+    AnomalyStringViewV1 id;
+    AnomalyStringViewV1 pattern;
+    const AnomalySignatureMemberV2* members;
+    uint32_t member_count;
+} AnomalySignatureWitnessV2;
+
+typedef struct AnomalySignatureLayoutRequestV2 {
+    uint32_t struct_size;
+    AnomalyStringViewV1 module_name;
+    AnomalyStringViewV1 section_name;
+    const AnomalySignatureFieldV2* fields;
+    uint32_t field_count;
+    const AnomalySignatureWitnessV2* witnesses;
+    uint32_t witness_count;
+} AnomalySignatureLayoutRequestV2;
+
+typedef struct AnomalySignatureServiceV2 {
+    uint32_t struct_size;
+    uint32_t service_version;
+    void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *resolve)(
+        void* user, AnomalyStringViewV1 module_name, AnomalyStringViewV1 section_name,
+        AnomalyStringViewV1 pattern, uintptr_t* address);
+    /* Lifecycle/Worker only. Caller owns the arrays, in declaration order.
+       Counts must equal request counts. For a live plugin context, once the request prefix and output
+       counts/pointers are valid, failure clears both arrays. Success publishes
+       a complete, validated layout: one offset for every declared field and one address per declared
+       witness, where a witness the module no longer contains is published as zero and contributes no
+       field evidence. An ambiguous witness fails the call with ANOMALY_STATUS_V1_CONFLICT.
+       No handle or host object escapes. */
+    AnomalyStatusV1 (ANOMALY_CALL *resolve_layout)(
+        void* user, const AnomalySignatureLayoutRequestV2* request,
+        uintptr_t* addresses, uint32_t address_count,
+        uint32_t* offsets, uint32_t offset_count);
+} AnomalySignatureServiceV2;
+
+typedef struct AnomalySignatureServiceV3 {
+    uint32_t struct_size;
+    uint32_t service_version;
+    void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *resolve)(
+        void* user, AnomalyStringViewV1 module_name, AnomalyStringViewV1 section_name,
+        AnomalyStringViewV1 pattern, uintptr_t* address);
+    AnomalyStatusV1 (ANOMALY_CALL *resolve_layout)(
+        void* user, const AnomalySignatureLayoutRequestV2* request,
+        uintptr_t* addresses, uint32_t address_count,
+        uint32_t* offsets, uint32_t offset_count);
+    /* Lifecycle/Worker only. Each result is independently OK, NOT_FOUND, or
+       CONFLICT; addresses are zero unless the corresponding result is OK. */
+    AnomalyStatusV1 (ANOMALY_CALL *resolve_batch)(
+        void* user, AnomalyStringViewV1 module_name, AnomalyStringViewV1 section_name,
+        const AnomalyStringViewV1* patterns, uint32_t count,
+        uint32_t* status_codes, uintptr_t* addresses);
+} AnomalySignatureServiceV3;
 
 typedef struct AnomalyHookServiceV1 {
     uint32_t struct_size;

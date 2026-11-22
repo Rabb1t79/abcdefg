@@ -82,6 +82,17 @@ typedef struct AnomalyUe5ProcessEventServiceV1 {
         void* callback_user, AnomalyGenerationHandleV1* handle);
     AnomalyStatusV1 (ANOMALY_CALL *unsubscribe)(
         void* user, AnomalyGenerationHandleV1 handle);
+    // Appended V1 extension; check struct_size before reading invoke.
+    // Synchronous, Game thread only. Handles use the ue5.objects domain, not
+    // ue5.world or nte.player snapshot identities. nte.player.get_object_handles
+    // also produces compatible receiver handles.
+    // parameters is a caller-owned in/out buffer with capacity >= UFunction::ParmsSize;
+    // out/return fields are available on return. Null is valid for zero-parameter calls.
+    // The caller supplies an actual UFunction, compatible receiver and initialized UE values.
+    // No function allowlist, parameter schema matching, or FunctionFlags rewriting.
+    AnomalyStatusV1 (ANOMALY_CALL *invoke)(
+        void* user, AnomalyGenerationHandleV1 object,
+        AnomalyGenerationHandleV1 function, void* parameters, size_t parameter_size);
 } AnomalyUe5ProcessEventServiceV1;
 typedef struct AnomalyUe5NamesServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
@@ -153,6 +164,37 @@ typedef struct AnomalyUe5StreamingSourceServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *set_override)(void* user, const AnomalyUe5StreamingSourceOverrideV1* request);
     AnomalyStatusV1 (ANOMALY_CALL *clear_override)(void* user);
 } AnomalyUe5StreamingSourceServiceV1;
+
+#define ANOMALY_UE5_ASSETS_SERVICE_V1_ID "anomaly.ue5.assets"
+#define ANOMALY_UE5_ASSETS_SERVICE_V1_VERSION 1u
+// Synchronous visitors run on the calling Worker and are never retained. Views
+// expire when the visitor returns. Return zero to cancel enumeration; on any
+// non-OK status discard the partial result. No UObject is exposed or loaded by
+// class enumeration.
+typedef int (ANOMALY_CALL *AnomalyUe5AssetClassVisitorV1)(void* user, AnomalyStringViewV1 path);
+typedef int (ANOMALY_CALL *AnomalyUe5StringTableVisitorV1)(
+    void* user, AnomalyStringViewV1 key, AnomalyStringViewV1 source_string);
+typedef struct AnomalyUe5AssetsServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    // Game only: bind a loaded base UClass by its full path (e.g. /Script/Engine.Actor).
+    // This does not enumerate or load its descendants. Repeated calls are cheap.
+    AnomalyStatusV1 (ANOMALY_CALL *prepare_class)(void* user, AnomalyStringViewV1 base_class);
+    // Worker only: engine registry query including never-loaded generated classes.
+    // Class paths are complete; callers must not append another _C suffix.
+    AnomalyStatusV1 (ANOMALY_CALL *enumerate_derived)(void* user, AnomalyStringViewV1 base_class,
+        AnomalyUe5AssetClassVisitorV1 visitor, void* visitor_user);
+    // Game only: request an entire StringTable asset through engine async loading,
+    // then copy at most 8 entries with a 1 ms soft budget checked between entries.
+    // Individual engine calls cannot be preempted. UNAVAILABLE means
+    // pending; call on subsequent ticks, never spin. No monster blueprint/CDO load.
+    AnomalyStatusV1 (ANOMALY_CALL *prepare_string_table)(void* user, AnomalyStringViewV1 asset_path);
+    // Worker only: visit an immutable complete table, independent of loaded actors.
+    // Values are the asset's source strings, NOT a culture-specific locres lookup.
+    // Keys and source strings may be empty; empty entries do not end enumeration.
+    AnomalyStatusV1 (ANOMALY_CALL *enumerate_string_table)(void* user, AnomalyStringViewV1 asset_path,
+        AnomalyUe5StringTableVisitorV1 visitor, void* visitor_user);
+} AnomalyUe5AssetsServiceV1;
+
 #ifdef __cplusplus
 }
 #endif

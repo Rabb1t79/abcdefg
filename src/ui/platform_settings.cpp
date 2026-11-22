@@ -149,7 +149,10 @@ nlohmann::json Serialize(
             {"interface.scale_percent", values.interface_scale_percent},
             {"interface.opacity_percent", values.interface_opacity_percent},
             {"interface.reduced_motion", values.interface_reduced_motion},
+            {"interface.reduced_transparency", values.interface_reduced_transparency},
             {"interface.remember_last_route", values.interface_remember_last_route},
+            {"interface.horizontal_layout", values.interface_horizontal_layout},
+            {"interface.notice_accepted_version", values.interface_notice_accepted_version},
             {"input.menu_toggle", values.input_menu_toggle},
             {"input.capture_policy", PlatformInputCapturePolicyName(values.input_capture_policy)},
             {"input.gamepad_navigation", values.input_gamepad_navigation},
@@ -316,7 +319,12 @@ public:
             }
             ReadValue(values, "interface.opacity_percent", snapshot_.values.interface_opacity_percent);
             ReadValue(values, "interface.reduced_motion", snapshot_.values.interface_reduced_motion);
+            ReadValue(values, "interface.reduced_transparency",
+                snapshot_.values.interface_reduced_transparency);
             ReadValue(values, "interface.remember_last_route", snapshot_.values.interface_remember_last_route);
+            ReadValue(values, "interface.horizontal_layout", snapshot_.values.interface_horizontal_layout);
+            ReadValue(values, "interface.notice_accepted_version",
+                snapshot_.values.interface_notice_accepted_version);
             const auto persisted_toggle = values.find("input.menu_toggle");
             if (persisted_toggle != values.end()) {
                 const auto json_toggle = persisted_toggle->get<std::uint32_t>();
@@ -443,6 +451,23 @@ public:
         return true;
     }
 
+    bool RecordNoticeAcceptance(const std::uint32_t version) {
+        if (version == 0) return false;
+        std::scoped_lock lock(mutex_);
+        if (!snapshot_.ready) return false;
+        const std::uint32_t previous = snapshot_.values.interface_notice_accepted_version;
+        if (previous >= version) return true;
+        snapshot_.values.interface_notice_accepted_version = version;
+        const std::string text =
+            Serialize(snapshot_.values, snapshot_.revision, snapshot_.last_route).dump(2);
+        const auto bytes = std::as_bytes(std::span(text.data(), text.size()));
+        if (!storage_.WriteAtomic(kSettingsPath, bytes)) {
+            snapshot_.values.interface_notice_accepted_version = previous;
+            return false;
+        }
+        return true;
+    }
+
 private:
     std::filesystem::path runtime_root_;
     ReliableStorage storage_;
@@ -466,6 +491,10 @@ PlatformSettingsApplyResult PlatformSettingsStore::Apply(
 
 bool PlatformSettingsStore::RecordLastRoute(const std::string_view route) {
     return impl_->RecordLastRoute(route);
+}
+
+bool PlatformSettingsStore::RecordNoticeAcceptance(const std::uint32_t version) {
+    return impl_->RecordNoticeAcceptance(version);
 }
 
 }  // namespace anomaly

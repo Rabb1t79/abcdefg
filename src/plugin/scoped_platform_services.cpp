@@ -2,7 +2,9 @@
 
 #include "anomaly/hook_manager.hpp"
 #include "anomaly/reliable_storage.hpp"
+#include "anomaly/signature_updater.hpp"
 #include "anomaly/sdk/version.h"
+#include "anomaly/thread_local_value.hpp"
 
 #include <Windows.h>
 
@@ -36,6 +38,11 @@ constexpr std::size_t kMaximumConfigBytes = 1024U * 1024U;
 constexpr std::size_t kMaximumConfigEnvelopeBytes = kMaximumConfigBytes + 256U;
 constexpr std::size_t kMaximumSchemaBytes = 256U * 1024U;
 constexpr std::size_t kMaximumCallbackOutputBytes = 1024U * 1024U;
+
+// The core is manually mapped and cannot carry loader-managed static TLS, so the
+// per-thread status message for resolve_layout uses FLS storage instead of thread_local.
+// The SDK copies the message before the next call on the same thread.
+ThreadLocalObject<std::string> g_layout_diagnostic;
 
 AnomalyStatusV1 Status(const std::uint32_t code, const char* message = nullptr) noexcept {
     return {code, 0, {message, message == nullptr ? 0U : std::strlen(message)}};
@@ -234,6 +241,7 @@ public:
     struct ConfigState final : ResourceState {
         std::string id;
         std::uint32_t version{};
+        std::string schema_document;
         std::unique_ptr<nlohmann::json_schema::json_validator> validator;
     };
 
@@ -387,7 +395,19 @@ public:
         return result;
     }
 
+    std::shared_ptr<SignatureUpdater> SignatureKnowledge(const std::filesystem::path& state) {
+        const auto directory = state / L"signature-knowledge";
+        std::scoped_lock lock(signature_mutex_);
+        auto& cached = signature_updaters_[directory.wstring()];
+        if (!cached) cached = std::make_shared<SignatureUpdater>(directory);
+        return cached;
+    }
+
+    bool IsWorkerThread() const noexcept { return worker_.get_id() == std::this_thread::get_id(); }
+
     CoreMemoryServices memory_services_;
+    std::mutex signature_mutex_;
+    std::unordered_map<std::wstring, std::shared_ptr<SignatureUpdater>> signature_updaters_;
     std::shared_ptr<ResourceLedger> ledger_;
     std::unique_ptr<HookManager> hooks_;
     std::chrono::steady_clock::time_point started_;
@@ -679,6 +699,10 @@ ScopedPlatformServices::ScopedPlatformServices(
 
 ScopedPlatformServices::~ScopedPlatformServices() = default;
 
+bool ScopedPlatformServices::IsWorkerThread() const noexcept {
+    return impl_ && impl_->IsWorkerThread();
+}
+
 AnomalyStatusV1 ScopedPlatformServices::RegisterConfigSchema(
     const ScopedPluginServiceOwner& owner,
     const std::string_view schema_id,
@@ -700,25 +724,45 @@ AnomalyStatusV1 ScopedPlatformServices::RegisterConfigSchema(
         state->owner = owner;
         state->id = std::string(schema_id);
         state->version = schema_version;
+        state->schema_document = schema;
         state->validator = std::make_unique<nlohmann::json_schema::json_validator>(parsed);
         bool inserted{};
+        bool conflict{};
+        AnomalyGenerationHandleV1 existing{};
         {
             std::scoped_lock lock(impl_->mutex_);
-            const bool duplicate = std::any_of(
+            const auto found = std::find_if(
                 impl_->configs_.begin(), impl_->configs_.end(), [&](const auto& entry) {
                     return entry.second && entry.second->active.load(std::memory_order_acquire) &&
                         SameOwner(entry.second->owner, owner) && entry.second->id == schema_id;
                 });
-            if (duplicate) {
-                return Status(ANOMALY_STATUS_V1_CONFLICT, "configuration schema is already registered");
+            if (found != impl_->configs_.end()) {
+                // A generation that failed after registering keeps its schema, and the host
+                // retries that same generation through on_load. Handing back the live handle
+                // makes the retry idempotent instead of parking the plugin in a permanent
+                // conflict; another document or version under the same id stays a conflict.
+                if (found->second->version == schema_version &&
+                    found->second->schema_document == schema) {
+                    existing = {found->first, owner.scope->Generation()};
+                } else {
+                    conflict = true;
+                }
+            } else {
+                state->token = owner.scope->Register(
+                    PluginResourceKind::Config, "config.schema:" + state->id,
+                    [this, state] { RemoveConfig(*impl_, state); });
+                if (state->token == 0) {
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "plugin scope is stopping");
+                }
+                inserted = impl_->configs_.emplace(state->token, state).second;
             }
-            state->token = owner.scope->Register(
-                PluginResourceKind::Config, "config.schema:" + state->id,
-                [this, state] { RemoveConfig(*impl_, state); });
-            if (state->token == 0) {
-                return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "plugin scope is stopping");
-            }
-            inserted = impl_->configs_.emplace(state->token, state).second;
+        }
+        if (conflict) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "configuration schema is already registered");
+        }
+        if (existing.id != 0) {
+            *handle = existing;
+            return Status(ANOMALY_STATUS_V1_OK);
         }
         if (!inserted) {
             static_cast<void>(owner.scope->Release(state->token));
@@ -1239,7 +1283,8 @@ AnomalyStatusV1 ScopedPlatformServices::ResolveSignature(
     const std::string_view module_name,
     const std::string_view section_name,
     const std::string_view pattern,
-    std::uintptr_t* address) noexcept {
+    std::uintptr_t* address,
+    const bool allow_recovery_io) noexcept {
     if (owner.scope == nullptr || address == nullptr || !IsSafeToken(module_name) ||
         !IsSafeToken(section_name) || !IsText(pattern) || pattern.size() > 1024 ||
         !impl_->memory_services_.memory || !impl_->memory_services_.patterns) {
@@ -1250,15 +1295,225 @@ AnomalyStatusV1 ScopedPlatformServices::ResolveSignature(
         if (module.empty()) return InvalidArgument("module name is not UTF-8");
         const auto module_info = impl_->memory_services_.memory->FindModule(module);
         if (!module_info) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "module is not loaded");
+        const auto sections = impl_->memory_services_.memory->EnumerateSections(*module_info);
+        const auto section = std::ranges::find_if(sections, [&](const auto& value) {
+            return value.name == section_name;
+        });
+        if (section == sections.end()) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "section is not loaded");
         const ue5mem::Pattern parsed = impl_->memory_services_.patterns->Parse(pattern);
-        const auto matches = impl_->memory_services_.patterns->ScanSection(
-            *module_info, section_name, parsed, 2);
+        auto matches = impl_->memory_services_.patterns->ScanSection(
+            *section, parsed, 2);
+        std::shared_ptr<SignatureUpdater> updater;
+        std::optional<SignatureScanContext> scan_context;
+        if (allow_recovery_io && !owner.state_directory.empty()) {
+            if (section->characteristics & IMAGE_SCN_MEM_EXECUTE) {
+                updater = impl_->SignatureKnowledge(owner.state_directory);
+                scan_context = SignatureScanContext{*module_info, *section,
+                    [&](auto target, auto output, auto size) {
+                        return impl_->memory_services_.memory->ReadMemoryInto(target, output, size);
+                    },
+                    [&](auto text, auto limit) {
+                        return impl_->memory_services_.patterns->ScanSection(
+                            *section, impl_->memory_services_.patterns->Parse(text), limit);
+                    }};
+            }
+        }
+        if (matches.empty() && updater) {
+            const auto recovered = updater->Recover(*scan_context, "plugin-signature-v1", pattern);
+            if (recovered.instruction != 0) matches.push_back(recovered.instruction);
+        }
         if (matches.empty()) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "signature did not match");
         if (matches.size() != 1) return Status(ANOMALY_STATUS_V1_CONFLICT, "signature matched multiple targets");
+        if (updater) {
+            // Knowledge persistence is optional; its failure cannot invalidate
+            // an otherwise successful exact signature resolution.
+            try {
+                static_cast<void>(updater->Learn(
+                    *scan_context, "plugin-signature-v1", pattern, matches.front(), {}, true));
+            } catch (const std::exception&) {
+            }
+        }
         *address = matches.front();
         return Status(ANOMALY_STATUS_V1_OK);
     } catch (...) {
         return Status(ANOMALY_STATUS_V1_FAILED, "signature preflight failed");
+    }
+}
+
+AnomalyStatusV1 ScopedPlatformServices::ResolveSignatures(
+    const ScopedPluginServiceOwner& owner,
+    const std::string_view module_name,
+    const std::string_view section_name,
+    const AnomalyStringViewV1* patterns,
+    const std::uint32_t count,
+    std::uint32_t* status_codes,
+    std::uintptr_t* addresses,
+    const bool allow_recovery_io) noexcept {
+    if (count == 0 || count > ANOMALY_SIGNATURE_BATCH_MAX_PATTERNS_V3 ||
+        patterns == nullptr || status_codes == nullptr || addresses == nullptr)
+        return InvalidArgument("invalid signature batch");
+    std::fill_n(status_codes, count, ANOMALY_STATUS_V1_NOT_FOUND);
+    std::fill_n(addresses, count, std::uintptr_t{});
+    if (owner.scope == nullptr || !IsSafeToken(module_name) || !IsSafeToken(section_name) ||
+        !impl_->memory_services_.memory || !impl_->memory_services_.patterns)
+        return InvalidArgument();
+    if (!allow_recovery_io)
+        return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "batch resolution requires Lifecycle or Worker");
+    try {
+        std::vector<ue5mem::Pattern> parsed;
+        parsed.reserve(count);
+        for (std::uint32_t index = 0; index < count; ++index) {
+            const auto text = patterns[index].data
+                ? std::string_view(patterns[index].data, patterns[index].size) : std::string_view{};
+            if (!IsText(text) || text.size() > 1024) return InvalidArgument("invalid signature pattern");
+            parsed.push_back(impl_->memory_services_.patterns->Parse(text));
+        }
+        const std::wstring module = WideUtf8(module_name);
+        if (module.empty()) return InvalidArgument("module name is not UTF-8");
+        const auto module_info = impl_->memory_services_.memory->FindModule(module);
+        if (!module_info) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "module is not loaded");
+        const auto sections = impl_->memory_services_.memory->EnumerateSections(*module_info);
+        const auto section = std::ranges::find_if(sections, [&](const auto& value) {
+            return value.name == section_name;
+        });
+        if (section == sections.end()) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "section is not loaded");
+        const auto matches = impl_->memory_services_.patterns->ScanSectionBatch(*section, parsed, 2);
+        std::shared_ptr<SignatureUpdater> updater;
+        std::optional<SignatureScanContext> scan_context;
+        if (!owner.state_directory.empty() && (section->characteristics & IMAGE_SCN_MEM_EXECUTE)) {
+            updater = impl_->SignatureKnowledge(owner.state_directory);
+            scan_context = SignatureScanContext{*module_info, *section,
+                [&](auto target, auto output, auto size) {
+                    return impl_->memory_services_.memory->ReadMemoryInto(target, output, size);
+                },
+                [&](auto text, auto limit) {
+                    return impl_->memory_services_.patterns->ScanSection(
+                        *section, impl_->memory_services_.patterns->Parse(text), limit);
+                }};
+        }
+        for (std::uint32_t index = 0; index < count; ++index) {
+            if (matches[index].size() > 1) {
+                status_codes[index] = ANOMALY_STATUS_V1_CONFLICT;
+                continue;
+            }
+            const auto text = std::string_view(patterns[index].data, patterns[index].size);
+            if (matches[index].size() == 1) {
+                addresses[index] = matches[index].front();
+                status_codes[index] = ANOMALY_STATUS_V1_OK;
+                if (updater) {
+                    try {
+                        static_cast<void>(updater->Learn(
+                            *scan_context, "plugin-signature-v1", text, addresses[index], {}, true));
+                    } catch (const std::exception&) {
+                    }
+                }
+            } else if (updater) {
+                const auto recovered = updater->Recover(*scan_context, "plugin-signature-v1", text);
+                if (recovered.instruction != 0) {
+                    addresses[index] = recovered.instruction;
+                    status_codes[index] = ANOMALY_STATUS_V1_OK;
+                }
+            }
+        }
+        return Status(ANOMALY_STATUS_V1_OK);
+    } catch (const std::invalid_argument&) {
+        return InvalidArgument("signature pattern is invalid");
+    } catch (...) {
+        return Status(ANOMALY_STATUS_V1_FAILED, "signature batch failed");
+    }
+}
+
+AnomalyStatusV1 ScopedPlatformServices::ResolveSignatureLayout(
+    const ScopedPluginServiceOwner& owner, const AnomalySignatureLayoutRequestV2* request,
+    std::uintptr_t* addresses, const std::uint32_t address_count,
+    std::uint32_t* offsets, const std::uint32_t offset_count,
+    const bool allow_recovery_io) noexcept {
+    if (request == nullptr || request->struct_size < sizeof(*request) ||
+        request->field_count == 0 || request->field_count > ANOMALY_SIGNATURE_LAYOUT_MAX_FIELDS_V2 ||
+        request->witness_count == 0 || request->witness_count > ANOMALY_SIGNATURE_LAYOUT_MAX_WITNESSES_V2 ||
+        address_count != request->witness_count || offset_count != request->field_count ||
+        addresses == nullptr || offsets == nullptr) return InvalidArgument("invalid layout request or output counts");
+    std::fill_n(addresses, address_count, std::uintptr_t{});
+    std::fill_n(offsets, offset_count, std::uint32_t{});
+    if (owner.scope == nullptr) return InvalidArgument("plugin scope is unavailable");
+    if (!allow_recovery_io) return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "layout resolution requires Lifecycle or Worker");
+    if (owner.state_directory.empty() || !impl_->memory_services_.memory || !impl_->memory_services_.patterns)
+        return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "layout resolution requires plugin state and memory services");
+    try {
+        const auto text = [](AnomalyStringViewV1 value) {
+            return value.data ? std::string_view(value.data, value.size) : std::string_view{};
+        };
+        const auto module_name = text(request->module_name);
+        const auto section_name = text(request->section_name);
+        if (!IsSafeToken(module_name) || !IsSafeToken(section_name) ||
+            request->fields == nullptr || request->witnesses == nullptr) return InvalidArgument();
+        SignatureLayoutDefinition definition;
+        std::vector<bool> used(request->field_count);
+        for (std::uint32_t i{}; i < request->field_count; ++i) {
+            const auto& field = request->fields[i];
+            if (field.struct_size < sizeof(field)) return InvalidArgument("layout field is truncated");
+            const auto id = text(field.id);
+            if (!IsSafeToken(id) ||
+                (field.alignment != 1 && field.alignment != 2 && field.alignment != 4 && field.alignment != 8) ||
+                field.seed_offset % field.alignment != 0 ||
+                std::ranges::any_of(definition.fields, [&](const auto& other) { return other.id == id; }))
+                return InvalidArgument("invalid layout field");
+            definition.fields.push_back({std::string(id), field.seed_offset, field.alignment});
+        }
+        for (std::uint32_t i{}; i < request->witness_count; ++i) {
+            const auto& witness = request->witnesses[i];
+            if (witness.struct_size < sizeof(witness)) return InvalidArgument("layout witness is truncated");
+            const auto id = text(witness.id);
+            const auto pattern = text(witness.pattern);
+            if (!IsSafeToken(id) ||
+                !IsText(pattern) || pattern.size() > 1024 || witness.members == nullptr ||
+                witness.member_count == 0 || witness.member_count > ANOMALY_SIGNATURE_LAYOUT_MAX_FIELDS_V2 ||
+                std::ranges::any_of(definition.witnesses, [&](const auto& other) { return other.id == id; }))
+                return InvalidArgument("invalid layout witness");
+            static_cast<void>(impl_->memory_services_.patterns->Parse(pattern));
+            SignatureLayoutWitness parsed{std::string(id), std::string(pattern), {}};
+            for (std::uint32_t j{}; j < witness.member_count; ++j) {
+                const auto& member = witness.members[j];
+                if (member.struct_size < sizeof(member) || member.field_index >= request->field_count ||
+                    (member.width != 1 && member.width != 2 && member.width != 4 && member.width != 8) ||
+                    member.access == 0 || (member.access & ~7u) != 0)
+                    return InvalidArgument("invalid layout member binding");
+                parsed.members.push_back({member.field_index, member.addend, member.width, member.access});
+                used[member.field_index] = true;
+            }
+            definition.witnesses.push_back(std::move(parsed));
+        }
+        if (std::ranges::any_of(used, [](bool value) { return !value; }))
+            return InvalidArgument("each layout field requires a witness");
+        const auto module = WideUtf8(module_name);
+        if (module.empty()) return InvalidArgument("module name is not UTF-8");
+        const auto module_info = impl_->memory_services_.memory->FindModule(module);
+        if (!module_info) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "module is not loaded");
+        const auto sections = impl_->memory_services_.memory->EnumerateSections(*module_info);
+        const auto section = std::ranges::find_if(sections, [&](const auto& value) { return value.name == section_name; });
+        if (section == sections.end() || !(section->characteristics & IMAGE_SCN_MEM_EXECUTE))
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "layout witness requires a declared executable section");
+        const SignatureScanContext scan_context{*module_info, *section,
+            [&](auto target, auto output, auto size) {
+                return impl_->memory_services_.memory->ReadMemoryInto(target, output, size);
+            },
+            [&](auto pattern, auto limit) {
+                return impl_->memory_services_.patterns->ScanSection(*section,
+                    impl_->memory_services_.patterns->Parse(pattern), limit);
+            }};
+        const auto resolved = impl_->SignatureKnowledge(owner.state_directory)->ResolveLayout(scan_context, definition);
+        // The SDK copies this message before the next call on this thread.
+        auto& diagnostic = g_layout_diagnostic.Get();
+        diagnostic = resolved.diagnostic;
+        if (!resolved.Ok()) return Status(resolved.conflict ? ANOMALY_STATUS_V1_CONFLICT : ANOMALY_STATUS_V1_NOT_FOUND,
+            diagnostic.c_str());
+        std::copy(resolved.addresses.begin(), resolved.addresses.end(), addresses);
+        std::copy(resolved.offsets.begin(), resolved.offsets.end(), offsets);
+        return Status(ANOMALY_STATUS_V1_OK, diagnostic.c_str());
+    } catch (const std::invalid_argument&) {
+        return InvalidArgument("layout witness pattern is invalid");
+    } catch (...) {
+        return Status(ANOMALY_STATUS_V1_FAILED, "signature layout resolution failed");
     }
 }
 

@@ -1,5 +1,7 @@
 # API 参考
 
+> 🌐 [English](../en/api-reference/README.md) · 简体中文
+
 这是 Anomaly 插件 **纯 C ABI v1** 的完整参考。权威定义始终以 `include/anomaly/sdk/` 下的头文件为准；本参考与之对应并补充语义说明。
 
 面向流程的讲解见[插件开发](../developer-guide/plugin-development.md)。
@@ -14,7 +16,7 @@
 | [插件间 IPC](ipc.md) | `anomaly.ipc` |
 | [WebSocket 广播](websocket.md) | `anomaly.websocket` |
 | [UI 服务](ui-services.md) | `anomaly.ui`、`window`、`font`、`texture`、`input` |
-| [UE5 服务](ue5-services.md) | `ue5.build`、`ahud`、`framework`、`names`、`objects`、`world` |
+| [UE5 服务](ue5-services.md) | `ue5.build`、`ahud`、`framework`、`process-event`、`names`、`objects`、`world` |
 | [NTE 服务](nte-services.md) | `nte.build`、`session`、`player`、`player-teleport`、`map-landmarks`、`navigation`、`pickup`、`ui-buttons`、`combat`、`skills`、`skill-invocation`、`entities`、`actors`、`metrics` |
 | [Manifest 与 capability](manifest-and-capabilities.md) | Manifest v2 schema、capability 映射、状态码 |
 
@@ -82,7 +84,7 @@ uint32_t service_version;  // 本表版本
 void*    user;             // 调用每个函数时作为第一个参数回传
 ```
 
-**消费者在使用一张表前必须**校验 `struct_size` 足够覆盖将要调用的字段，并确认 `service_version == 1`。C++ wrapper `anomaly::sdk::Host::Query<Service>(id, 1)` 封装了这些检查（含 `api_major` 校验），失败返回空 `ServiceRef<Service>`。当前 ABI 不提供旧版服务表或版本别名。
+**消费者调用字段前必须**确认 `struct_size` 覆盖该字段，且 `service_version` 不低于请求的 minimum_version。C++ wrapper `anomaly::sdk::Host::Query<Service>(id, 1)` 校验 Host API、服务表公共前缀和最低版本，失败返回空 `ServiceRef<Service>`；它不保证追加字段存在，使用 `invoke` 等扩展字段时仍须单独检查 `struct_size`。当前 ABI 不提供旧版服务表或版本别名。
 
 > [!IMPORTANT]
 > 服务表属于**一个 Host 生命周期 generation**。来自已停止 / 已替换 generation 的缓存表只能返回 `UNAVAILABLE`（标量查询返回 0），不会在后续 Start generation 上恢复。每次生命周期后重新查询。
@@ -108,12 +110,13 @@ void*    user;             // 调用每个函数时作为第一个参数回传
 | `anomaly.config` | 1 | `configuration` | [config](platform-services.md#anomalyconfig) |
 | `anomaly.storage` | 1 | `storage` | [storage](platform-services.md#anomalystorage) |
 | `anomaly.json` | 1 | `json` | [json](platform-services.md#anomalyjson) |
+| `anomaly.profile` | 1 | `json` | [profile](platform-services.md#anomalyprofile) |
 | `anomaly.runtime-info` | 1 | `runtime-info` | [runtime-info](platform-services.md#anomalyruntime-info) |
 | `anomaly.diagnostics` | 1 | `diagnostics` | [diagnostics](platform-services.md#anomalydiagnostics) |
 | `anomaly.scheduler` | 1 | `scheduler` | [scheduler](platform-services.md#anomalyscheduler) |
 | `anomaly.commands` | 1 | `commands` | [commands](platform-services.md#anomalycommands) |
 | `anomaly.notifications` | 1 | `notifications` | [notifications](platform-services.md#anomalynotifications) |
-| `anomaly.interop.signature` | 1 | `interop-signature` | [signature](interop-and-memory.md#anomalyinteropsignature) |
+| `anomaly.interop.signature` | 1 / 2 / 3 | `interop-signature` | [signature](interop-and-memory.md#anomalyinteropsignature) |
 | `anomaly.interop.hook` | 1 | `interop-hook` | [hook](interop-and-memory.md#anomalyinterophook) |
 | `anomaly.interop.patch` | 1 | `interop-patch` | [patch](interop-and-memory.md#anomalyinteroppatch) |
 | `anomaly.ipc` | 1 | `ipc` | [ipc](ipc.md) |
@@ -126,10 +129,12 @@ void*    user;             // 调用每个函数时作为第一个参数回传
 | `anomaly.ue5.build` | 1 | `ue5-build` | [ue5.build](ue5-services.md#anomalyue5build) |
 | `anomaly.ue5.ahud` | 1 | `ue5-ahud` | [ue5.ahud](ue5-services.md#anomalyue5ahud) |
 | `anomaly.ue5.framework` | 1 | `game-events` | [ue5.framework](ue5-services.md#anomalyue5framework) |
+| `anomaly.ue5.process-event` | 1 | `game-events` | [ue5.process-event](ue5-services.md#anomalyue5process-event) |
 | `anomaly.ue5.names` | 1 | `ue5-names` | [ue5.names](ue5-services.md#anomalyue5names) |
 | `anomaly.ue5.objects` | 1 | `ue5-objects` | [ue5.objects](ue5-services.md#anomalyue5objects) |
 | `anomaly.ue5.world` | 1 | `ue5-world` | [ue5.world](ue5-services.md#anomalyue5world) |
 | `anomaly.ue5.streaming-source` | 1 | `ue5-streaming-source` | [ue5.streaming-source](ue5-services.md#anomalyue5streaming-source) |
+| `anomaly.ue5.assets` | 1 | `ue5-assets` | [ue5.assets](ue5-services.md#anomalyue5assets) |
 | `anomaly.nte.build` | 1 | `nte-build` | [nte.build](nte-services.md#anomalyntebuild) |
 | `anomaly.nte.esc-menu-button` | 1 | `nte-esc-menu-button` | [nte.esc-menu-button](nte-services.md#anomalynteesc-menu-button) |
 | `anomaly.nte.session` | 1 | `nte-session-snapshot` | [nte.session](nte-services.md#anomalyntesession) |

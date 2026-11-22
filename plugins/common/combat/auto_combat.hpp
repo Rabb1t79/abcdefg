@@ -5,7 +5,7 @@
 // 清空后的掉落拾取）。插件是独立 DLL，**不能互相调用**，所以复用只能靠共享源码——这就是
 // 这个模块存在的原因；两份拷贝迟早会漂移。
 //
-// 模块拥有：从战斗流选靶、接近与攻击、「见过怪之后连续 5 秒无怪」的完成判据、清空后的
+// 模块拥有：从战斗流选靶、接近与攻击、「见过怪之后连续 N 秒无怪」的完成判据、清空后的
 //           掉落拾取。
 // 模块不拥有：点位列表、点与点之间的传送/寻路、标记、面板、每点策略（超时/跳过）——
 //           调用方决定何时 tick 它，以及拿结果做什么。
@@ -87,6 +87,8 @@ struct State final {
     // 本点是否已经报过 `cleared`。进入 `cleared` 的那一帧置真，`Reset` 清零；
     // `cleared` 与随之发出的那一次掉落拾取都由它保证「只发生一次」。
     bool cleared_reported{false};
+    // 自定义策略下最近一次出手是不是平A（仅用于状态回显）。
+    bool last_action_normal_attack{};
     // 本帧是否因为「打不动」而 `unavailable`（普攻/技能调用失败），每帧重算。
     // 调用方靠它区分「打不动」与「等服务/等位置/等目标数据」：原实现只在打不动时关掉总开关
     // 并结束副本流程，其余几种只是等待。
@@ -114,6 +116,11 @@ struct Host final {
     // 为空则不拾取。
     const AnomalyNtePickupServiceV1* pickup{};
     std::uint32_t search_radius_m{50};
+    // 完成判据的「无怪秒数」：半径内连续这么多秒无怪即报 `cleared`。
+    std::uint32_t no_monster_seconds{5};
+    // 为真（默认）时计秒必须先见过怪——「本来就没怪的点」由调用方自己的超时收场；
+    // 为假时从进入战斗就开始计，没怪的点也直接按 `cleared` 结束。
+    bool require_seen_monster{true};
     // 攻击目标多久没有造成伤害就当作「打不动」（尸体/道具）：模块据此拉黑并换靶。
     // 注意这条判定不要求伤害流可用——伤害流不可用时它退化成「打了这么久就换靶」。
     double no_damage_grace_seconds{3.0};
@@ -122,15 +129,24 @@ struct Host final {
     // 攻击策略（原 `melee_mode` / `test_input_id`）：近战模式走普攻，否则轮流放技能。
     bool melee_mode{false};
     std::uint32_t test_input_id{15};
+    // ---- Night999 自定义策略：技能优先、平A 兜底，三项各由一个开关控制 ----
+    // 为真时上面两个字段不再生效，改用下面这套：先试大招、再试小技能（都要求冷却已走完），
+    // 都没有可放的技能时才平A。默认全关，不影响既有调用方。
+    bool policy_custom{false};
+    bool use_normal_attack{true};
+    bool use_skill_small{true};
+    bool use_skill_ultimate{true};
+    std::int32_t skill_small_input_id{2};
+    std::int32_t skill_ultimate_input_id{3};
     // 模块不直接写面板：状态字符串经这里回到调用方。
     void (*set_status)(void* user, const std::string& text) noexcept{};
     void* status_user{};
 };
 
 enum class Result : std::uint8_t {
-    // 仍在选靶/接近/交战，或见过怪但无怪时长还没满 5 秒。
+    // 仍在选靶/接近/交战，或连续无怪时长还没满 `host.no_monster_seconds`。
     working,
-    // 见过怪，且连续 5 秒无怪：本点完成（拾取已在内部发出）。
+    // 连续 `host.no_monster_seconds` 秒无怪：本点完成（拾取已在内部发出）。
     cleared,
     // 战斗流或导航不可用，或本帧拿不到目标数据 / 出不了手：调用方决定等待还是放弃
     // （本模块不做超时）。

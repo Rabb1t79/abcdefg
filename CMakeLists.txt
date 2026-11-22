@@ -91,6 +91,10 @@ target_include_directories(anomaly_sdk INTERFACE
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/sdk/AnomalyPlugin.cmake")
 
+# Populate dependencies directly instead of starting an MSBuild sub-build for each.
+if(POLICY CMP0168)
+    cmake_policy(SET CMP0168 NEW)
+endif()
 include(FetchContent)
 FetchContent_Declare(
     imgui
@@ -105,6 +109,22 @@ FetchContent_Declare(
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(minhook)
+
+# Portable BLAKE3 produces the FIoHash metadata for generated compatibility containers.
+FetchContent_Declare(
+    blake3
+    URL https://github.com/BLAKE3-team/BLAKE3/archive/refs/tags/1.3.1.zip
+    URL_HASH SHA256=7a417e3571cde3199cb709d4f732709172ceb35f1ff740e4564faf72a79330c4
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(blake3)
+add_library(anomaly_blake3 STATIC
+    "${blake3_SOURCE_DIR}/c/blake3.c"
+    "${blake3_SOURCE_DIR}/c/blake3_dispatch.c"
+    "${blake3_SOURCE_DIR}/c/blake3_portable.c")
+target_include_directories(anomaly_blake3 PUBLIC "${blake3_SOURCE_DIR}/c")
+target_compile_definitions(anomaly_blake3 PRIVATE
+    BLAKE3_NO_SSE2 BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_NO_AVX512 BLAKE3_USE_NEON=0)
 
 set(JSON_BuildTests OFF)
 set(JSON_Install OFF)
@@ -234,8 +254,47 @@ if(MSVC)
     target_compile_options(anomaly_monkeys_audio PRIVATE /w)
 endif()
 
+# Liquid glass shaders live in src/ui/shaders and are compiled at build time into
+# bytecode headers, so the renderer never compiles HLSL at run time.
+file(GLOB ANOMALY_GLASS_FXC_CANDIDATES
+    "$ENV{ProgramFiles\(x86\)}/Windows Kits/10/bin/*/x64/fxc.exe")
+list(SORT ANOMALY_GLASS_FXC_CANDIDATES COMPARE NATURAL ORDER DESCENDING)
+set(ANOMALY_GLASS_FXC_HINTS "")
+foreach(candidate IN LISTS ANOMALY_GLASS_FXC_CANDIDATES)
+    get_filename_component(candidate_directory "${candidate}" DIRECTORY)
+    list(APPEND ANOMALY_GLASS_FXC_HINTS "${candidate_directory}")
+endforeach()
+find_program(ANOMALY_GLASS_FXC fxc
+    HINTS
+        "${CMAKE_WINDOWS_KITS_10_DIR}/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64"
+        ${ANOMALY_GLASS_FXC_HINTS}
+    REQUIRED)
+set(ANOMALY_GLASS_SHADER_DIR "${GENERATED_DIR}/anomaly/shaders")
+file(MAKE_DIRECTORY "${ANOMALY_GLASS_SHADER_DIR}")
+set(ANOMALY_GLASS_SHADER_HEADERS "")
+function(anomaly_compile_glass_shader source entry profile variable)
+    set(output "${ANOMALY_GLASS_SHADER_DIR}/${variable}.h")
+    add_custom_command(
+        OUTPUT "${output}"
+        COMMAND "${ANOMALY_GLASS_FXC}" /nologo /O3 /Ges /T ${profile} /E ${entry}
+                /Vn ${variable} /Fh "${output}" "${CMAKE_SOURCE_DIR}/${source}"
+        DEPENDS "${CMAKE_SOURCE_DIR}/${source}"
+        COMMENT "Compiling ${source} (${entry})"
+        VERBATIM)
+    set(ANOMALY_GLASS_SHADER_HEADERS ${ANOMALY_GLASS_SHADER_HEADERS} "${output}" PARENT_SCOPE)
+endfunction()
+anomaly_compile_glass_shader(src/ui/shaders/glass_pass.hlsl vs_full vs_4_0 kGlassFullScreenVs)
+anomaly_compile_glass_shader(src/ui/shaders/glass_pass.hlsl ps_down ps_4_0 kGlassDownsamplePs)
+anomaly_compile_glass_shader(src/ui/shaders/glass_pass.hlsl ps_blur ps_4_0 kGlassBlurPs)
+anomaly_compile_glass_shader(src/ui/shaders/glass_surface.hlsl vs_quad vs_4_0 kGlassSurfaceVs)
+anomaly_compile_glass_shader(src/ui/shaders/glass_surface.hlsl ps_glass ps_4_0 kGlassSurfacePs)
+
 add_library(anomaly_imgui STATIC
+    ${ANOMALY_GLASS_SHADER_HEADERS}
+    src/ui/shaders/glass_pass.hlsl
+    src/ui/shaders/glass_surface.hlsl
     src/ui/host_ui_service.cpp
+    src/ui/liquid_glass.cpp
     src/ui/platform_ui_theme.cpp
     "${imgui_SOURCE_DIR}/imgui.cpp"
     "${imgui_SOURCE_DIR}/imgui_draw.cpp"
@@ -245,10 +304,15 @@ add_library(anomaly_imgui STATIC
     "${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp"
     "${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp"
 )
-target_include_directories(anomaly_imgui PUBLIC "${imgui_SOURCE_DIR}" PRIVATE include)
+target_include_directories(anomaly_imgui PUBLIC "${imgui_SOURCE_DIR}"
+    PRIVATE include "${GENERATED_DIR}")
 target_compile_definitions(anomaly_imgui PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(anomaly_imgui PRIVATE /W3 /EHsc)
 target_link_libraries(anomaly_imgui PUBLIC d3d11 d3d12 dxgi dxguid)
+# The .hlsl files are listed for the IDE only; fxc builds them above.
+set_source_files_properties(
+    src/ui/shaders/glass_pass.hlsl src/ui/shaders/glass_surface.hlsl
+    PROPERTIES HEADER_FILE_ONLY TRUE)
 
 add_executable(proxy_generator tools/proxy_generator.cpp)
 target_compile_definitions(proxy_generator PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -264,6 +328,25 @@ file(TO_CMAKE_PATH
     "${CMAKE_SOURCE_DIR}/apps/launcher/AnomalyLauncher.ico"
     ANOMALY_LAUNCHER_ICON_PATH)
 set(PLATFORM_UI_RESOURCES_RC "${GENERATED_DIR}/platform_ui_resources.rc")
+# The same artwork is compiled into the image's read-only data, because a core that is mapped without a
+# loader cannot read its own resource directory once its headers are hidden. Generating it here keeps one
+# source of truth: the PNGs above.
+file(READ "${ANOMALY_PLATFORM_LOGO_PATH}" ANOMALY_PLATFORM_LOGO_HEX HEX)
+file(READ "${ANOMALY_ESC_MENU_LOGO_PATH}" ANOMALY_ESC_MENU_LOGO_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1,"
+    ANOMALY_PLATFORM_LOGO_BYTES "${ANOMALY_PLATFORM_LOGO_HEX}")
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1,"
+    ANOMALY_ESC_MENU_LOGO_BYTES "${ANOMALY_ESC_MENU_LOGO_HEX}")
+string(LENGTH "${ANOMALY_PLATFORM_LOGO_HEX}" ANOMALY_PLATFORM_LOGO_HEX_LENGTH)
+string(LENGTH "${ANOMALY_ESC_MENU_LOGO_HEX}" ANOMALY_ESC_MENU_LOGO_HEX_LENGTH)
+math(EXPR ANOMALY_PLATFORM_LOGO_COUNT "${ANOMALY_PLATFORM_LOGO_HEX_LENGTH} / 2")
+math(EXPR ANOMALY_ESC_MENU_LOGO_COUNT "${ANOMALY_ESC_MENU_LOGO_HEX_LENGTH} / 2")
+file(MAKE_DIRECTORY "${GENERATED_DIR}/anomaly")
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/embedded_artwork.hpp.in"
+    "${GENERATED_DIR}/anomaly/embedded_artwork.hpp" @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${ANOMALY_PLATFORM_LOGO_PATH}" "${ANOMALY_ESC_MENU_LOGO_PATH}")
 set(LAUNCHER_RESOURCES_RC "${GENERATED_DIR}/AnomalyLauncher.rc")
 
 file(MAKE_DIRECTORY "${GENERATED_DIR}")
@@ -299,6 +382,7 @@ configure_file(
     "${GENERATED_DIR}/anomaly/i18n_embedded_catalog.hpp"
     @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/locales/host/en-US.json"
     "${CMAKE_SOURCE_DIR}/schemas/plugin-manifest.schema.json"
     "${CMAKE_SOURCE_DIR}/schemas/build-profile.schema.json"
     "${CMAKE_SOURCE_DIR}/schemas/repository-cache.schema.json"
@@ -306,6 +390,9 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/schemas/repository-index.schema.json"
     "${CMAKE_SOURCE_DIR}/logo-header.png"
     "${CMAKE_SOURCE_DIR}/logo.png"
+    "${CMAKE_SOURCE_DIR}/apps/launcher/assets/mod-placeholder.png"
+    "${CMAKE_SOURCE_DIR}/apps/launcher/assets/afdian-sponsor.png"
+    "${CMAKE_SOURCE_DIR}/apps/launcher/assets/kofi.png"
     "${CMAKE_SOURCE_DIR}/apps/launcher/AnomalyLauncher.ico")
 configure_file(
     "${CMAKE_SOURCE_DIR}/cmake/platform_ui_resources.rc.in"
@@ -322,6 +409,15 @@ configure_file(
     "${CMAKE_SOURCE_DIR}/cmake/plugin_manifest_schema.hpp.in"
     "${GENERATED_DIR}/plugin_manifest_schema.hpp"
     @ONLY)
+file(READ
+    "${CMAKE_SOURCE_DIR}/schemas/plugin-profile.schema.json"
+    ANOMALY_PLUGIN_PROFILE_SCHEMA_JSON)
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/plugin_profile_schema.hpp.in"
+    "${GENERATED_DIR}/plugin_profile_schema.hpp"
+    @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/schemas/plugin-profile.schema.json")
 file(READ
     "${CMAKE_SOURCE_DIR}/schemas/build-profile.schema.json"
     ANOMALY_BUILD_PROFILE_SCHEMA_JSON)
@@ -402,7 +498,9 @@ target_include_directories(
     anomaly_i18n PUBLIC include PRIVATE "${GENERATED_DIR}")
 target_compile_definitions(
     anomaly_i18n PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(anomaly_i18n PRIVATE /W4 /permissive- /EHsc)
+# The embedded catalog is a raw string literal holding UTF-8; without /utf-8 MSVC decodes it
+# with the local code page and the bytes become ill-formed at parse time.
+target_compile_options(anomaly_i18n PRIVATE /W4 /permissive- /EHsc /utf-8)
 target_link_libraries(anomaly_i18n PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(anomaly_config STATIC src/platform/windows/config.cpp)
@@ -411,6 +509,12 @@ target_compile_definitions(
     anomaly_config PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(anomaly_config PRIVATE /W4 /permissive- /EHsc)
 target_link_libraries(anomaly_config PUBLIC anomaly_i18n)
+
+add_library(anomaly_telemetry STATIC src/services/telemetry.cpp)
+target_include_directories(anomaly_telemetry PUBLIC include)
+target_compile_definitions(anomaly_telemetry PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(anomaly_telemetry PRIVATE /W4 /permissive- /EHsc)
+target_link_libraries(anomaly_telemetry PRIVATE winhttp bcrypt shell32 ole32 nlohmann_json::nlohmann_json)
 
 add_library(anomaly_bootstrap_client STATIC src/bootstrap/bootstrap_client.cpp)
 target_include_directories(anomaly_bootstrap_client PUBLIC include)
@@ -466,13 +570,23 @@ target_compile_options(anomaly_ue5_network_deserializer PRIVATE /W4 /permissive-
 target_link_libraries(anomaly_ue5_network_deserializer PUBLIC anomaly_ue5_bit_reader)
 target_link_libraries(anomaly_build_profile PUBLIC anomaly_ue5_network_deserializer)
 
+add_library(anomaly_signature_updater STATIC src/services/signature_updater.cpp)
+target_include_directories(anomaly_signature_updater PUBLIC include
+    PRIVATE "${minhook_SOURCE_DIR}/src/hde")
+target_compile_definitions(anomaly_signature_updater PUBLIC
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(anomaly_signature_updater PRIVATE /W4 /permissive- /EHsc)
+target_link_libraries(anomaly_signature_updater PUBLIC ue5mem_memory
+    PRIVATE anomaly_reliable_storage minhook nlohmann_json::nlohmann_json)
+
 add_library(anomaly_symbol_resolver STATIC src/game/ue5/symbol_resolver.cpp)
 target_include_directories(anomaly_symbol_resolver PUBLIC include)
 target_compile_definitions(
     anomaly_symbol_resolver PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(anomaly_symbol_resolver PRIVATE /W4 /permissive- /EHsc)
 target_link_libraries(
-    anomaly_symbol_resolver PUBLIC anomaly_build_profile anomaly_internal_memory_services)
+    anomaly_symbol_resolver PUBLIC anomaly_build_profile anomaly_internal_memory_services anomaly_artifact_crypto
+    anomaly_signature_updater)
 
 add_library(anomaly_ue5_ftext STATIC src/game/ue5/ue5_ftext.cpp)
 target_include_directories(anomaly_ue5_ftext PUBLIC include)
@@ -497,6 +611,9 @@ target_link_libraries(
 
 add_library(anomaly_adapter_services STATIC
     src/game/ue5/adapter_service_registry.cpp
+    src/game/ue5/ue5_assets.cpp
+    src/game/ue5/ue5_pak.cpp
+    src/game/ue5/ue5_mod_compatibility.cpp
     src/game/ue5/ue5_object_lookup.cpp
     src/game/ue5/ue5_process_event.cpp
     src/game/ue5/ue5_process_event_hook.cpp
@@ -511,10 +628,11 @@ add_library(anomaly_adapter_services STATIC
 target_include_directories(anomaly_adapter_services PUBLIC include)
 target_compile_definitions(
     anomaly_adapter_services PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(anomaly_adapter_services PRIVATE /W4 /permissive- /EHsc)
+target_compile_options(anomaly_adapter_services PRIVATE /W4 /permissive- /EHsc /utf-8)
 target_link_libraries(
     anomaly_adapter_services
-    PUBLIC anomaly_symbol_resolver anomaly_hook_manager anomaly_minhook_backend anomaly_ue5_ftext)
+    PUBLIC anomaly_symbol_resolver anomaly_hook_manager anomaly_minhook_backend anomaly_ue5_ftext
+    PRIVATE anomaly_blake3 bcrypt)
 
 add_library(anomaly_websocket_server STATIC src/platform/windows/websocket_server.cpp)
 target_include_directories(anomaly_websocket_server PUBLIC include)
@@ -524,13 +642,26 @@ target_compile_options(anomaly_websocket_server PRIVATE /W4 /permissive- /EHsc)
 target_link_libraries(anomaly_websocket_server PUBLIC Ws2_32 bcrypt)
 
 add_library(anomaly_nte_profile_runtime STATIC
-    src/game/nte/nte_profile_runtime.cpp)
+    src/game/nte/nte_profile_runtime.cpp
+    src/game/nte/nte_pak_signature_bypass.cpp)
 target_include_directories(anomaly_nte_profile_runtime PUBLIC include)
 target_compile_definitions(
     anomaly_nte_profile_runtime PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(anomaly_nte_profile_runtime PRIVATE /W4 /permissive- /EHsc)
 target_link_libraries(
-    anomaly_nte_profile_runtime PUBLIC anomaly_adapter_services anomaly_ue5_reflection_query)
+    anomaly_nte_profile_runtime PUBLIC anomaly_adapter_services anomaly_ue5_reflection_query
+    PRIVATE nlohmann_json::nlohmann_json)
+
+# Runtime pak mod loading: discovers containers under the game's Paks directory, mounts them through
+# the resolved FPakPlatformFile, and reconciles the mounted set with the directory (hot swap).
+add_library(anomaly_pak_mod_runtime STATIC src/runtime/pak_mod_runtime.cpp)
+target_include_directories(anomaly_pak_mod_runtime PUBLIC include)
+target_compile_definitions(
+    anomaly_pak_mod_runtime PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(anomaly_pak_mod_runtime PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(
+    anomaly_pak_mod_runtime PUBLIC anomaly_adapter_services
+    PRIVATE nlohmann_json::nlohmann_json anomaly_pak_mod_catalog)
 
 add_library(ue5mem_core STATIC
     src/diagnostics/analyzer.cpp
@@ -565,7 +696,9 @@ target_compile_definitions(
 target_compile_options(anomaly_runtime_dispatchers PRIVATE /W4 /permissive- /EHsc)
 target_link_libraries(anomaly_runtime_dispatchers PUBLIC anomaly_dispatcher)
 
-add_library(anomaly_structured_logger STATIC src/services/structured_logger.cpp)
+add_library(anomaly_structured_logger STATIC
+    src/services/log_retention.cpp
+    src/services/structured_logger.cpp)
 target_include_directories(anomaly_structured_logger PUBLIC include)
 target_compile_definitions(
     anomaly_structured_logger PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -579,39 +712,17 @@ target_compile_options(anomaly_crash_reporter PRIVATE /W4 /permissive- /EHsc)
 target_link_libraries(anomaly_crash_reporter PUBLIC Dbghelp)
 
 add_library(anomaly_reliable_storage STATIC src/services/reliable_storage.cpp)
+add_library(anomaly_pak_mod_catalog STATIC
+    src/game/nte/pak_mod_catalog.cpp
+    src/game/nte/mod_group_names.cpp)
+target_include_directories(anomaly_pak_mod_catalog PUBLIC include)
+target_compile_definitions(anomaly_pak_mod_catalog PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(anomaly_pak_mod_catalog PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(anomaly_pak_mod_catalog PUBLIC anomaly_reliable_storage nlohmann_json::nlohmann_json)
 target_include_directories(anomaly_reliable_storage PUBLIC include)
 target_compile_definitions(
     anomaly_reliable_storage PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(anomaly_reliable_storage PRIVATE /W4 /permissive- /EHsc)
-
-add_library(anomaly_runtime_recovery STATIC src/diagnostics/runtime_recovery.cpp)
-target_include_directories(anomaly_runtime_recovery PUBLIC include)
-target_compile_definitions(
-    anomaly_runtime_recovery PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(anomaly_runtime_recovery PRIVATE /W4 /permissive- /EHsc)
-target_link_libraries(anomaly_runtime_recovery
-    PUBLIC anomaly_reliable_storage anomaly_semver
-    PRIVATE nlohmann_json::nlohmann_json)
-
-add_library(anomaly_runtime_crash_coordinator STATIC
-    src/diagnostics/runtime_crash_coordinator.cpp)
-target_include_directories(anomaly_runtime_crash_coordinator PUBLIC include)
-target_compile_definitions(
-    anomaly_runtime_crash_coordinator PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(anomaly_runtime_crash_coordinator PRIVATE /W4 /permissive- /EHsc)
-target_link_libraries(anomaly_runtime_crash_coordinator
-    PUBLIC anomaly_runtime_recovery anomaly_reliable_storage
-    PRIVATE nlohmann_json::nlohmann_json)
-
-add_executable(anomaly_crash_coordinator apps/crash_coordinator/main.cpp)
-set_target_properties(anomaly_crash_coordinator PROPERTIES
-    OUTPUT_NAME "AnomalyCrashCoordinator"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Anomaly")
-target_include_directories(anomaly_crash_coordinator PRIVATE include)
-target_compile_definitions(
-    anomaly_crash_coordinator PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(anomaly_crash_coordinator PRIVATE /W4 /permissive- /EHsc)
-target_link_libraries(anomaly_crash_coordinator PRIVATE anomaly_runtime_crash_coordinator)
 
 add_library(anomaly_artifact_crypto STATIC src/repository/artifact_crypto.cpp)
 target_include_directories(anomaly_artifact_crypto PUBLIC include)
@@ -636,42 +747,40 @@ target_link_libraries(anomaly_launcher_configuration
     PRIVATE nlohmann_json::nlohmann_json Advapi32)
 
 add_library(anomaly_manual_map STATIC
+    src/launcher/import_procedure.cpp
     src/launcher/manual_map.cpp
-    src/launcher/manual_map_remote.asm)
+    src/launcher/manual_map_remote.asm
+    src/launcher/manual_map_hijack.asm
+    src/launcher/manual_map_load_library.asm)
 target_include_directories(anomaly_manual_map PUBLIC include)
 target_compile_definitions(
     anomaly_manual_map PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(anomaly_manual_map PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /EHsc>)
 target_link_libraries(anomaly_manual_map PUBLIC Advapi32 Psapi)
 
-# Injected into the official launcher (NTEGame.exe) to hide its window and ask it to start the game on
-# its own. It is deliberately free-standing: it runs inside a process this repository does not own, has
-# no dependency on any other target here, and reaches Qt only through exports it resolves at runtime.
-# The launcher's kAutoStartOfficialClient switch is off, so nothing injects it; it is still built and
-# shipped so that the auto-start path stays compiled and that one switch is the whole of turning it
-# back on.
-add_library(anomaly_nte_game_hook SHARED src/launcher/hook/nte_game_hook.cpp)
-# It sits with the runtime payload rather than beside the launcher: it is a runtime component, and the
-# launcher's own directory is the one the game install occupies.
-set_target_properties(anomaly_nte_game_hook PROPERTIES
-    OUTPUT_NAME "NTEGameHook"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Anomaly")
-# The launcher ships its own copies of MSVCP140/VCRUNTIME140 and loads them from its runtime directory,
-# so a dynamically linked hook would resolve against that older CRT instead of the one it was built
-# against -- module base names are unique per process, so there is no way to reach the newer one. A
-# static CRT keeps the hook's dependencies to system DLLs whose versions it does not constrain.
-set_target_properties(anomaly_nte_game_hook PROPERTIES
-    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-target_compile_definitions(
-    anomaly_nte_game_hook PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(anomaly_nte_game_hook PRIVATE /W4 /permissive- /EHsc)
-target_link_libraries(anomaly_nte_game_hook PRIVATE User32)
+# The NTEGameHook library that hides the official launcher's window and asks it to start the game is no
+# longer part of this build: the launcher only ever loads it from the kAutoStartOfficialClient path in
+# apps/launcher/main.cpp, that switch is off, so the DLL was built and shipped for nothing. Its source
+# stays at src/launcher/hook/nte_game_hook.cpp without a build rule; bringing it back means adding the
+# target here, in ANOMALY_RELEASE_PE_TARGETS and as a GameRuntime install component.
 
 add_library(anomaly_semver STATIC src/plugin/semver.cpp)
 target_include_directories(anomaly_semver PUBLIC include)
 target_compile_definitions(
     anomaly_semver PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(anomaly_semver PRIVATE /W4 /permissive- /EHsc)
+
+# The launcher's own update check. It reads a GitHub release, decides whether that release is newer
+# than this build, and publishes the downloaded package over the installation. It sits beside the
+# proxy installer because it reuses that installer's list of files an update must not overwrite.
+add_library(anomaly_launcher_release STATIC src/launcher/release_update.cpp)
+target_include_directories(anomaly_launcher_release PUBLIC include)
+target_compile_definitions(
+    anomaly_launcher_release PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(anomaly_launcher_release PRIVATE /W4 /permissive- /EHsc)
+target_link_libraries(anomaly_launcher_release
+    PUBLIC anomaly_launcher_proxy anomaly_semver
+    PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(anomaly_plugin_manifest STATIC
     src/plugin/plugin_manifest.cpp
@@ -685,6 +794,14 @@ target_link_libraries(
     anomaly_plugin_manifest
     PUBLIC anomaly_semver
     PRIVATE nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator)
+
+add_library(anomaly_plugin_profile STATIC src/plugin/plugin_profile.cpp)
+target_include_directories(anomaly_plugin_profile PUBLIC include PRIVATE "${GENERATED_DIR}")
+target_compile_definitions(anomaly_plugin_profile PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(anomaly_plugin_profile PRIVATE /W4 /permissive- /EHsc)
+target_link_libraries(anomaly_plugin_profile
+    PUBLIC anomaly_reliable_storage nlohmann_json::nlohmann_json
+    PRIVATE nlohmann_json_schema_validator::validator)
 
 add_library(anomaly_plugin_compatibility STATIC src/plugin/plugin_compatibility.cpp)
 target_include_directories(anomaly_plugin_compatibility PUBLIC include)
@@ -806,15 +923,6 @@ target_compile_definitions(
 target_compile_options(anomaly_plugin_native_dependency PRIVATE /W4 /permissive- /EHsc)
 target_link_libraries(anomaly_plugin_native_dependency PUBLIC Psapi)
 
-# In-process PE mapper for plugin packages: the plugin image, its relocations,
-# imports and C++ exception data are mapped without the Windows loader, so the
-# image never enters the PEB module list.
-add_library(anomaly_plugin_image_mapper STATIC src/plugin/plugin_image_mapper.cpp)
-target_include_directories(anomaly_plugin_image_mapper PUBLIC include)
-target_compile_definitions(
-    anomaly_plugin_image_mapper PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(anomaly_plugin_image_mapper PRIVATE /W4 /permissive- /EHsc)
-
 add_library(anomaly_plugin_shadow STATIC
     src/plugin/plugin_shadow_store.cpp
     src/plugin/plugin_file_watcher.cpp
@@ -883,6 +991,14 @@ target_include_directories(anomaly_platform_ui_layout PUBLIC include)
 target_compile_definitions(
     anomaly_platform_ui_layout PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(anomaly_platform_ui_layout PRIVATE /W4 /permissive- /EHsc)
+
+# First-launch notice: Markdown parser shared by the host and the preview.
+add_library(anomaly_platform_notice STATIC src/ui/platform_notice.cpp)
+target_include_directories(anomaly_platform_notice PUBLIC include)
+target_compile_definitions(
+    anomaly_platform_notice PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(anomaly_platform_notice PRIVATE /W4 /permissive- /EHsc)
+target_link_libraries(anomaly_platform_notice PRIVATE winhttp)
 target_link_libraries(
     anomaly_platform_ui_layout PRIVATE nlohmann_json::nlohmann_json)
 
@@ -901,6 +1017,7 @@ target_compile_options(anomaly_scoped_platform PRIVATE /W4 /permissive- /EHsc)
 target_link_libraries(
     anomaly_scoped_platform
     PUBLIC anomaly_internal_memory_services anomaly_reliable_storage anomaly_minhook_backend
+    anomaly_signature_updater
     PRIVATE nlohmann_json::nlohmann_json nlohmann_json_schema_validator::validator)
 
 add_library(anomaly_service_graph STATIC src/runtime/service_graph.cpp)
@@ -949,13 +1066,18 @@ target_compile_options(anomaly_core PRIVATE /W4 /permissive- /EHsc)
 # function-local static guards. These targets initialize their process-scoped
 # local statics on the lifecycle thread before publishing concurrent services.
 set(ANOMALY_MANUAL_MAP_TLS_FREE_TARGETS
+    anomaly_telemetry
+    anomaly_blake3
+    anomaly_pak_mod_catalog
     anomaly_core
     anomaly_i18n
     anomaly_adapter_services
     anomaly_imgui
     anomaly_nte_profile_runtime
-    anomaly_plugin_image_mapper
+    anomaly_pak_mod_runtime
     anomaly_plugin_manifest
+    anomaly_plugin_profile
+    anomaly_platform_notice
     anomaly_reliable_storage
     anomaly_repository_configuration
     anomaly_repository_index
@@ -967,27 +1089,30 @@ foreach(target IN LISTS ANOMALY_MANUAL_MAP_TLS_FREE_TARGETS)
 endforeach()
 target_link_libraries(
     anomaly_core PRIVATE
+    bcrypt d3dcompiler
+    anomaly_telemetry
     ue5mem_core anomaly_runtime_kernel anomaly_imgui anomaly_minhook_backend anomaly_ui_service
     anomaly_platform_ui_model
     anomaly_platform_settings
     anomaly_platform_ui_layout
+    anomaly_platform_notice
     anomaly_scoped_platform
     anomaly_plugin_shadow anomaly_plugin_dependency_resolver anomaly_plugin_enablement
-    anomaly_plugin_image_mapper
     anomaly_nte_profile_runtime
+    anomaly_pak_mod_runtime
     anomaly_websocket_server
     anomaly_repository_coordinator
-    anomaly_crash_reporter anomaly_runtime_crash_coordinator
-    anomaly_structured_logger anomaly_ui_resources anomaly_i18n
+    anomaly_crash_reporter
+    anomaly_structured_logger anomaly_ui_resources anomaly_i18n anomaly_plugin_profile
     nlohmann_json::nlohmann_json)
-add_dependencies(anomaly_core anomaly_stage_nte_profiles anomaly_crash_coordinator)
+add_dependencies(anomaly_core anomaly_stage_nte_profiles)
 add_custom_command(TARGET anomaly_core POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_SOURCE_DIR}/CONTACT"
             "$<TARGET_FILE_DIR:anomaly_core>/CONTACT"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/config/anomaly.ini"
-            "$<TARGET_FILE_DIR:anomaly_core>/anomaly.ini"
+    COMMAND "${CMAKE_COMMAND}"
+            "-DANOMALY_RUNTIME_ROOT=$<TARGET_FILE_DIR:anomaly_core>"
+            -P "${CMAKE_SOURCE_DIR}/cmake/initialize_runtime_config.cmake"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_SOURCE_DIR}/config/repository.json"
             "$<TARGET_FILE_DIR:anomaly_core>/repository.json"
@@ -997,6 +1122,10 @@ add_custom_command(TARGET anomaly_core POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_SOURCE_DIR}/locales/host"
             "$<TARGET_FILE_DIR:anomaly_core>/locales/host"
+    # The notice text ships as content, not as a compiled string.
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${CMAKE_SOURCE_DIR}/notices"
+            "$<TARGET_FILE_DIR:anomaly_core>/notices"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_SOURCE_DIR}/assets/fonts"
             "$<TARGET_FILE_DIR:anomaly_core>/assets/fonts"
@@ -1055,6 +1184,15 @@ set_target_properties(anomaly_abi_snapshot PROPERTIES OUTPUT_NAME "anomaly-abi-s
 target_link_libraries(anomaly_abi_snapshot PRIVATE Anomaly::sdk)
 target_compile_options(anomaly_abi_snapshot PRIVATE /W4 /permissive- /EHsc)
 
+# Attaches the runtime core to a game that is already running. It shares the mapper the launcher uses,
+# so the attach it performs is the same one the launcher's live-attach mode performs.
+add_executable(anomaly_injector apps/injector/main.cpp)
+set_target_properties(anomaly_injector PROPERTIES OUTPUT_NAME "anomaly-inject")
+target_include_directories(anomaly_injector PRIVATE include)
+target_compile_definitions(anomaly_injector PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(anomaly_injector PRIVATE /W4 /permissive- /EHsc)
+target_link_libraries(anomaly_injector PRIVATE anomaly_manual_map)
+
 add_executable(anomaly_test_host apps/test_host/main.cpp src/plugin/plugin_manager.cpp)
 set_target_properties(anomaly_test_host PROPERTIES OUTPUT_NAME "anomaly-test-host")
 target_include_directories(anomaly_test_host PRIVATE include)
@@ -1062,118 +1200,187 @@ target_compile_definitions(anomaly_test_host PRIVATE UNICODE _UNICODE WIN32_LEAN
 target_compile_options(anomaly_test_host PRIVATE /W4 /permissive- /EHsc)
 target_link_libraries(anomaly_test_host PRIVATE
     ue5mem_core anomaly_plugin_shadow anomaly_plugin_dependency_resolver anomaly_plugin_enablement
-    anomaly_plugin_image_mapper
     anomaly_adapter_services anomaly_plugin_runtime
     anomaly_structured_logger anomaly_scoped_platform anomaly_ui_resources
-    anomaly_i18n nlohmann_json::nlohmann_json Psapi)
+    anomaly_i18n anomaly_plugin_profile nlohmann_json::nlohmann_json Psapi)
 
 if(ANOMALY_BUILD_TEST_FIXTURES)
-    add_executable(anomaly-platform-preview WIN32
-        apps/render_fixture/platform_preview.cpp
+    enable_testing()
+    add_executable(anomaly_launcher_mod_list_fixture apps/launcher/tests/mod_list_test.cpp)
+    target_compile_options(anomaly_launcher_mod_list_fixture PRIVATE /W4 /permissive- /EHsc)
+    target_link_libraries(anomaly_launcher_mod_list_fixture PRIVATE anomaly_imgui)
+    add_test(NAME launcher_mod_list_scrollbar COMMAND anomaly_launcher_mod_list_fixture)
+    add_executable(anomaly_better_tv_startup_fixture EXCLUDE_FROM_ALL
+        plugins/BetterTV/tests/better_tv_startup_fixture.cpp plugins/BetterTV/audio_output.cpp
+        plugins/BetterTV/bilibili_source.cpp plugins/BetterTV/media_prepare.cpp
+        plugins/BetterTV/bilibili_api.cpp plugins/BetterTV/media_download.cpp
+        plugins/BetterTV/media_validate.cpp plugins/BetterTV/http_client.cpp
+        plugins/BetterTV/file_picker.cpp)
+    target_include_directories(anomaly_better_tv_startup_fixture PRIVATE "${CMAKE_SOURCE_DIR}" include)
+    target_compile_definitions(anomaly_better_tv_startup_fixture PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+    target_compile_options(anomaly_better_tv_startup_fixture PRIVATE /utf-8 /EHsc)
+    target_link_libraries(anomaly_better_tv_startup_fixture PRIVATE Anomaly::sdk nlohmann_json::nlohmann_json
+        mfplay mfreadwrite mfplat mfuuid propsys ole32 xaudio2 shell32 uuid user32 winhttp bcrypt)
+    add_test(NAME better_tv_startup_isolation COMMAND anomaly_better_tv_startup_fixture)
+    add_executable(anomaly_better_tv_restore_fixture EXCLUDE_FROM_ALL
+        plugins/BetterTV/tests/better_tv_restore_fixture.cpp plugins/BetterTV/audio_output.cpp
+        plugins/BetterTV/bilibili_source.cpp plugins/BetterTV/media_prepare.cpp
+        plugins/BetterTV/bilibili_api.cpp plugins/BetterTV/media_download.cpp
+        plugins/BetterTV/media_validate.cpp plugins/BetterTV/http_client.cpp
+        plugins/BetterTV/file_picker.cpp)
+    target_include_directories(anomaly_better_tv_restore_fixture PRIVATE "${CMAKE_SOURCE_DIR}" include)
+    target_compile_definitions(anomaly_better_tv_restore_fixture PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+    target_compile_options(anomaly_better_tv_restore_fixture PRIVATE /utf-8 /EHsc)
+    target_link_libraries(anomaly_better_tv_restore_fixture PRIVATE Anomaly::sdk nlohmann_json::nlohmann_json
+        mfplay mfreadwrite mfplat mfuuid propsys ole32 xaudio2 shell32 uuid user32 winhttp bcrypt)
+    add_test(NAME better_tv_restore COMMAND anomaly_better_tv_restore_fixture
+        "${CMAKE_SOURCE_DIR}/plugins/BetterTV/profile/compatibility.profile.json")
+    add_executable(anomaly_better_tv_picker_fixture EXCLUDE_FROM_ALL
+        plugins/BetterTV/tests/better_tv_picker_fixture.cpp plugins/BetterTV/file_picker.cpp)
+    target_include_directories(anomaly_better_tv_picker_fixture PRIVATE "${CMAKE_SOURCE_DIR}")
+    target_compile_definitions(anomaly_better_tv_picker_fixture PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+    target_compile_options(anomaly_better_tv_picker_fixture PRIVATE /utf-8 /EHsc)
+    target_link_libraries(anomaly_better_tv_picker_fixture PRIVATE ole32 shell32 uuid user32)
+    add_test(NAME better_tv_picker_lifecycle COMMAND anomaly_better_tv_picker_fixture)
+    set_tests_properties(better_tv_picker_lifecycle PROPERTIES TIMEOUT 15)
+    add_executable(anomaly_better_tv_audio_fixture EXCLUDE_FROM_ALL
+        plugins/BetterTV/tests/better_tv_audio_fixture.cpp plugins/BetterTV/audio_output.cpp)
+    target_include_directories(anomaly_better_tv_audio_fixture PRIVATE "${CMAKE_SOURCE_DIR}")
+    target_compile_definitions(anomaly_better_tv_audio_fixture PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(anomaly_better_tv_audio_fixture PRIVATE /utf-8 /EHsc)
+    target_link_libraries(anomaly_better_tv_audio_fixture PRIVATE mfplay mfreadwrite mfplat mfuuid propsys ole32 xaudio2)
+    add_executable(anomaly_better_tv_link_fixture EXCLUDE_FROM_ALL
+        plugins/BetterTV/tests/better_tv_link_fixture.cpp plugins/BetterTV/bilibili_source.cpp)
+    target_include_directories(anomaly_better_tv_link_fixture PRIVATE "${CMAKE_SOURCE_DIR}")
+    target_compile_definitions(anomaly_better_tv_link_fixture PRIVATE
+        NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+    target_compile_options(anomaly_better_tv_link_fixture PRIVATE /utf-8 /W4 /permissive- /EHsc)
+    target_link_libraries(anomaly_better_tv_link_fixture PRIVATE winhttp)
+    add_test(NAME better_tv_bilibili_link COMMAND anomaly_better_tv_link_fixture)
+    add_executable(anomaly_better_tv_prepare_fixture EXCLUDE_FROM_ALL
+        plugins/BetterTV/tests/better_tv_prepare_fixture.cpp
+        plugins/BetterTV/media_prepare.cpp plugins/BetterTV/bilibili_source.cpp
+        plugins/BetterTV/bilibili_api.cpp plugins/BetterTV/media_download.cpp
+        plugins/BetterTV/media_validate.cpp plugins/BetterTV/http_client.cpp)
+    target_include_directories(anomaly_better_tv_prepare_fixture PRIVATE "${CMAKE_SOURCE_DIR}")
+    target_compile_definitions(anomaly_better_tv_prepare_fixture PRIVATE
+        NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+    target_compile_options(anomaly_better_tv_prepare_fixture PRIVATE /utf-8 /W4 /permissive- /EHsc)
+    target_link_libraries(anomaly_better_tv_prepare_fixture PRIVATE
+        nlohmann_json::nlohmann_json winhttp shell32 ole32 bcrypt
+        mfplat mfreadwrite mfuuid)
+    add_test(NAME better_tv_bilibili_prepare COMMAND anomaly_better_tv_prepare_fixture
+        "${CMAKE_SOURCE_DIR}/plugins/BetterTV/tests/data")
+    add_executable(anomaly_better_tv_bilibili_api_fixture EXCLUDE_FROM_ALL
+        plugins/BetterTV/tests/better_tv_bilibili_api_fixture.cpp
+        plugins/BetterTV/bilibili_api.cpp plugins/BetterTV/bilibili_source.cpp
+        plugins/BetterTV/http_client.cpp)
+    target_include_directories(anomaly_better_tv_bilibili_api_fixture PRIVATE "${CMAKE_SOURCE_DIR}")
+    target_compile_definitions(anomaly_better_tv_bilibili_api_fixture PRIVATE
+        NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+    target_compile_options(anomaly_better_tv_bilibili_api_fixture PRIVATE
+        /utf-8 /W4 /permissive- /EHsc)
+    target_link_libraries(anomaly_better_tv_bilibili_api_fixture PRIVATE winhttp bcrypt)
+    add_test(NAME better_tv_bilibili_api COMMAND anomaly_better_tv_bilibili_api_fixture)
+    add_executable(anomaly_better_tv_media_fixture EXCLUDE_FROM_ALL
+        plugins/BetterTV/tests/better_tv_media_fixture.cpp
+        plugins/BetterTV/media_download.cpp plugins/BetterTV/media_validate.cpp
+        plugins/BetterTV/http_client.cpp)
+    target_include_directories(anomaly_better_tv_media_fixture PRIVATE "${CMAKE_SOURCE_DIR}")
+    target_compile_definitions(anomaly_better_tv_media_fixture PRIVATE
+        NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+    target_compile_options(anomaly_better_tv_media_fixture PRIVATE
+        /utf-8 /W4 /permissive- /EHsc)
+    target_link_libraries(anomaly_better_tv_media_fixture PRIVATE
+        winhttp shell32 ole32 mfplat mfreadwrite mfuuid)
+    add_test(NAME better_tv_media COMMAND anomaly_better_tv_media_fixture
+        "${CMAKE_SOURCE_DIR}/plugins/BetterTV/tests/data")
+    add_test(NAME better_tv_video_localization COMMAND pwsh -NoProfile -File
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_plugin_i18n.ps1" -Plugin BetterTV)
+    add_executable(anomaly_ue5_assets_fixture
+        apps/test_host/ue5_assets_fixture.cpp apps/test_host/ue5_assets_c_fixture.c)
+    target_link_libraries(anomaly_ue5_assets_fixture PRIVATE anomaly_adapter_services Anomaly::sdk)
+    target_compile_options(anomaly_ue5_assets_fixture PRIVATE /W4 /utf-8)
+    target_compile_options(anomaly_ue5_assets_fixture PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc>)
+    add_test(NAME ue5_assets_contract COMMAND anomaly_ue5_assets_fixture
+        "${CMAKE_SOURCE_DIR}/profiles/nte/nte-current.json")
+    anomaly_add_plugin(anomaly_test_hook_lifecycle_plugin NO_RELEASE
+        SOURCES apps/test_host/hook_lifecycle_fixture_plugin.cpp
+        MANIFEST apps/test_host/hook_lifecycle_fixture_manifest.json
+        PACKAGE_NAME HookLifecycleFixture
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/fixtures/HookLifecycleFixture")
+    add_dependencies(anomaly_test_host anomaly_test_hook_lifecycle_plugin)
+    add_test(NAME plugin_hook_stop_order
+        COMMAND anomaly_test_host --hook-stop-order-fixture --plugin
+            "$<TARGET_FILE_DIR:anomaly_test_hook_lifecycle_plugin>")
+    add_test(NAME plugin_enablement_drain
+        COMMAND anomaly_test_host --enablement-drain-fixture --plugin
+            "$<TARGET_FILE_DIR:anomaly_test_hook_lifecycle_plugin>")
+    add_executable(anomaly_profile_compatibility_fixture apps/test_host/profile_compatibility_fixture.cpp)
+    target_link_libraries(anomaly_profile_compatibility_fixture PRIVATE anomaly_symbol_resolver nlohmann_json::nlohmann_json)
+    target_compile_options(anomaly_profile_compatibility_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+    add_test(NAME profile_compatibility COMMAND anomaly_profile_compatibility_fixture
+        "${CMAKE_SOURCE_DIR}/profiles/nte/nte-current.json")
+    add_executable(anomaly_signature_coverage_fixture apps/test_host/signature_coverage_fixture.cpp)
+    target_link_libraries(anomaly_signature_coverage_fixture PRIVATE anomaly_signature_updater anomaly_plugin_profile nlohmann_json::nlohmann_json)
+    target_include_directories(anomaly_signature_coverage_fixture PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_compile_options(anomaly_signature_coverage_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+    add_executable(anomaly_d3d12_interop_fixture
+        apps/render_fixture/d3d12_interop_fixture.cpp)
+    target_include_directories(anomaly_d3d12_interop_fixture PRIVATE include src)
+    target_compile_definitions(anomaly_d3d12_interop_fixture PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(anomaly_d3d12_interop_fixture PRIVATE /W4 /permissive- /EHsc)
+    target_link_libraries(anomaly_d3d12_interop_fixture PRIVATE d3d12 dxgi user32)
+    add_test(NAME d3d12_interop COMMAND anomaly_d3d12_interop_fixture)
+    add_executable(anomaly-platform-preview WIN32        apps/platform_preview/main.cpp
         src/ui/platform_host.cpp
         "${PLATFORM_UI_RESOURCES_RC}"
         src/plugin/plugin_manager.cpp)
     set_target_properties(anomaly-platform-preview PROPERTIES
         OUTPUT_NAME "anomaly-platform-preview")
-    target_include_directories(anomaly-platform-preview PRIVATE include src)
-    target_compile_definitions(anomaly-platform-preview PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_compile_options(anomaly-platform-preview PRIVATE /W4 /permissive- /EHsc)
+    target_include_directories(anomaly-platform-preview PRIVATE include src "${GENERATED_DIR}" "")
+    target_compile_definitions(anomaly-platform-preview PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(anomaly-platform-preview PRIVATE /W4 /permissive- /EHsc /utf-8)
     target_link_libraries(
         anomaly-platform-preview PRIVATE
         ue5mem_core anomaly_imgui anomaly_plugin_shadow anomaly_plugin_dependency_resolver
         anomaly_platform_ui_model anomaly_plugin_enablement anomaly_adapter_services
-        anomaly_platform_settings anomaly_platform_ui_layout
-        anomaly_plugin_image_mapper
+        anomaly_platform_settings anomaly_platform_ui_layout anomaly_platform_notice
         anomaly_plugin_runtime
         anomaly_structured_logger anomaly_scoped_platform anomaly_ui_resources
-        anomaly_i18n nlohmann_json::nlohmann_json ole32 shell32)
+        anomaly_i18n anomaly_plugin_profile nlohmann_json::nlohmann_json ole32 shell32 comdlg32)
     add_dependencies(anomaly-platform-preview anomaly_stage_nte_profiles)
 endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/launcher_archive.cmake")
 
 add_executable(anomaly_launcher WIN32
     apps/launcher/main.cpp
     apps/launcher/AnomalyLauncher.manifest
     "${LAUNCHER_RESOURCES_RC}")
 set_target_properties(anomaly_launcher PROPERTIES OUTPUT_NAME "AnomalyLauncher")
+target_link_libraries(anomaly_launcher PRIVATE winhttp anomaly_launcher_archive)
+target_link_libraries(anomaly_launcher PRIVATE nlohmann_json::nlohmann_json anomaly_pak_mod_catalog)
+target_link_libraries(anomaly_launcher PRIVATE advapi32)
+# The launcher carries a few user-facing strings inline; /utf-8 keeps them valid.
+target_compile_options(anomaly_launcher PRIVATE /utf-8)
 target_include_directories(anomaly_launcher PRIVATE include)
 target_compile_definitions(
     anomaly_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(anomaly_launcher PRIVATE /W4 /permissive- /EHsc)
 target_link_options(anomaly_launcher PRIVATE /MANIFESTUAC:NO /DELAYLOAD:dwmapi.dll)
 target_link_libraries(anomaly_launcher PRIVATE
+    anomaly_telemetry
     anomaly_config anomaly_imgui anomaly_launcher_configuration anomaly_launcher_proxy
-    anomaly_manual_map anomaly_runtime_recovery
-    anomaly_platform_settings anomaly_platform_ui_layout
+    anomaly_launcher_release anomaly_manual_map
+    anomaly_platform_notice anomaly_platform_settings anomaly_platform_ui_layout
     anomaly_runtime_launch anomaly_ui_resources
     ole32 shell32 delayimp dcomp)
-# The hook is part of the runtime payload the launcher is installed with, so it is built before the
-# launcher that would inject it.
-add_dependencies(anomaly_launcher dwmapi anomaly_core anomaly_nte_game_hook)
-
-if(ANOMALY_BUILD_TEST_FIXTURES)
-    add_executable(anomaly_render_fixture apps/render_fixture/main.cpp)
-    set_target_properties(anomaly_render_fixture PROPERTIES OUTPUT_NAME "anomaly-render-fixture")
-    target_compile_definitions(
-        anomaly_render_fixture PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_compile_options(anomaly_render_fixture PRIVATE /W4 /permissive- /EHsc)
-    target_link_libraries(
-        anomaly_render_fixture PRIVATE anomaly_runtime_kernel d3d12 dxgi dxguid)
-endif()
-
-# Drives the Host UI button engine (anomaly.nte.ui-buttons) against an in-memory widget
-# tree laid out from the SDK dump, with offsets read from the shipped NTE Profile.
-if(ANOMALY_BUILD_TEST_FIXTURES)
-    add_executable(anomaly_nte_ui_buttons_fixture apps/nte_ui_buttons_fixture/main.cpp)
-    target_compile_definitions(anomaly_nte_ui_buttons_fixture PRIVATE
-        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
-        "ANOMALY_SOURCE_DIR=\"${CMAKE_SOURCE_DIR}\"")
-    target_compile_options(anomaly_nte_ui_buttons_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
-    target_link_libraries(anomaly_nte_ui_buttons_fixture PRIVATE
-        anomaly_adapter_services anomaly_build_profile)
-endif()
-
-# Exercises the Present interception path against a D3D11 swap chain, which is
-# what a title using the D3D11 RHI presents. Nothing covered that path before,
-# which is how an overlay that only knew how to draw with D3D12 could sit in a
-# D3D11 game reporting nothing but "waiting for a command queue". The fixture
-# owns the window, device and swap chain; everything above it is the real
-# embedded platform, hooks included.
-if(ANOMALY_BUILD_TEST_FIXTURES)
-    add_executable(anomaly_d3d11_fixture
-        apps/render_fixture/d3d11_embedded_fixture.cpp
-        src/ui/platform_host.cpp
-        "${PLATFORM_UI_RESOURCES_RC}"
-        src/render/dx12/embedded_bridge.cpp
-        src/render/dx12/embedded_discovery.cpp
-        src/render/dx12/embedded_input.cpp
-        src/render/dx12/embedded_renderer.cpp
-        src/render/dx12/embedded_ui_resource_render_backend.cpp
-        src/ui/embedded_ui.cpp
-        src/game/nte/nte_esc_menu_bridge.cpp
-        src/plugin/plugin_manager.cpp)
-    set_target_properties(anomaly_d3d11_fixture PROPERTIES OUTPUT_NAME "anomaly-d3d11-fixture")
-    target_include_directories(anomaly_d3d11_fixture PRIVATE include src "${GENERATED_DIR}")
-    target_compile_definitions(
-        anomaly_d3d11_fixture PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_compile_options(anomaly_d3d11_fixture PRIVATE /W4 /permissive- /EHsc)
-    target_link_libraries(
-        anomaly_d3d11_fixture PRIVATE
-        ue5mem_core anomaly_runtime_kernel anomaly_imgui anomaly_minhook_backend anomaly_ui_service
-        anomaly_platform_ui_model
-        anomaly_platform_settings
-        anomaly_platform_ui_layout
-        anomaly_scoped_platform
-        anomaly_plugin_shadow anomaly_plugin_dependency_resolver anomaly_plugin_enablement
-        anomaly_plugin_image_mapper
-        anomaly_nte_profile_runtime
-        anomaly_websocket_server
-        anomaly_repository_coordinator
-        anomaly_crash_reporter anomaly_runtime_crash_coordinator
-        anomaly_structured_logger anomaly_ui_resources anomaly_i18n
-        anomaly_adapter_services anomaly_plugin_runtime
-        nlohmann_json::nlohmann_json d3d11 d3d12 dxgi dxguid)
-    add_dependencies(anomaly_d3d11_fixture anomaly_stage_nte_profiles)
-endif()
+# The runtime payload the launcher is installed with is complete without a plugin hook, so the launcher
+# depends only on the pieces it actually loads.
+add_dependencies(anomaly_launcher dwmapi anomaly_core)
 
 option(ANOMALY_BUILD_SDK_EXAMPLES "Build the Anomaly 1.0 SDK example plugins" ON)
 option(ANOMALY_BUILD_BUILTIN_PLUGINS "Build Anomaly bundled plugins" ON)
@@ -1186,12 +1393,12 @@ option(ANOMALY_BUILD_TEST_PLUGINS
 set(ANOMALY_PLATFORM_PREVIEW_STAGE_COMMANDS
     COMMAND "${CMAKE_COMMAND}" -E make_directory
             "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/config/anomaly.ini"
-            "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/anomaly.ini"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_SOURCE_DIR}/locales/host"
             "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/locales/host"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${CMAKE_SOURCE_DIR}/notices"
+            "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/notices"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_SOURCE_DIR}/assets/fonts"
             "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/assets/fonts"
@@ -1241,14 +1448,6 @@ if(ANOMALY_BUILD_SDK_EXAMPLES)
             anomaly_example_nte_combat_demo)
         target_compile_definitions(${example_target} PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
     endforeach()
-    if(TARGET anomaly-platform-preview)
-        add_dependencies(anomaly-platform-preview
-            anomaly_example_hello_ui
-            anomaly_example_tick_counter
-            anomaly_example_reliable_config
-            anomaly_example_nte_inspector
-            anomaly_example_nte_combat_demo)
-    endif()
 endif()
 
 if(ANOMALY_BUILD_BUILTIN_PLUGINS)
@@ -1262,6 +1461,25 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/NteTeleport/manifest.json
         PACKAGE_NAME NteTeleport
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteTeleport")
+    anomaly_add_plugin(anomaly_builtin_nte_vehicle
+        SOURCES plugins/NteVehicle/plugin.cpp plugins/NteVehicle/runtime.cpp
+            plugins/NteVehicle/native_access.cpp
+        MANIFEST plugins/NteVehicle/manifest.json
+        PACKAGE_NAME NteVehicle
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteVehicle")
+    anomaly_add_plugin(anomaly_builtin_mod_manager
+        SOURCES plugins/ModManager/plugin.cpp
+        MANIFEST plugins/ModManager/manifest.json
+        PACKAGE_NAME ModManager
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/ModManager")
+    target_compile_options(anomaly_builtin_mod_manager PRIVATE /utf-8)
+    # The panel reads the Chinese category names its package ships in `assets/mod-groups.json`.
+    target_link_libraries(anomaly_builtin_mod_manager PRIVATE nlohmann_json::nlohmann_json)
+    anomaly_add_plugin(anomaly_builtin_night999
+        SOURCES plugins/Night999/plugin.cpp
+        MANIFEST plugins/Night999/manifest.json
+        PACKAGE_NAME Night999
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/Night999")
     anomaly_add_plugin(anomaly_builtin_nte_movement_hold TEST_PLUGIN
         SOURCES plugins/NteMovementHold/plugin.cpp
         MANIFEST plugins/NteMovementHold/manifest.json
@@ -1282,6 +1500,37 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/EntityESP/manifest.json
         PACKAGE_NAME EntityESP
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/EntityESP")
+    anomaly_add_plugin(anomaly_builtin_memory_dump
+        SOURCES plugins/MemoryDump/plugin.cpp
+        MANIFEST plugins/MemoryDump/manifest.json
+        PACKAGE_NAME MemoryDump
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/MemoryDump")
+    target_compile_options(anomaly_builtin_memory_dump PRIVATE /utf-8)
+
+    anomaly_add_plugin(anomaly_builtin_training_dummy
+        SOURCES plugins/TrainingDummy/plugin.cpp
+        MANIFEST plugins/TrainingDummy/manifest.json
+        PACKAGE_NAME TrainingDummy
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/TrainingDummy")
+    anomaly_add_plugin(anomaly_builtin_summon_lab
+        SOURCES plugins/SummonLab/plugin.cpp
+        MANIFEST plugins/SummonLab/manifest.json
+        PACKAGE_NAME SummonLab
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/SummonLab")
+    target_link_libraries(anomaly_builtin_summon_lab PRIVATE nlohmann_json::nlohmann_json)
+    target_compile_options(anomaly_builtin_summon_lab PRIVATE /utf-8)
+    anomaly_add_plugin(anomaly_builtin_health_display
+        SOURCES plugins/HealthDisplay/plugin.cpp
+        MANIFEST plugins/HealthDisplay/manifest.json
+        PACKAGE_NAME HealthDisplay
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/HealthDisplay")
+    target_compile_options(anomaly_builtin_health_display PRIVATE /utf-8)
+    # 开发者测试插件：只在 ANOMALY_BUILD_TEST_PLUGINS 打开时构建，并只随 TestPlugins 组件安装。
+    anomaly_add_plugin(anomaly_builtin_mod_name_export TEST_PLUGIN
+        SOURCES plugins/ModNameExport/plugin.cpp
+        MANIFEST plugins/ModNameExport/manifest.json
+        PACKAGE_NAME ModNameExport
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/ModNameExport")
     anomaly_add_plugin(anomaly_builtin_pink_paw_heist_esp
         SOURCES
             plugins/PinkPawHeistESP/plugin.cpp
@@ -1289,19 +1538,21 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/PinkPawHeistESP/manifest.json
         PACKAGE_NAME PinkPawHeistESP
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/PinkPawHeistESP")
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        add_executable(anomaly_pink_paw_bank_loop_fixture
+            plugins/PinkPawHeistESP/tests/bank_loop_test.cpp
+            plugins/PinkPawHeistESP/tests/bank_intro_runtime_test.cpp
+            plugins/PinkPawHeistESP/rob_bank_runtime.cpp)
+        target_link_libraries(anomaly_pink_paw_bank_loop_fixture PRIVATE anomaly_sdk)
+        target_include_directories(anomaly_pink_paw_bank_loop_fixture PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        target_compile_options(anomaly_pink_paw_bank_loop_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+    endif()
 
     anomaly_add_plugin(anomaly_builtin_fake_uid
         SOURCES plugins/FakeUID/plugin.cpp
         MANIFEST plugins/FakeUID/manifest.json
         PACKAGE_NAME FakeUID
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/FakeUID")
-    if(ANOMALY_BUILD_TEST_FIXTURES)
-        add_executable(anomaly_fake_uid_latency_fixture plugins/FakeUID/latency_tests.cpp)
-        target_include_directories(anomaly_fake_uid_latency_fixture PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}")
-        target_compile_options(anomaly_fake_uid_latency_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
-        target_compile_definitions(anomaly_fake_uid_latency_fixture PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-        target_link_libraries(anomaly_fake_uid_latency_fixture PRIVATE nlohmann_json::nlohmann_json)
-    endif()
     anomaly_add_plugin(anomaly_builtin_camera_tools
         SOURCES plugins/CameraTools/plugin.cpp
         MANIFEST plugins/CameraTools/manifest.json
@@ -1313,9 +1564,10 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         PACKAGE_NAME CameraBlurFix
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/CameraBlurFix")
     anomaly_add_plugin(anomaly_builtin_better_pose
-        SOURCES plugins/BetterPose/plugin.cpp
+        SOURCES plugins/BetterPose/plugin.cpp plugins/BetterPose/blender_motion.hpp
         MANIFEST plugins/BetterPose/manifest.json
         PACKAGE_NAME BetterPose
+        RESOURCE_DIRECTORIES data
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/BetterPose")
     # MMD (VMD) -> Bip001 motion conversion. The Python converter in tools/mmd2bip is the
     # reference implementation; this is its C++ port, kept in a library because both the
@@ -1327,30 +1579,50 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
     target_compile_definitions(anomaly_mmd2bip_converter PRIVATE
         WIN32_LEAN_AND_MEAN NOMINMAX)
     target_link_libraries(anomaly_mmd2bip_converter PUBLIC nlohmann_json::nlohmann_json)
-    target_link_libraries(anomaly_builtin_better_pose PRIVATE anomaly_mmd2bip_converter winmm)
+    target_link_libraries(anomaly_builtin_better_pose PRIVATE anomaly_mmd2bip_converter winmm ws2_32)
     target_compile_options(anomaly_builtin_better_pose PRIVATE /utf-8)
     if(ANOMALY_BUILD_TEST_FIXTURES)
         add_executable(anomaly_better_pose_accessory_fixture
             plugins/BetterPose/tests/accessory_dynamics_test.cpp)
         target_compile_options(anomaly_better_pose_accessory_fixture PRIVATE /W4 /permissive- /EHsc)
+        add_executable(anomaly_better_pose_blender_motion_fixture
+            plugins/BetterPose/tests/blender_motion_test.cpp)
+        target_compile_options(anomaly_better_pose_blender_motion_fixture PRIVATE
+            /W4 /permissive- /EHsc /utf-8)
+        target_include_directories(anomaly_better_pose_blender_motion_fixture PRIVATE
+            plugins/BetterPose include)
+        target_link_libraries(anomaly_better_pose_blender_motion_fixture PRIVATE
+            nlohmann_json::nlohmann_json)
         add_executable(anomaly_better_pose_visibility_fixture
             plugins/BetterPose/tests/accessory_visibility_test.cpp)
         target_compile_options(anomaly_better_pose_visibility_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
         target_include_directories(anomaly_better_pose_visibility_fixture PRIVATE include)
         target_link_libraries(anomaly_better_pose_visibility_fixture PRIVATE
-            anomaly_mmd2bip_converter winmm user32 ole32 shell32 uuid comdlg32 advapi32 shlwapi)
+            anomaly_mmd2bip_converter winmm ws2_32 user32 ole32 shell32 uuid comdlg32 advapi32 shlwapi)
         add_executable(anomaly_better_pose_character_switch_fixture
             plugins/BetterPose/tests/character_switch_test.cpp)
         target_compile_options(anomaly_better_pose_character_switch_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
         target_include_directories(anomaly_better_pose_character_switch_fixture PRIVATE include)
         target_link_libraries(anomaly_better_pose_character_switch_fixture PRIVATE
-            anomaly_mmd2bip_converter winmm user32 ole32 shell32 uuid comdlg32 advapi32 shlwapi)
+            anomaly_mmd2bip_converter winmm ws2_32 user32 ole32 shell32 uuid comdlg32 advapi32 shlwapi)
         add_executable(anomaly_better_pose_history_fixture
             plugins/BetterPose/tests/pose_history_test.cpp)
         target_compile_options(anomaly_better_pose_history_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
         add_executable(anomaly_better_pose_pose_document_fixture
             plugins/BetterPose/tests/pose_document_test.cpp)
         target_compile_options(anomaly_better_pose_pose_document_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        add_executable(anomaly_better_pose_edit_history_fixture
+            plugins/BetterPose/tests/edit_history_test.cpp)
+        target_compile_options(anomaly_better_pose_edit_history_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        add_executable(anomaly_better_pose_keyframe_fixture
+            plugins/BetterPose/tests/keyframe_track_test.cpp)
+        target_compile_options(anomaly_better_pose_keyframe_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        add_executable(anomaly_better_pose_gizmo_fixture
+            plugins/BetterPose/tests/rotation_gizmo_test.cpp)
+        target_compile_options(anomaly_better_pose_gizmo_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        add_executable(anomaly_better_pose_timeline_fixture
+            plugins/BetterPose/tests/timeline_overlay_test.cpp)
+        target_compile_options(anomaly_better_pose_timeline_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
         add_executable(anomaly_better_pose_limits_fixture
             plugins/BetterPose/tests/joint_limits_test.cpp)
         target_compile_options(anomaly_better_pose_limits_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
@@ -1368,17 +1640,55 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         target_compile_options(anomaly_better_pose_joint_drag_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
         target_include_directories(anomaly_better_pose_joint_drag_fixture PRIVATE include)
         target_link_libraries(anomaly_better_pose_joint_drag_fixture PRIVATE
-            anomaly_mmd2bip_converter winmm user32 ole32 shell32 uuid comdlg32 advapi32 shlwapi)
+            anomaly_mmd2bip_converter winmm ws2_32 user32 ole32 shell32 uuid comdlg32 advapi32 shlwapi)
+        add_executable(anomaly_better_pose_mmd_interpolation_fixture
+            plugins/BetterPose/tests/mmd_interpolation_test.cpp)
+        target_compile_options(anomaly_better_pose_mmd_interpolation_fixture PRIVATE
+            /W4 /permissive- /EHsc /utf-8)
+        target_link_libraries(anomaly_better_pose_mmd_interpolation_fixture PRIVATE
+            anomaly_mmd2bip_converter)
+        add_executable(anomaly_better_pose_standard_bone_fixture
+            plugins/BetterPose/tests/standard_bone_retarget_test.cpp)
+        target_compile_options(anomaly_better_pose_standard_bone_fixture PRIVATE
+            /W4 /permissive- /EHsc /utf-8)
+        target_link_libraries(anomaly_better_pose_standard_bone_fixture PRIVATE
+            anomaly_mmd2bip_converter)
+        add_executable(anomaly_better_pose_motion_amplitude_fixture
+            plugins/BetterPose/tests/motion_amplitude_test.cpp)
+        target_compile_options(anomaly_better_pose_motion_amplitude_fixture PRIVATE
+            /W4 /permissive- /EHsc /utf-8)
+        add_executable(anomaly_better_pose_motion_joint_fixture
+            plugins/BetterPose/tests/motion_joint_calibration_test.cpp)
+        target_compile_options(anomaly_better_pose_motion_joint_fixture PRIVATE
+            /W4 /permissive- /EHsc /utf-8)
+        add_executable(anomaly_better_pose_motion_travel_fixture
+            plugins/BetterPose/tests/motion_travel_test.cpp)
+        target_compile_options(anomaly_better_pose_motion_travel_fixture PRIVATE
+            /W4 /permissive- /EHsc /utf-8)
+        add_executable(anomaly_better_pose_endfield_reference_fixture
+            plugins/BetterPose/tests/endfield_standard_reference_test.cpp)
+        target_compile_options(anomaly_better_pose_endfield_reference_fixture PRIVATE
+            /W4 /permissive- /EHsc /utf-8)
+        target_link_libraries(anomaly_better_pose_endfield_reference_fixture PRIVATE
+            nlohmann_json::nlohmann_json)
+        add_executable(anomaly_better_pose_limb_calibration_fixture
+            plugins/BetterPose/tests/limb_calibration_test.cpp)
+        target_compile_options(anomaly_better_pose_limb_calibration_fixture PRIVATE
+            /W4 /permissive- /EHsc /utf-8)
+        target_include_directories(anomaly_better_pose_limb_calibration_fixture PRIVATE include)
+        target_link_libraries(anomaly_better_pose_limb_calibration_fixture PRIVATE
+            anomaly_mmd2bip_converter winmm ws2_32 user32 ole32 shell32 uuid comdlg32 advapi32 shlwapi)
+        add_executable(anomaly_better_pose_t_pose_calibration_fixture
+            plugins/BetterPose/tests/t_pose_calibration_test.cpp)
+        target_compile_options(anomaly_better_pose_t_pose_calibration_fixture PRIVATE
+            /W4 /permissive- /EHsc /utf-8)
+        target_include_directories(anomaly_better_pose_t_pose_calibration_fixture PRIVATE include)
+        target_link_libraries(anomaly_better_pose_t_pose_calibration_fixture PRIVATE
+            anomaly_mmd2bip_converter winmm ws2_32 user32 ole32 shell32 uuid comdlg32 advapi32 shlwapi)
     endif()
-    # The in-game conversion needs the reference MMD bone table next to the plugin.
-    add_custom_command(TARGET anomaly_builtin_better_pose POST_BUILD
-        COMMAND "${CMAKE_COMMAND}" -E copy_directory
-                "${CMAKE_CURRENT_SOURCE_DIR}/plugins/BetterPose/data"
-                "$<TARGET_FILE_DIR:anomaly_builtin_better_pose>/data"
-        VERBATIM)
     add_executable(anomaly_mmd2bip apps/mmd2bip/main.cpp)
     set_target_properties(anomaly_mmd2bip PROPERTIES OUTPUT_NAME "anomaly-mmd2bip")
-    target_compile_options(anomaly_mmd2bip PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(anomaly_mmd2bip PRIVATE /W4 /permissive- /EHsc /utf-8)
     target_link_libraries(anomaly_mmd2bip PRIVATE anomaly_mmd2bip_converter)
     anomaly_add_plugin(anomaly_builtin_teleport_landmarks_probe TEST_PLUGIN
         SOURCES plugins/TeleportLandmarksProbe/plugin.cpp
@@ -1410,15 +1720,223 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/CloneEnter/manifest.json
         PACKAGE_NAME CloneEnter
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/CloneEnter")
+    anomaly_add_plugin(anomaly_builtin_scene_loader
+        SOURCES plugins/SceneLoader/plugin.cpp
+        MANIFEST plugins/SceneLoader/manifest.json
+        PACKAGE_NAME SceneLoader
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/SceneLoader")
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        add_executable(anomaly_scene_loader_fixture plugins/SceneLoader/tests.cpp)
+        target_compile_features(anomaly_scene_loader_fixture PRIVATE cxx_std_20)
+        target_compile_options(anomaly_scene_loader_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        target_compile_definitions(anomaly_scene_loader_fixture PRIVATE
+            SCENE_LOADER_ZH_CN_CATALOG="${CMAKE_SOURCE_DIR}/plugins/SceneLoader/locales/zh-CN.json")
+    endif()
+
+    # DamageDashboard 已归档：源码保留在 plugins/DamageDashboard（含 ARCHIVED.md），
+    # 不再注册 target，因此不参与构建、打包与安装。
+
+    # 战斗统计：插件只采集，呈现交给随包分发的独立 Overlay 进程（NteCombatTracker.exe）。
+    # 采集引擎刻意不依赖 SDK，便于在没有插件 ABI 的情况下做单元验证。
+    set(ANOMALY_NTE_COMBAT_DIR "plugins/NteCombatTracker")
+    # 插件版本号只来自 manifest 的 version；生成的头文件让插件与 Overlay 共用同一份字符串。
+    file(READ "${CMAKE_SOURCE_DIR}/${ANOMALY_NTE_COMBAT_DIR}/manifest.json"
+        ANOMALY_NTE_COMBAT_MANIFEST_JSON)
+    string(JSON ANOMALY_NTE_COMBAT_PLUGIN_VERSION GET
+        "${ANOMALY_NTE_COMBAT_MANIFEST_JSON}" version)
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/${ANOMALY_NTE_COMBAT_DIR}/cmake/plugin_version.hpp.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/nte_combat_tracker/plugin_version.hpp"
+        @ONLY)
+    add_library(anomaly_nte_combat_engine STATIC
+        ${ANOMALY_NTE_COMBAT_DIR}/src/account_identity.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/attribute_color_map.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/combat_cursor.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/combat_stats_engine.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/damage_log.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/developer_diagnostics.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/event_damage_source_resolver.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/log_worker.cpp)
+    target_include_directories(anomaly_nte_combat_engine PUBLIC
+        "${CMAKE_SOURCE_DIR}/${ANOMALY_NTE_COMBAT_DIR}/src"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/nte_combat_tracker")
+    target_compile_definitions(anomaly_nte_combat_engine PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(anomaly_nte_combat_engine PRIVATE /W4 /permissive- /EHsc /utf-8)
+    target_link_libraries(anomaly_nte_combat_engine PUBLIC
+        bcrypt shell32 ole32 nlohmann_json::nlohmann_json)
+
+    add_library(anomaly_nte_combat_protocol STATIC
+        ${ANOMALY_NTE_COMBAT_DIR}/src/overlay_protocol.cpp)
+    target_include_directories(anomaly_nte_combat_protocol PUBLIC
+        "${CMAKE_SOURCE_DIR}/${ANOMALY_NTE_COMBAT_DIR}/src")
+    target_compile_options(anomaly_nte_combat_protocol PRIVATE /W4 /permissive- /EHsc /utf-8)
+    target_link_libraries(anomaly_nte_combat_protocol PUBLIC
+        anomaly_nte_combat_engine nlohmann_json::nlohmann_json)
+
+    add_library(anomaly_nte_combat_model STATIC
+        ${ANOMALY_NTE_COMBAT_DIR}/src/app_settings.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/combat_export.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/history_reader.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/overlay_model.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/overlay_publish_policy.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/overlay_text_catalog.cpp)
+    target_include_directories(anomaly_nte_combat_model PUBLIC
+        "${CMAKE_SOURCE_DIR}/${ANOMALY_NTE_COMBAT_DIR}/src")
+    target_compile_options(anomaly_nte_combat_model PRIVATE /W4 /permissive- /EHsc /utf-8)
+    target_link_libraries(anomaly_nte_combat_model PUBLIC anomaly_nte_combat_protocol)
+
+    add_library(anomaly_nte_combat_uid STATIC
+        ${ANOMALY_NTE_COMBAT_DIR}/src/native_layout.cpp
+        ${ANOMALY_NTE_COMBAT_DIR}/src/uid_detector.cpp)
+    target_include_directories(anomaly_nte_combat_uid PUBLIC
+        "${CMAKE_SOURCE_DIR}/${ANOMALY_NTE_COMBAT_DIR}/src")
+    target_compile_definitions(anomaly_nte_combat_uid PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(anomaly_nte_combat_uid PRIVATE /W4 /permissive- /EHsc /utf-8)
+    target_link_libraries(anomaly_nte_combat_uid PUBLIC
+        anomaly_nte_combat_engine Anomaly::sdk)
+
+    # Overlay 是独立 GUI 进程：Direct2D/DirectWrite/WIC 自绘，不受宿主 ImGui 能力限制。
+    # 文案目录来自 anomaly_nte_combat_model，Overlay 与离线夹具共用同一份实现。
+    add_executable(anomaly_nte_combat_overlay WIN32
+        ${ANOMALY_NTE_COMBAT_DIR}/src/overlay_app.cpp)
+    target_compile_definitions(anomaly_nte_combat_overlay PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(anomaly_nte_combat_overlay PRIVATE /W4 /permissive- /EHsc /utf-8)
+    target_link_libraries(anomaly_nte_combat_overlay PRIVATE
+        anomaly_nte_combat_model d2d1 dwrite windowscodecs winhttp shell32 ole32 user32 gdi32)
+    set_target_properties(anomaly_nte_combat_overlay PROPERTIES
+        OUTPUT_NAME "NteCombatTracker"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteCombatTracker")
+
+    anomaly_add_plugin(anomaly_builtin_nte_combat_tracker
+        SOURCES ${ANOMALY_NTE_COMBAT_DIR}/src/plugin.cpp
+            ${CMAKE_SOURCE_DIR}/${ANOMALY_NTE_COMBAT_DIR}/src/character_attribute_source.cpp
+        MANIFEST ${ANOMALY_NTE_COMBAT_DIR}/manifest.json
+        PACKAGE_NAME NteCombatTracker
+        BUNDLED_TARGETS anomaly_nte_combat_overlay
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteCombatTracker")
+    target_link_libraries(anomaly_builtin_nte_combat_tracker PRIVATE
+        anomaly_nte_combat_model anomaly_nte_combat_uid)
+
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        # 离线夹具：采集引擎/日志仓库 与 界面模型/协议/ABI 两组各自在没有游戏进程时验证。
+        set(ANOMALY_NTE_COMBAT_TEST_SOURCE_DIR
+            "${CMAKE_SOURCE_DIR}/${ANOMALY_NTE_COMBAT_DIR}")
+        # One fixture executable per dependency group; each test source defines its
+        # own entry point through NTE_TEST_GROUP and links the group's libraries.
+        function(anomaly_nte_combat_test_fixture target test_name source libraries)
+            add_executable(${target}
+                "${ANOMALY_NTE_COMBAT_TEST_SOURCE_DIR}/tests/${source}")
+            target_include_directories(${target} PRIVATE
+                "${ANOMALY_NTE_COMBAT_TEST_SOURCE_DIR}/src")
+            target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc /utf-8)
+            target_compile_definitions(${target} PRIVATE
+                UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
+                NTE_TEST_SOURCE_DIR="${ANOMALY_NTE_COMBAT_TEST_SOURCE_DIR}")
+            target_link_libraries(${target} PRIVATE ${libraries})
+            add_test(NAME ${test_name} COMMAND ${target})
+        endfunction()
+
+        anomaly_nte_combat_test_fixture(anomaly_nte_combat_engine_fixture
+            nte_engine nte_engine_tests.cpp
+            "anomaly_nte_combat_engine;Anomaly::sdk;nlohmann_json::nlohmann_json")
+        anomaly_nte_combat_test_fixture(anomaly_nte_combat_surface_fixture
+            nte_surface nte_surface_tests.cpp
+            "anomaly_nte_combat_model;anomaly_nte_combat_uid;Anomaly::sdk;nlohmann_json::nlohmann_json;anomaly_plugin_profile;ue5mem_memory")
+    endif()
 
     anomaly_add_plugin(anomaly_builtin_nte_free_fly
         SOURCES plugins/NteFreeFly/plugin.cpp
         MANIFEST plugins/NteFreeFly/manifest.json
         PACKAGE_NAME NteFreeFly
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteFreeFly")
+    anomaly_add_plugin(anomaly_builtin_autofish
+        SOURCES plugins/AutoFish/plugin.cpp
+        MANIFEST plugins/AutoFish/manifest.json
+        PACKAGE_NAME AutoFish
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/AutoFish")
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        add_executable(anomaly_autofish_fixture plugins/AutoFish/tests.cpp)
+        target_compile_features(anomaly_autofish_fixture PRIVATE cxx_std_20)
+        target_compile_options(anomaly_autofish_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        add_executable(anomaly_autofish_persistence_fixture plugins/AutoFish/persistence_tests.cpp)
+        target_link_libraries(anomaly_autofish_persistence_fixture PRIVATE Anomaly::sdk)
+        target_compile_options(anomaly_autofish_persistence_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+    endif()
+    anomaly_add_plugin(anomaly_builtin_autotaxi
+        SOURCES plugins/Autotaxi/plugin.cpp
+        MANIFEST plugins/Autotaxi/manifest.json
+        PACKAGE_NAME Autotaxi
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/Autotaxi")
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        add_executable(anomaly_autotaxi_policy_fixture plugins/Autotaxi/tests.cpp)
+        target_compile_features(anomaly_autotaxi_policy_fixture PRIVATE cxx_std_20)
+        target_compile_options(anomaly_autotaxi_policy_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        add_test(NAME autotaxi_order_progress_and_settlement COMMAND anomaly_autotaxi_policy_fixture)
+        foreach(suite IN ITEMS runtime profile encounter)
+            add_executable(anomaly_autotaxi_${suite}_fixture plugins/Autotaxi/${suite}_tests.cpp)
+            target_link_libraries(anomaly_autotaxi_${suite}_fixture PRIVATE
+                Anomaly::sdk anomaly_plugin_profile ue5mem_memory)
+            target_include_directories(anomaly_autotaxi_${suite}_fixture PRIVATE "${CMAKE_SOURCE_DIR}/apps/test_host")
+            target_compile_features(anomaly_autotaxi_${suite}_fixture PRIVATE cxx_std_20)
+            target_compile_options(anomaly_autotaxi_${suite}_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+            add_test(NAME autotaxi_${suite} COMMAND anomaly_autotaxi_${suite}_fixture)
+        endforeach()
+        add_test(NAME autotaxi_localization
+            COMMAND pwsh -NoProfile -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_plugin_i18n.ps1" -Plugin Autotaxi)
+    endif()
+    anomaly_add_plugin(anomaly_builtin_autoclaw
+        SOURCES plugins/AutoClaw/plugin.cpp
+        MANIFEST plugins/AutoClaw/manifest.json
+        PACKAGE_NAME AutoClaw
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/AutoClaw")
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        foreach(suite IN ITEMS runtime profile)
+            if(suite STREQUAL "runtime")
+                set(autoclaw_suite_source tests.cpp)
+            else()
+                set(autoclaw_suite_source profile_tests.cpp)
+            endif()
+            add_executable(anomaly_autoclaw_${suite}_fixture plugins/AutoClaw/${autoclaw_suite_source})
+            target_link_libraries(anomaly_autoclaw_${suite}_fixture PRIVATE
+                Anomaly::sdk anomaly_plugin_profile ue5mem_memory)
+            target_include_directories(anomaly_autoclaw_${suite}_fixture PRIVATE "${CMAKE_SOURCE_DIR}/apps/test_host")
+            target_compile_features(anomaly_autoclaw_${suite}_fixture PRIVATE cxx_std_20)
+            target_compile_options(anomaly_autoclaw_${suite}_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+            add_test(NAME autoclaw_${suite} COMMAND anomaly_autoclaw_${suite}_fixture)
+        endforeach()
+        add_test(NAME autoclaw_localization
+            COMMAND pwsh -NoProfile -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_plugin_i18n.ps1" -Plugin AutoClaw)
+    endif()
+    anomaly_add_plugin(anomaly_builtin_autogacha
+        SOURCES plugins/AutoGacha/plugin.cpp
+        MANIFEST plugins/AutoGacha/manifest.json
+        PACKAGE_NAME AutoGacha
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/AutoGacha")
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        foreach(suite IN ITEMS runtime profile)
+            if(suite STREQUAL "runtime")
+                set(autogacha_suite_source tests.cpp)
+            else()
+                set(autogacha_suite_source profile_tests.cpp)
+            endif()
+            add_executable(anomaly_autogacha_${suite}_fixture plugins/AutoGacha/${autogacha_suite_source})
+            target_link_libraries(anomaly_autogacha_${suite}_fixture PRIVATE
+                Anomaly::sdk anomaly_plugin_profile ue5mem_memory)
+            target_include_directories(anomaly_autogacha_${suite}_fixture PRIVATE "${CMAKE_SOURCE_DIR}/apps/test_host")
+            target_compile_features(anomaly_autogacha_${suite}_fixture PRIVATE cxx_std_20)
+            target_compile_options(anomaly_autogacha_${suite}_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+            add_test(NAME autogacha_${suite} COMMAND anomaly_autogacha_${suite}_fixture)
+        endforeach()
+        add_test(NAME autogacha_localization
+            COMMAND pwsh -NoProfile -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_plugin_i18n.ps1" -Plugin AutoGacha)
+    endif()
     anomaly_add_plugin(anomaly_builtin_skin_changer
         SOURCES plugins/SkinChanger/plugin.cpp plugins/SkinChanger/cosmetics.cpp
-            plugins/SkinChanger/awakening.cpp
+            plugins/SkinChanger/awakening.cpp plugins/SkinChanger/plates.cpp
+            plugins/SkinChanger/vehicle.cpp
         MANIFEST plugins/SkinChanger/manifest.json
         PACKAGE_NAME SkinChanger
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/SkinChanger")
@@ -1431,6 +1949,32 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
             plugins/SkinChanger/awakening_tests.cpp)
         target_compile_features(anomaly_skin_changer_awakening_fixture PRIVATE cxx_std_20)
         target_compile_options(anomaly_skin_changer_awakening_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        add_executable(anomaly_skin_changer_plate_fixture plugins/SkinChanger/plate_tests.cpp)
+        target_compile_features(anomaly_skin_changer_plate_fixture PRIVATE cxx_std_20)
+        target_compile_options(anomaly_skin_changer_plate_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        add_executable(anomaly_skin_changer_plate_follow_fixture plugins/SkinChanger/plate_follow_tests.cpp)
+        target_link_libraries(anomaly_skin_changer_plate_follow_fixture PRIVATE Anomaly::sdk)
+        target_compile_options(anomaly_skin_changer_plate_follow_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        add_executable(anomaly_skin_changer_vehicle_fixture plugins/SkinChanger/vehicle_tests.cpp)
+        target_compile_features(anomaly_skin_changer_vehicle_fixture PRIVATE cxx_std_20)
+        target_compile_options(anomaly_skin_changer_vehicle_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        foreach(suite IN ITEMS lifecycle cosmetics_runtime vehicle_runtime profile)
+            add_executable(anomaly_skin_changer_${suite}_fixture
+                plugins/SkinChanger/${suite}_tests.cpp)
+            target_link_libraries(anomaly_skin_changer_${suite}_fixture PRIVATE
+                Anomaly::sdk anomaly_plugin_profile ue5mem_memory)
+            target_compile_features(anomaly_skin_changer_${suite}_fixture PRIVATE cxx_std_20)
+            target_compile_options(anomaly_skin_changer_${suite}_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+            add_test(NAME skin_changer_${suite}
+                COMMAND anomaly_skin_changer_${suite}_fixture)
+        endforeach()
+        add_test(NAME skin_changer_cosmetics COMMAND anomaly_skin_changer_fixture)
+        foreach(suite IN ITEMS awakening plate plate_follow vehicle)
+            add_test(NAME skin_changer_${suite}
+                COMMAND anomaly_skin_changer_${suite}_fixture)
+        endforeach()
+        add_test(NAME skin_changer_localization
+            COMMAND pwsh -NoProfile -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_plugin_i18n.ps1" -Plugin SkinChanger)
     endif()
 
     add_library(anomaly_quick_ultimate_sequence STATIC
@@ -1466,12 +2010,20 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         WIN32_LEAN_AND_MEAN NOMINMAX)
     target_link_libraries(anomaly_builtin_clone_enter PRIVATE anomaly_plugin_combat)
     target_link_libraries(anomaly_builtin_combat_box PRIVATE anomaly_plugin_combat)
+    target_link_libraries(anomaly_builtin_night999 PRIVATE anomaly_plugin_combat)
     if(ANOMALY_BUILD_TEST_FIXTURES)
         add_executable(anomaly_combat_auto_fixture
             plugins/common/combat/tests/auto_combat_test.cpp)
         target_compile_options(anomaly_combat_auto_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
         target_link_libraries(anomaly_combat_auto_fixture PRIVATE anomaly_plugin_combat)
     endif()
+    # 空无一人／Deserted：把人群密度的环境倍率与车辆生成器的数量旋钮压下去，
+    # 一键让街上既没有行人也没有车；勾选时记下当前值当初始值，取消时还原。
+    anomaly_add_plugin(anomaly_builtin_deserted
+        SOURCES plugins/deserted/plugin.cpp
+        MANIFEST plugins/deserted/manifest.json
+        PACKAGE_NAME Deserted
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/Deserted")
     # UI 按钮调试面板：anomaly.nte.ui-buttons 服务的消费者，功能全部在 Host。
     anomaly_add_plugin(anomaly_builtin_ui_buttons
         SOURCES plugins/UiButtons/plugin.cpp
@@ -1501,37 +2053,158 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/HiFiVehicleMusic/manifest.json
         PACKAGE_NAME HiFiVehicleMusic
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/HiFiVehicleMusic")
+    anomaly_add_plugin(anomaly_builtin_better_tv
+        SOURCES plugins/BetterTV/plugin.cpp plugins/BetterTV/audio_output.cpp
+            plugins/BetterTV/bilibili_source.cpp plugins/BetterTV/media_prepare.cpp
+            plugins/BetterTV/bilibili_api.cpp plugins/BetterTV/media_download.cpp
+            plugins/BetterTV/media_validate.cpp plugins/BetterTV/http_client.cpp
+            plugins/BetterTV/file_picker.cpp
+        MANIFEST plugins/BetterTV/manifest.json
+        PACKAGE_NAME BetterTV
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/BetterTV")
+    target_link_libraries(anomaly_builtin_better_tv PRIVATE
+        nlohmann_json::nlohmann_json mfplay mfreadwrite mfplat mfuuid propsys ole32 xaudio2
+        winhttp shell32 bcrypt)
     anomaly_add_plugin(anomaly_builtin_model_scale
         SOURCES plugins/ModelScale/plugin.cpp
         MANIFEST plugins/ModelScale/manifest.json
         PACKAGE_NAME ModelScale
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/ModelScale")
+    anomaly_add_plugin(anomaly_builtin_status_bar
+        SOURCES plugins/StatusBar/plugin.cpp
+        MANIFEST plugins/StatusBar/manifest.json
+        PACKAGE_NAME StatusBar
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/StatusBar")
+    target_compile_options(anomaly_builtin_status_bar PRIVATE /utf-8)
+    target_link_libraries(anomaly_builtin_status_bar PRIVATE pdh)
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        add_executable(anomaly_status_bar_fixture plugins/StatusBar/tests.cpp)
+        target_link_libraries(anomaly_status_bar_fixture PRIVATE Anomaly::sdk pdh)
+        target_compile_definitions(anomaly_status_bar_fixture PRIVATE
+            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        target_compile_options(anomaly_status_bar_fixture PRIVATE /utf-8 /W4 /EHsc)
+        add_test(NAME status_bar_window_overlay_and_localization
+            COMMAND anomaly_status_bar_fixture)
+        add_test(NAME status_bar_localization_catalog
+            COMMAND pwsh -NoProfile -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_plugin_i18n.ps1" -Plugin StatusBar)
+        add_executable(anomaly_ui_overlay_fixture
+            apps/test_host/ui_overlay_fixture.cpp src/plugin/plugin_manager.cpp)
+        target_include_directories(anomaly_ui_overlay_fixture PRIVATE include)
+        target_compile_definitions(anomaly_ui_overlay_fixture PRIVATE
+            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        target_compile_options(anomaly_ui_overlay_fixture PRIVATE /utf-8 /W4 /permissive- /EHsc)
+        target_link_libraries(anomaly_ui_overlay_fixture PRIVATE
+            ue5mem_core anomaly_plugin_shadow anomaly_plugin_dependency_resolver anomaly_plugin_enablement
+            anomaly_adapter_services anomaly_plugin_runtime
+            anomaly_structured_logger anomaly_scoped_platform anomaly_ui_resources
+            anomaly_i18n anomaly_plugin_profile nlohmann_json::nlohmann_json)
+        add_dependencies(anomaly_ui_overlay_fixture anomaly_builtin_status_bar)
+        add_test(NAME status_bar_real_host_overlay
+            COMMAND anomaly_ui_overlay_fixture "$<TARGET_FILE_DIR:anomaly_builtin_status_bar>")
+    endif()
+    # 奶龙换装：插件用 UE ProceduralMeshComponent 生成原生角色模型，源蒙皮与骨架绑定
+    # 放在插件自己的 assets/mesh 下，由 anomaly_add_plugin 照常同步进包目录并随包安装。
+    # 源码含中文 UI 文本与诊断，需要 /utf-8。
+    anomaly_add_plugin(anomaly_builtin_nailong
+        SOURCES plugins/Nailong/plugin.cpp
+        MANIFEST plugins/Nailong/manifest.json
+        PACKAGE_NAME Nailong
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/Nailong")
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        # 离线夹具：只解析随包模型与骨架绑定，确认顶点、权重和骨数自洽，不需要游戏。
+        add_executable(anomaly_nailong_model_fixture
+            plugins/Nailong/tests/model_contract.cpp)
+        target_compile_features(anomaly_nailong_model_fixture PRIVATE cxx_std_20)
+        target_compile_options(anomaly_nailong_model_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        add_test(NAME nailong_model_contract COMMAND anomaly_nailong_model_fixture
+            "${CMAKE_CURRENT_SOURCE_DIR}/plugins/Nailong/assets/mesh/lod0_skinned.nlm")
+    endif()
+    anomaly_add_plugin(anomaly_builtin_character_studio
+        SOURCES plugins/CharacterStudio/plugin.cpp
+        MANIFEST plugins/CharacterStudio/manifest.json
+        PACKAGE_NAME CharacterStudio
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/CharacterStudio")
+    target_compile_options(anomaly_builtin_character_studio PRIVATE /utf-8)
+    target_compile_definitions(anomaly_builtin_character_studio PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    anomaly_add_plugin(anomaly_builtin_npc_summon
+        SOURCES plugins/NpcSummon/plugin.cpp
+        MANIFEST plugins/NpcSummon/manifest.json
+        PACKAGE_NAME NpcSummon
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NpcSummon")
     target_link_libraries(anomaly_builtin_hifi_vehicle_music PRIVATE
         nlohmann_json::nlohmann_json anomaly_miniaudio anomaly_rtaudio_asio anomaly_monkeys_audio anomaly_dsd2pcm
-        ole32 shell32 uuid avrt winmm)
+        ole32 shell32 uuid avrt winmm winhttp)
     # Only the APE wrapper sees the Monkey's Audio headers and their defines.
     set_source_files_properties(plugins/HiFiVehicleMusic/ape_decoder.cpp PROPERTIES
         INCLUDE_DIRECTORIES "${ANOMALY_MONKEYS_AUDIO_INCLUDE_DIRS}"
         COMPILE_DEFINITIONS "PLATFORM_WINDOWS;UNICODE;_UNICODE")
 
+    # Jelly uses the shared Profile packaging. The mapped plugin exports the C++ bridge.
+    # _CxxThrowException 的 C++ 镜像导出异常桥，且不允许 loader 管理的静态 TLS：桥源码
+    # 与 /Zc:threadSafeInit- 让同一个包在旧宿主上也能加载；新版 SDK 自带这两样
+    # （ANOMALY_CXX_THROW_BRIDGE）时桥源码不再重复编译。
+    anomaly_add_plugin(anomaly_builtin_jelly
+        SOURCES
+            plugins/Jelly/plugin.cpp
+            plugins/Jelly/src/jelly_layout.cpp
+            plugins/Jelly/src/jelly_selection.cpp
+            plugins/Jelly/src/jelly_model.cpp
+        MANIFEST plugins/Jelly/manifest.json
+        PACKAGE_NAME Jelly
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/Jelly")
+    target_include_directories(anomaly_builtin_jelly PRIVATE plugins/Jelly/src "${PROJECT_SOURCE_DIR}/include")
+    target_compile_definitions(anomaly_builtin_jelly PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(anomaly_builtin_jelly PRIVATE /utf-8 /Zc:threadSafeInit-)
+    if(NOT ANOMALY_CXX_THROW_BRIDGE)
+        target_sources(anomaly_builtin_jelly PRIVATE plugins/Jelly/src/plugin_cxx_throw_bridge.cpp)
+    endif()
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        # 离线夹具：纯逻辑与合成 UE 镜像，不需要游戏、运行中的宿主或网络。
+        add_executable(anomaly_jelly_logic_fixture
+            plugins/Jelly/tests/main.cpp
+            plugins/Jelly/tests/test_logic.cpp
+            plugins/Jelly/tests/test_model.cpp
+            plugins/Jelly/src/jelly_layout.cpp
+            plugins/Jelly/src/jelly_selection.cpp
+            plugins/Jelly/src/jelly_model.cpp)
+        target_link_libraries(anomaly_jelly_logic_fixture PRIVATE anomaly_plugin_profile ue5mem_memory)
+        target_include_directories(anomaly_jelly_logic_fixture PRIVATE plugins/Jelly/src "${PROJECT_SOURCE_DIR}/include")
+        target_compile_definitions(anomaly_jelly_logic_fixture PRIVATE
+            WIN32_LEAN_AND_MEAN NOMINMAX)
+        target_compile_options(anomaly_jelly_logic_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+    endif()
+
     # Test packages exist only when ANOMALY_BUILD_TEST_PLUGINS is on, so every list that
     # reaches their targets is built from the targets that actually exist.
     set(ANOMALY_BUILTIN_PLUGIN_TARGETS
-        anomaly_builtin_nte_position anomaly_builtin_nte_teleport
+        anomaly_builtin_mod_manager
+        anomaly_builtin_nte_position anomaly_builtin_nte_teleport anomaly_builtin_nte_vehicle
         anomaly_builtin_entity_esp anomaly_builtin_pink_paw_heist_esp
         anomaly_builtin_fake_uid anomaly_builtin_camera_tools
         anomaly_builtin_camera_blur_fix anomaly_builtin_better_pose
         anomaly_builtin_wallet_collector anomaly_builtin_box_auto anomaly_builtin_combat_box
-        anomaly_builtin_clone_enter anomaly_builtin_nte_quick_ultimate
+        anomaly_builtin_clone_enter anomaly_builtin_scene_loader
+        anomaly_builtin_nte_quick_ultimate
         anomaly_builtin_nte_free_fly anomaly_builtin_skin_changer anomaly_builtin_ui_buttons
         anomaly_builtin_dll_loader anomaly_builtin_hifi_vehicle_music
-        anomaly_builtin_model_scale)
+        anomaly_builtin_model_scale anomaly_builtin_status_bar anomaly_builtin_autofish anomaly_builtin_autotaxi
+        anomaly_builtin_autoclaw anomaly_builtin_autogacha anomaly_builtin_character_studio
+        anomaly_builtin_deserted anomaly_builtin_jelly anomaly_builtin_night999
+        anomaly_builtin_npc_summon anomaly_builtin_training_dummy
+        anomaly_builtin_summon_lab anomaly_builtin_health_display anomaly_builtin_memory_dump anomaly_builtin_nailong
+        anomaly_builtin_better_tv anomaly_builtin_nte_combat_tracker)
+
     if(ANOMALY_BUILD_TEST_PLUGINS)
         list(APPEND ANOMALY_BUILTIN_PLUGIN_TARGETS
             anomaly_builtin_nte_movement_hold
             anomaly_builtin_nte_navigation anomaly_builtin_nte_pickup_demo
             anomaly_builtin_teleport_landmarks_probe
-            anomaly_builtin_map_spawn_exporter)
+            anomaly_builtin_map_spawn_exporter
+            anomaly_builtin_mod_name_export)
+        target_link_libraries(anomaly_builtin_mod_name_export PRIVATE nlohmann_json::nlohmann_json)
+        target_compile_options(anomaly_builtin_mod_name_export PRIVATE /utf-8)
     endif()
     foreach(builtin_target IN LISTS ANOMALY_BUILTIN_PLUGIN_TARGETS)
         target_include_directories(${builtin_target} PRIVATE "${CMAKE_SOURCE_DIR}")
@@ -1539,200 +2212,83 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
             UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
     endforeach()
     if(MSVC)
+        target_compile_options(anomaly_builtin_nte_vehicle PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_pink_paw_heist_esp PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_box_auto PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_combat_box PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_clone_enter PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_scene_loader PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_nte_combat_tracker PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_nte_free_fly PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_skin_changer PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_autofish PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_autotaxi PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_autoclaw PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_autogacha PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_ui_buttons PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_deserted PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_hifi_vehicle_music PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_better_tv PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_night999 PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_npc_summon PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_nailong PRIVATE /utf-8)
     endif()
     add_dependencies(anomaly_test_host ${ANOMALY_BUILTIN_PLUGIN_TARGETS})
-    if(TARGET anomaly-platform-preview)
-        add_dependencies(anomaly-platform-preview ${ANOMALY_BUILTIN_PLUGIN_TARGETS})
-    endif()
 endif()
-
-function(anomaly_stage_platform_preview_plugin target package_name)
-    if(NOT TARGET ${target} OR NOT TARGET anomaly-platform-preview)
-        return()
-    endif()
-    add_custom_command(TARGET ${target} POST_BUILD
-        COMMAND "${CMAKE_COMMAND}" -E make_directory
-                "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/plugins/${package_name}"
-        COMMAND "${CMAKE_COMMAND}" -E copy_directory
-                "$<TARGET_FILE_DIR:${target}>"
-                "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/plugins/${package_name}"
-        VERBATIM)
-    list(APPEND ANOMALY_PLATFORM_PREVIEW_STAGE_COMMANDS
-        COMMAND "${CMAKE_COMMAND}" -E copy_directory
-                "$<TARGET_FILE_DIR:${target}>"
-                "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/plugins/${package_name}")
-    set(ANOMALY_PLATFORM_PREVIEW_STAGE_COMMANDS
-        "${ANOMALY_PLATFORM_PREVIEW_STAGE_COMMANDS}" PARENT_SCOPE)
-endfunction()
-anomaly_stage_platform_preview_plugin(anomaly_example_hello_ui HelloUi)
-anomaly_stage_platform_preview_plugin(anomaly_example_tick_counter TickCounter)
-anomaly_stage_platform_preview_plugin(anomaly_example_reliable_config ReliableConfig)
-anomaly_stage_platform_preview_plugin(anomaly_example_nte_inspector NteInspector)
-anomaly_stage_platform_preview_plugin(anomaly_example_nte_combat_demo NteCombatDemo)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_position NtePosition)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_teleport NteTeleport)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_navigation NteNavmeshDemo)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_pickup_demo NtePickupDemo)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_entity_esp EntityESP)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_pink_paw_heist_esp PinkPawHeistESP)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_fake_uid FakeUID)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_camera_tools CameraTools)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_camera_blur_fix CameraBlurFix)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_better_pose BetterPose)
-anomaly_stage_platform_preview_plugin(
-    anomaly_builtin_teleport_landmarks_probe TeleportLandmarksProbe)
-anomaly_stage_platform_preview_plugin(
-    anomaly_builtin_map_spawn_exporter MapSpawnExporter)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_wallet_collector WalletCollector)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_box_auto BoxAuto)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_combat_box CombatBox)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_clone_enter CloneEnter)
-anomaly_stage_platform_preview_plugin(
-    anomaly_builtin_nte_quick_ultimate QuickUltimate)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_free_fly NteFreeFly)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_skin_changer SkinChanger)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_ui_buttons UiButtons)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_dll_loader DllLoader)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_time_accel TimeAccel)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_hifi_vehicle_music HiFiVehicleMusic)
 
 if(TARGET anomaly-platform-preview)
-    add_custom_command(TARGET anomaly-platform-preview POST_BUILD
+    # Use the package metadata owned by the installation rules. NO_RELEASE examples
+    # and TestPlugins do not belong to the GameRuntime preview.
+    get_property(preview_candidates GLOBAL PROPERTY ANOMALY_RELEASE_PLUGIN_TARGETS)
+    set(ANOMALY_PREVIEW_PACKAGE_NAMES)
+    set(ANOMALY_PREVIEW_PACKAGE_COMMANDS "")
+    set(preview_plugin_targets)
+    foreach(preview_plugin IN LISTS preview_candidates)
+        get_target_property(preview_component ${preview_plugin} ANOMALY_PACKAGE_INSTALL_COMPONENT)
+        if(NOT preview_component STREQUAL "GameRuntime")
+            continue()
+        endif()
+        list(APPEND preview_plugin_targets ${preview_plugin})
+        get_target_property(preview_name ${preview_plugin} ANOMALY_PACKAGE_NAME)
+        get_target_property(preview_manifest ${preview_plugin} ANOMALY_PACKAGE_MANIFEST)
+        get_target_property(preview_resources ${preview_plugin} ANOMALY_PACKAGE_RESOURCE_DIRECTORIES)
+        get_target_property(preview_bundled_targets ${preview_plugin} ANOMALY_PACKAGE_BUNDLED_TARGETS)
+        get_filename_component(preview_source "${preview_manifest}" DIRECTORY)
+        list(APPEND ANOMALY_PREVIEW_PACKAGE_NAMES "${preview_name}")
+        string(APPEND ANOMALY_PREVIEW_PACKAGE_COMMANDS
+            "file(COPY_FILE [==[$<TARGET_FILE:${preview_plugin}>]==] \"\${preview_plugins}/${preview_name}/plugin.dll\" ONLY_IF_DIFFERENT)\n"
+            "file(COPY_FILE [==[${preview_manifest}]==] \"\${preview_plugins}/${preview_name}/manifest.json\" ONLY_IF_DIFFERENT)\n")
+        foreach(preview_resource IN LISTS preview_resources)
+            string(APPEND ANOMALY_PREVIEW_PACKAGE_COMMANDS
+                "file(COPY [==[${preview_source}/${preview_resource}]==] DESTINATION \"\${preview_plugins}/${preview_name}\")\n")
+        endforeach()
+        foreach(preview_bundled_target IN LISTS preview_bundled_targets)
+            string(APPEND ANOMALY_PREVIEW_PACKAGE_COMMANDS
+                "file(COPY_FILE [==[$<TARGET_FILE:${preview_bundled_target}>]==] \"\${preview_plugins}/${preview_name}/$<TARGET_FILE_NAME:${preview_bundled_target}>\" ONLY_IF_DIFFERENT)\n")
+        endforeach()
+    endforeach()
+    configure_file(cmake/stage_platform_preview.cmake.in
+        "${GENERATED_DIR}/stage_platform_preview.cmake.in" @ONLY)
+    file(GENERATE OUTPUT "${GENERATED_DIR}/stage_platform_preview-$<CONFIG>.cmake"
+        INPUT "${GENERATED_DIR}/stage_platform_preview.cmake.in")
+    # A custom target also runs when only JSON/assets changed or the executable is
+    # already current; POST_BUILD alone leaves those resources stale.
+    add_custom_target(anomaly_stage_platform_preview
         COMMAND "${CMAKE_COMMAND}" -E make_directory
                 "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly"
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                "${CMAKE_SOURCE_DIR}/CONTACT"
-                "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/CONTACT"
+        COMMAND "${CMAKE_COMMAND}"
+                "-DANOMALY_PREVIEW_ROOT=$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly"
+                -P "${GENERATED_DIR}/stage_platform_preview-$<CONFIG>.cmake"
         ${ANOMALY_PLATFORM_PREVIEW_STAGE_COMMANDS}
+        DEPENDS ${preview_plugin_targets}
         VERBATIM)
+    add_dependencies(anomaly-platform-preview anomaly_stage_platform_preview)
 endif()
 
-# Diagnostic probe packages: bounded transport traces and the exact-build BidKing
-# probes. They are read-only research packages that ship in no release component,
-# so they are opt-in (`build.cmd probes`) instead of part of the default build.
-option(ANOMALY_BUILD_DIAGNOSTIC_PROBES
-    "Build the opt-in diagnostic probe plugin packages" OFF)
-if(ANOMALY_BUILD_DIAGNOSTIC_PROBES)
-    function(anomaly_add_winsock_trace_probe target operation plugin_id package_name)
-        anomaly_add_plugin(${target} NO_RELEASE
-            SOURCES tools/winsock_trace_probe/plugin.cpp
-            MANIFEST tools/winsock_trace_probe/manifests/${package_name}.json
-            PACKAGE_NAME ${package_name}
-            OUTPUT_DIRECTORY
-                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/winsock-trace-probes/${package_name}")
-        target_compile_definitions(${target} PRIVATE
-            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
-            "ANOMALY_WINSOCK_TRACE_OPERATION=${operation}"
-            "ANOMALY_WINSOCK_TRACE_PLUGIN_ID=\"${plugin_id}\"")
-        target_link_libraries(${target} PRIVATE Ws2_32 Iphlpapi Bcrypt)
-    endfunction()
-
-    anomaly_add_winsock_trace_probe(
-        anomaly_winsock_trace_send 1 anomaly.diagnostics.winsock.send WinsockSend)
-    anomaly_add_winsock_trace_probe(
-        anomaly_winsock_trace_sendto 2 anomaly.diagnostics.winsock.sendto WinsockSendTo)
-    anomaly_add_winsock_trace_probe(
-        anomaly_winsock_trace_wsasend 3 anomaly.diagnostics.winsock.wsasend WinsockWsaSend)
-    anomaly_add_winsock_trace_probe(
-        anomaly_winsock_trace_wsasendto 4 anomaly.diagnostics.winsock.wsasendto WinsockWsaSendTo)
-    anomaly_add_winsock_trace_probe(
-        anomaly_winsock_trace_recv 5 anomaly.diagnostics.winsock.recv WinsockRecv)
-    anomaly_add_winsock_trace_probe(
-        anomaly_winsock_trace_recvfrom 6 anomaly.diagnostics.winsock.recvfrom WinsockRecvFrom)
-    anomaly_add_winsock_trace_probe(
-        anomaly_winsock_trace_wsarecv 7 anomaly.diagnostics.winsock.wsarecv WinsockWsaRecv)
-    anomaly_add_winsock_trace_probe(
-        anomaly_winsock_trace_wsarecvfrom 8 anomaly.diagnostics.winsock.wsarecvfrom WinsockWsaRecvFrom)
-
-    set(ANOMALY_WINSOCK_TRACE_PROBE_TARGETS
-        anomaly_winsock_trace_send
-        anomaly_winsock_trace_sendto
-        anomaly_winsock_trace_wsasend
-        anomaly_winsock_trace_wsasendto
-        anomaly_winsock_trace_recv
-        anomaly_winsock_trace_recvfrom
-        anomaly_winsock_trace_wsarecv
-        anomaly_winsock_trace_wsarecvfrom)
-    add_dependencies(anomaly_test_host ${ANOMALY_WINSOCK_TRACE_PROBE_TARGETS})
-
-    anomaly_add_plugin(anomaly_netproto_pipeline_trace NO_RELEASE
-        SOURCES tools/netproto_probe/plugin.cpp
-        MANIFEST tools/netproto_probe/manifests/NetProtoPipelineTrace.json
-        PACKAGE_NAME NetProtoPipelineTrace
-        OUTPUT_DIRECTORY
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/winsock-trace-probes/NetProtoPipelineTrace")
-    target_compile_definitions(anomaly_netproto_pipeline_trace PRIVATE
-        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_link_libraries(anomaly_netproto_pipeline_trace PRIVATE Bcrypt)
-    add_dependencies(anomaly_test_host anomaly_netproto_pipeline_trace)
-
-    anomaly_add_plugin(anomaly_secur32_tls_trace NO_RELEASE
-        SOURCES tools/tls_trace_probe/plugin.cpp
-        MANIFEST tools/tls_trace_probe/manifests/Secur32TlsTrace.json
-        PACKAGE_NAME Secur32TlsTrace
-        OUTPUT_DIRECTORY
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/winsock-trace-probes/Secur32TlsTrace")
-    target_compile_definitions(anomaly_secur32_tls_trace PRIVATE
-        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX SECURITY_WIN32)
-    target_link_libraries(anomaly_secur32_tls_trace PRIVATE Bcrypt)
-    add_dependencies(anomaly_test_host anomaly_secur32_tls_trace)
-
-    anomaly_add_plugin(anomaly_winhttp_trace NO_RELEASE
-        SOURCES tools/http_trace_probe/plugin.cpp
-        MANIFEST tools/http_trace_probe/manifests/WinHttpTrace.json
-        PACKAGE_NAME WinHttpTrace
-        OUTPUT_DIRECTORY
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/winsock-trace-probes/WinHttpTrace")
-    target_compile_definitions(anomaly_winhttp_trace PRIVATE
-        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_link_libraries(anomaly_winhttp_trace PRIVATE Bcrypt Winhttp)
-    add_dependencies(anomaly_test_host anomaly_winhttp_trace)
-
-    anomaly_add_plugin(anomaly_bcrypt_trace NO_RELEASE
-        SOURCES tools/bcrypt_trace_probe/plugin.cpp
-        MANIFEST tools/bcrypt_trace_probe/manifests/BcryptTrace.json
-        PACKAGE_NAME BcryptTrace
-        OUTPUT_DIRECTORY
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/winsock-trace-probes/BcryptTrace")
-    target_compile_definitions(anomaly_bcrypt_trace PRIVATE
-        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_link_libraries(anomaly_bcrypt_trace PRIVATE Bcrypt)
-    add_dependencies(anomaly_test_host anomaly_bcrypt_trace)
-endif()
-
-if(ANOMALY_BUILD_DIAGNOSTIC_PROBES)
-    anomaly_add_plugin(anomaly_bidking_object_catalog NO_RELEASE
-        SOURCES tools/bidking_object_catalog/plugin.cpp
-        MANIFEST tools/bidking_object_catalog/manifest.json
-        PACKAGE_NAME BidKingObjectCatalog
-        OUTPUT_DIRECTORY
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/bidking-object-catalog/BidKingObjectCatalog")
-    target_compile_definitions(anomaly_bidking_object_catalog PRIVATE
-        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    add_dependencies(anomaly_test_host anomaly_bidking_object_catalog)
-
-    anomaly_add_plugin(anomaly_bidking_round_pool_probe NO_RELEASE
-        SOURCES tools/bidking_round_pool_probe/plugin.cpp
-        MANIFEST tools/bidking_round_pool_probe/manifest.json
-        PACKAGE_NAME BidKingRoundPoolProbe
-        OUTPUT_DIRECTORY
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/bidking-round-pool-probe/BidKingRoundPoolProbe")
-    target_compile_definitions(anomaly_bidking_round_pool_probe PRIVATE
-        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    add_dependencies(anomaly_test_host anomaly_bidking_round_pool_probe)
-endif()
 set(ANOMALY_RELEASE_PE_TARGETS
-    dwmapi anomaly_core anomaly_launcher anomaly_crash_coordinator anomaly_nte_game_hook
+    dwmapi anomaly_core anomaly_launcher
     anomaly-plugin anomaly_abi_snapshot anomaly_test_host
-    anomaly-profile anomaly_cli anomaly_inspect)
+    anomaly-profile anomaly_cli anomaly_inspect anomaly_injector)
 get_property(ANOMALY_RELEASE_PLUGIN_TARGETS GLOBAL PROPERTY ANOMALY_RELEASE_PLUGIN_TARGETS)
 list(REMOVE_DUPLICATES ANOMALY_RELEASE_PLUGIN_TARGETS)
 foreach(runtime_plugin_target IN LISTS ANOMALY_RELEASE_PLUGIN_TARGETS)
@@ -1757,30 +2313,16 @@ install(TARGETS anomaly_launcher
 install(TARGETS anomaly_core
     RUNTIME DESTINATION Anomaly COMPONENT GameRuntime
     LIBRARY DESTINATION Anomaly COMPONENT GameRuntime)
-install(TARGETS anomaly_crash_coordinator
-    RUNTIME DESTINATION Anomaly COMPONENT GameRuntime)
-# The launcher resolves this by absolute path under its own directory, so it stays part of the runtime
-# payload: a package that turned auto-starting back on without it would launch and then fail to start
-# the game.
-install(TARGETS anomaly_nte_game_hook
-    RUNTIME DESTINATION Anomaly COMPONENT GameRuntime
-    LIBRARY DESTINATION Anomaly COMPONENT GameRuntime)
 # Plugin packages install themselves: `anomaly_add_plugin` emits the package rules for
 # `Anomaly/plugins/<PackageName>` in the GameRuntime component, or in the opt-in
 # TestPlugins component for TEST_PLUGIN packages, so a registered plugin cannot be
 # missing from the runtime tree.
-if(TARGET anomaly_builtin_better_pose)
-    # `data/` is plugin-specific content rather than part of the manifest package layout,
-    # so the package rules above do not carry it: the in-game conversion reads its
-    # reference bone tables from `data/` next to the DLL, and without this rule a release
-    # install ships a plugin that cannot convert a motion.
-    install(DIRECTORY plugins/BetterPose/data/
-        DESTINATION Anomaly/plugins/BetterPose/data COMPONENT GameRuntime)
-endif()
 install(FILES CONTACT config/anomaly.ini config/repository.json config/plugin-repositories.json
     DESTINATION Anomaly COMPONENT GameRuntime)
 install(DIRECTORY locales/host
     DESTINATION Anomaly/locales COMPONENT GameRuntime)
+install(DIRECTORY notices
+    DESTINATION Anomaly COMPONENT GameRuntime)
 install(FILES assets/fonts/NotoSansCJKsc-Regular.ttf
     DESTINATION Anomaly/assets/fonts COMPONENT GameRuntime)
 # Theme artwork and presets ship with the package: the game runtime and the
@@ -1788,6 +2330,10 @@ install(FILES assets/fonts/NotoSansCJKsc-Regular.ttf
 # same `Anomaly/` root. Users replace or extend these with their own files.
 install(DIRECTORY assets/images/
     DESTINATION Anomaly/assets/images COMPONENT GameRuntime)
+# The category-name table the mods page shows and files category folders under. A user override
+# lives in `Anomaly/config/mod-groups.json`, so extending a name never edits the package.
+install(DIRECTORY assets/mod-groups/
+    DESTINATION Anomaly/assets/mod-groups COMPONENT GameRuntime)
 install(DIRECTORY config/themes/
     DESTINATION Anomaly/config/themes COMPONENT GameRuntime)
 install(CODE [[
@@ -1797,6 +2343,7 @@ install(CODE [[
 install(DIRECTORY profiles/
     DESTINATION Anomaly/profiles COMPONENT GameRuntime)
 install(TARGETS anomaly_cli anomaly_inspect anomaly-profile anomaly-plugin anomaly_abi_snapshot anomaly_test_host
+    anomaly_injector
     RUNTIME DESTINATION . COMPONENT Tools)
 # The layout editor is one offline HTML file: it needs no runtime, no network and
 # no build step, so it ships as data next to the command line tools.
@@ -1813,17 +2360,12 @@ install(DIRECTORY include/anomaly/sdk/
     PATTERN "version.h" EXCLUDE)
 install(FILES "${ANOMALY_GENERATED_INSTALL_INCLUDE_DIR}/anomaly/sdk/version.h"
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/anomaly/sdk COMPONENT SDK)
-install(FILES schemas/plugin-manifest.schema.json schemas/build-profile.schema.json
+install(FILES schemas/plugin-manifest.schema.json schemas/plugin-profile.schema.json schemas/build-profile.schema.json
     schemas/repository-config.schema.json
     schemas/repository-index.schema.json schemas/plugin-enablement.schema.json
     DESTINATION ${CMAKE_INSTALL_DATADIR}/anomaly/schemas COMPONENT SDK)
 install(FILES abi/anomaly-sdk-v1-windows-x64.json
     DESTINATION ${CMAKE_INSTALL_DATADIR}/anomaly/abi COMPONENT SDK)
-# The plugin build function compiles the exception bridge into every C++ plugin
-# package; the SDK distribution ships it so installed-package consumers build
-# against the same source.
-install(FILES sdk/cpp/plugin_cxx_throw_bridge.cpp
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/anomaly/cpp COMPONENT SDK)
 set(ANOMALY_SDK_EXAMPLES_DESTINATION "${CMAKE_INSTALL_DATADIR}/anomaly/examples")
 install(FILES examples/CMakeLists.txt examples/README.md
     DESTINATION ${ANOMALY_SDK_EXAMPLES_DESTINATION} COMPONENT SDK)
@@ -1861,7 +2403,10 @@ set(ANOMALY_THIRD_PARTY_LICENSE_FILES
     third_party/licenses/miniaudio-LICENSE.txt
     third_party/licenses/rtaudio-LICENSE.txt
     third_party/licenses/monkeys-audio-LICENSE.txt
-    third_party/licenses/dsd2pcm-LICENSE.txt)
+    third_party/licenses/dsd2pcm-LICENSE.txt
+    third_party/licenses/libarchive-LICENSE.txt
+    third_party/licenses/liblzma-LICENSE.txt
+    third_party/licenses/zlib-LICENSE.txt)
 set(ANOMALY_RELEASE_COMPONENTS GameRuntime SDK Tools)
 if(ANOMALY_BUILD_SYMBOLS)
     list(APPEND ANOMALY_RELEASE_COMPONENTS Symbols)
@@ -1876,5 +2421,25 @@ if(ANOMALY_BUILD_SYMBOLS)
     foreach(symbol_target IN LISTS ANOMALY_RELEASE_PE_TARGETS)
         install(FILES "$<TARGET_PDB_FILE:${symbol_target}>"
             DESTINATION symbols COMPONENT Symbols)
+    endforeach()
+endif()
+
+if(ANOMALY_BUILD_TEST_FIXTURES AND ANOMALY_BUILD_BUILTIN_PLUGINS)
+    add_executable(anomaly_plugin_compatibility_fixture apps/test_host/plugin_compatibility_fixture.cpp)
+    target_link_libraries(anomaly_plugin_compatibility_fixture PRIVATE anomaly_plugin_profile ue5mem_memory)
+    target_compile_features(anomaly_plugin_compatibility_fixture PRIVATE cxx_std_20)
+    target_compile_options(anomaly_plugin_compatibility_fixture PRIVATE /utf-8 /EHsc)
+    add_test(NAME plugin_compatibility COMMAND anomaly_plugin_compatibility_fixture)
+    foreach(profile_fixture IN ITEMS
+        anomaly_pink_paw_bank_loop_fixture
+        anomaly_skin_changer_plate_follow_fixture
+        anomaly_combat_auto_fixture
+        anomaly_better_pose_visibility_fixture
+        anomaly_better_pose_character_switch_fixture
+        anomaly_better_pose_joint_drag_fixture
+        anomaly_better_pose_limb_calibration_fixture
+        anomaly_better_pose_t_pose_calibration_fixture
+)
+        target_link_libraries(${profile_fixture} PRIVATE anomaly_plugin_profile ue5mem_memory)
     endforeach()
 endif()

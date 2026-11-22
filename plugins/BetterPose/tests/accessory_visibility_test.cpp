@@ -1,4 +1,5 @@
 #include "../plugin.cpp"
+#include "../../../apps/test_host/plugin_profile_fixture_host.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -37,7 +38,9 @@ void __fastcall Event(void* object, void* function, void* parameters) {
     ++component.destroy_calls;
   }
 }
+void __fastcall Event(void*,void*,void*);
 AnomalyStatusV1 ANOMALY_CALL ReadMemory(void*,std::uintptr_t address,AnomalyMutableByteSpanV1 bytes) {
+  if (address == reinterpret_cast<std::uintptr_t>(Event)) return anomaly::testing::RecordedProcessEventEntry(bytes);
   std::memcpy(bytes.data,reinterpret_cast<void*>(address),bytes.size);
   return anomaly::sdk::Ok();
 }
@@ -61,15 +64,17 @@ AnomalyStatusV1 ANOMALY_CALL Find(void*,AnomalyStringViewV1 name,AnomalyGenerati
 }
 
 int main() {
+  anomaly::testing::ProfileHost profile_host("BetterPose");
+  if (!better_pose_profile::LoadCompatibility(&profile_host.api)) { std::cerr << profile_host.error; return 1; }
   using namespace fixture;
   Context context;
   AnomalyCoreServiceV1 core{};
-  core.struct_size=sizeof(core); core.read_memory=ReadMemory; core.write_memory=WriteMemory;
+  core.struct_size=sizeof(core); core.service_version=1; core.read_memory=ReadMemory; core.write_memory=WriteMemory;
   context.core=&core;
   AnomalyUe5ObjectsServiceV1 objects{};
   objects.struct_size=sizeof(objects); objects.find_exact=Find; context.objects=&objects;
   std::array<std::uintptr_t,80> vtable{};
-  vtable[kProcessEventVtableSlot]=reinterpret_cast<std::uintptr_t>(Event);
+  vtable[native_layout.kProcessEventVtableSlot]=reinterpret_cast<std::uintptr_t>(Event);
   Component source{reinterpret_cast<std::uintptr_t>(vtable.data())};
   Component replacement{source.vtable};
   std::array<std::uint8_t,Count*24> slots{};
@@ -146,5 +151,45 @@ int main() {
   RestoreExtraMeshes(context);
   Check(!source.visible && source.visibility_writes==writes,
         "failed creation forcibly revealed the source");
+
+  Component body{source.vtable};
+  body.visible=true;
+  replacement.visible=true;
+  source.visible=true; source.hidden_in_game=false;
+  extra.poseable_component=reinterpret_cast<std::uintptr_t>(&replacement);
+  extra.poseable_active=true;
+  context.runtime.mesh=reinterpret_cast<std::uintptr_t>(&body);
+  extra.poseable_source_visibility_changed=false;
+  ApplyMotionVisibility(context,false);
+  Check(!body.visible && !replacement.visible && !source.visible,
+        "VMD hide did not cover body and attached components");
+  ApplyMotionVisibility(context,true);
+  Check(body.visible && replacement.visible && source.visible,
+        "VMD show did not restore component visibility");
+  body.visible=false;
+  ApplyMotionVisibility(context,false);
+  Check(!body.visible && !replacement.visible && !source.visible,
+        "VMD hide did not preserve a pre-existing hidden body");
+  ApplyMotionVisibility(context,true);
+  Check(!body.visible && replacement.visible && source.visible,
+        "VMD restore revealed a body hidden before playback");
+  RestoreMotionVisibility(context);
+
+  Context visibility_context;
+  visibility_context.motion.bone_count=1;
+  visibility_context.motion.frame_count=11;
+  visibility_context.motion.indices_ready=true;
+  visibility_context.motion.bone_indices={0};
+  visibility_context.motion.visibility_keys={{0,true},{5,false},{9,true}};
+  visibility_context.motion.rotations.assign(44,0.0F);
+  for (std::size_t frame{};frame<11;++frame)
+    visibility_context.motion.rotations[frame*4+3]=1.0F;
+  MotionSample hidden_sample, shown_sample;
+  Check(SampleMotion(visibility_context,5.0/30.0,hidden_sample) &&
+        hidden_sample.has_visibility && !hidden_sample.visible,
+        "visibility step did not hide at its frame");
+  Check(SampleMotion(visibility_context,9.0/30.0,shown_sample) &&
+        shown_sample.has_visibility && shown_sample.visible,
+        "visibility step did not restore at its frame");
   std::cout << "PASS hidden hats, unavailable getter, visible handoff, hidden children, repeated restore and failure cleanup\n";
 }

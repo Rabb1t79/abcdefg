@@ -1,3 +1,4 @@
+#include "native_layout.hpp"
 // 共享自动战斗实现。搬移自 `plugins/CloneEnter/plugin.cpp`（各函数注释里标了原始行号），
 // 逻辑逐行保持原样，只做接口要求的那几处替换：`context.auto_combat_*` → `state.*`、
 // `context.<service>` → `host.<service>`、`context.combat_status = X` → `SetStatus(host, X)`。
@@ -28,39 +29,35 @@ namespace anomaly::plugins::combat {
 namespace {
 
 // —— 搬移过来的游戏布局常量（CloneEnter/plugin.cpp:27–83）——
-constexpr std::string_view kGObjectsPattern =
-    "48 8B 05 ?? ?? ?? ?? 48 8B 0C C8 48 8B 04 D1 C3 33 C0 48 8B 00 C3";
-constexpr std::string_view kGWorldPattern =
-    "48 8B 1D ?? ?? ?? ?? 48 85 DB 74 ?? 41 B0 01";
-constexpr std::ptrdiff_t kGObjectsAddend = -16;
+constexpr std::string_view kGWorldPattern = "combat.World";
 constexpr std::uint32_t kRipDisplacementOffset = 3;
 constexpr std::uint32_t kRipInstructionSize = 7;
 
-constexpr std::ptrdiff_t kObjectClassOffset = 16;
-constexpr std::ptrdiff_t kObjectNameOffset = 24;
-constexpr std::ptrdiff_t kUStructChildrenOffset = 72;
-constexpr std::ptrdiff_t kUStructSuperStructOffset = 64;
-constexpr std::ptrdiff_t kUFieldNextOffset = 40;
-constexpr std::ptrdiff_t kUFunctionNumParmsOffset = 180;
-constexpr std::ptrdiff_t kUFunctionParmsSizeOffset = 182;
 
-constexpr std::ptrdiff_t kWorldGameInstanceOffset = 560;
-constexpr std::ptrdiff_t kGameInstanceLocalPlayersOffset = 56;
-constexpr std::ptrdiff_t kLocalPlayerControllerOffset = 48;
-constexpr std::ptrdiff_t kControllerPlayerStateOffset = 720;
-constexpr std::size_t kProcessEventVtableIndex = 0x4C;
+
+
+
+
+
+
+
+
+
+
+
+
 constexpr std::size_t kMaximumNameBytes = 1024;
 
 // DataTable RowMap 布局
-constexpr std::ptrdiff_t kDataTableRowMapOffset = 48;
-constexpr std::size_t kDataTableRowStride = 24;
 
-constexpr std::ptrdiff_t kUStructPropertyLinkOffset = 112;
-constexpr std::ptrdiff_t kFFieldNameOffset = 32;
-constexpr std::ptrdiff_t kFFieldClassOffset = 8;
-constexpr std::ptrdiff_t kFPropertyElementSizeOffset = 52;
-constexpr std::ptrdiff_t kFPropertyOffsetInternalOffset = 68;
-constexpr std::ptrdiff_t kFPropertyPropertyLinkNextOffset = 72;
+
+
+
+
+
+
+
+
 
 // 传送落点额外抬高的厘米数（CloneEnter/plugin.cpp:6544）。
 constexpr double kTeleportChestZOffset = 200.0;
@@ -82,8 +79,6 @@ constexpr double kAutoCombatDeadPosTolerance = 150.0;
 constexpr double kAutoCombatAttackRangeCm = 600.0;
 // 离开这个距离才算「不再打它」（迟滞，避免在攻击距离边界抖动时反复清零计时）。
 constexpr double kAutoCombatLeaveRangeCm = 1200.0;
-// 见过怪之后连续这么多秒无怪，本点就算打完（CloneEnter/plugin.cpp:6875 的同一个 5）。
-constexpr std::uint32_t kAutoCombatNoMonsterSeconds = 5;
 
 struct FNamePair {
     std::uint32_t cmp{};
@@ -143,14 +138,8 @@ bool ResolveRipRelative(const AnomalySignatureServiceV1* signature,
                         std::uintptr_t& address) noexcept {
     address = 0;
     if (!SignatureReady(signature)) return false;
-    std::uintptr_t instruction{};
-    if (signature->resolve(signature->user, anomaly::sdk::StringView("HTGame.exe"),
-                           anomaly::sdk::StringView(".text"),
-                           anomaly::sdk::StringView(pattern), &instruction)
-            .code != ANOMALY_STATUS_V1_OK ||
-        instruction == 0) {
-        return false;
-    }
+    const auto instruction=profile::compatibility.Address(pattern);
+    if (!instruction) return false;
     std::int32_t displacement{};
     if (!Read(reinterpret_cast<const void*>(instruction + kRipDisplacementOffset),
               displacement)) {
@@ -192,7 +181,7 @@ std::string ResolveName(const AnomalyUe5NamesServiceV1* names,
 std::string ObjectName(const AnomalyUe5NamesServiceV1* names,
                        const std::uintptr_t object) {
     std::uint32_t name_id{};
-    if (!Read(reinterpret_cast<const void*>(object + kObjectNameOffset), name_id)) {
+    if (!Read(reinterpret_cast<const void*>(object + profile::native_layout.kObjectNameOffset), name_id)) {
         return {};
     }
     return ResolveName(names, name_id);
@@ -213,20 +202,20 @@ bool FindFunction(const AnomalyUe5NamesServiceV1* names, const std::uintptr_t cl
     std::uintptr_t owner = cls;
     for (std::uint32_t depth{}; owner != 0 && depth < 64; ++depth) {
         std::uintptr_t field{};
-        Read(reinterpret_cast<const void*>(owner + kUStructChildrenOffset), field);
+        Read(reinterpret_cast<const void*>(owner + profile::native_layout.kUStructChildrenOffset), field);
         for (std::uint32_t count{}; field != 0 && count < 4096; ++count) {
             std::uintptr_t next{};
             std::uintptr_t field_class{};
-            if (!Read(reinterpret_cast<const void*>(field + kUFieldNextOffset), next) ||
-                !Read(reinterpret_cast<const void*>(field + kObjectClassOffset), field_class)) {
+            if (!Read(reinterpret_cast<const void*>(field + profile::native_layout.kUFieldNextOffset), next) ||
+                !Read(reinterpret_cast<const void*>(field + profile::native_layout.kObjectClassOffset), field_class)) {
                 break;
             }
             if (ObjectName(names, field_class) == "Function" &&
                 ObjectName(names, field) == target) {
                 std::uint8_t np{};
                 std::uint16_t ps{};
-                Read(reinterpret_cast<const void*>(field + kUFunctionNumParmsOffset), np);
-                Read(reinterpret_cast<const void*>(field + kUFunctionParmsSizeOffset), ps);
+                Read(reinterpret_cast<const void*>(field + profile::native_layout.kUFunctionNumParmsOffset), np);
+                Read(reinterpret_cast<const void*>(field + profile::native_layout.kUFunctionParmsSizeOffset), ps);
                 if (np == num_parms && ps == parms_size) {
                     result = field;
                     return true;
@@ -236,7 +225,7 @@ bool FindFunction(const AnomalyUe5NamesServiceV1* names, const std::uintptr_t cl
             field = next;
         }
         std::uintptr_t super{};
-        if (!Read(reinterpret_cast<const void*>(owner + kUStructSuperStructOffset), super) ||
+        if (!Read(reinterpret_cast<const void*>(owner + profile::native_layout.kUStructSuperStructOffset), super) ||
             super == 0 || super == owner) {
             break;
         }
@@ -251,8 +240,8 @@ bool Invoke(void* object, void* function, void* parameters) noexcept {
     auto vtable = ReadPointer(object);
     if (!vtable) return false;
     auto process_event = ReadPointer(reinterpret_cast<const std::uint8_t*>(vtable) +
-        kProcessEventVtableIndex * sizeof(void*));
-    if (!process_event) return false;
+        profile::native_layout.kProcessEventVtableIndex * sizeof(void*));
+    if (!profile::compatibility.MatchesEntry(profile::core,"ProcessEvent.entry",reinterpret_cast<std::uintptr_t>(process_event),true)) return false;
     __try {
         reinterpret_cast<ProcessEvent>(process_event)(object, function, parameters);
         return true;
@@ -280,17 +269,17 @@ bool GetPlayerState(Host& host, State& state) noexcept {
         return true;
     }
     std::uintptr_t game_instance{};
-    if (!Read(reinterpret_cast<const void*>(world + kWorldGameInstanceOffset),
+    if (!Read(reinterpret_cast<const void*>(world + profile::native_layout.kWorldGameInstanceOffset),
               game_instance) || game_instance == 0) {
         return false;
     }
     std::uintptr_t players_array{};
     std::int32_t players_count{};
     if (!Read(reinterpret_cast<const void*>(
-                  game_instance + kGameInstanceLocalPlayersOffset), players_array) ||
+                  game_instance + profile::native_layout.kGameInstanceLocalPlayersOffset), players_array) ||
         players_array == 0 ||
         !Read(reinterpret_cast<const void*>(
-                  game_instance + kGameInstanceLocalPlayersOffset + 8), players_count) ||
+                  game_instance + profile::native_layout.kGameInstanceLocalPlayersOffset + profile::native_layout.kArrayNumOffset), players_count) ||
         players_count < 1) {
         return false;
     }
@@ -301,13 +290,13 @@ bool GetPlayerState(Host& host, State& state) noexcept {
     }
     std::uintptr_t controller{};
     if (!Read(reinterpret_cast<const void*>(
-                  local_player + kLocalPlayerControllerOffset), controller) ||
+                  local_player + profile::native_layout.kLocalPlayerControllerOffset), controller) ||
         controller == 0) {
         return false;
     }
     std::uintptr_t ps{};
     if (!Read(reinterpret_cast<const void*>(
-                  controller + kControllerPlayerStateOffset), ps) ||
+                  controller + profile::native_layout.kControllerPlayerStateOffset), ps) ||
         ps == 0) {
         return false;
     }
@@ -340,21 +329,21 @@ bool ReadDataTable(const std::uintptr_t dt,
                    std::vector<std::pair<FNamePair, std::uintptr_t>>& rows) noexcept {
     std::uintptr_t data{};
     std::int32_t num{}, max{};
-    if (!Read(reinterpret_cast<const void*>(dt + kDataTableRowMapOffset + 0), data) ||
-        !Read(reinterpret_cast<const void*>(dt + kDataTableRowMapOffset + 8), num) ||
-        !Read(reinterpret_cast<const void*>(dt + kDataTableRowMapOffset + 12), max) ||
+    if (!Read(reinterpret_cast<const void*>(dt + profile::native_layout.kDataTableRowMapOffset + 0), data) ||
+        !Read(reinterpret_cast<const void*>(dt + profile::native_layout.kDataTableRowMapOffset + profile::native_layout.kArrayNumOffset), num) ||
+        !Read(reinterpret_cast<const void*>(dt + profile::native_layout.kDataTableRowMapOffset + profile::native_layout.kArrayMaxOffset), max) ||
         data == 0 || num <= 0 || num > 4096 || max < num) {
         return false;
     }
     rows.clear();
     rows.reserve(static_cast<std::size_t>(num));
     for (std::int32_t i = 0; i < num; ++i) {
-        const std::size_t elem = static_cast<std::size_t>(i) * kDataTableRowStride;
+        const std::size_t elem = static_cast<std::size_t>(i) * profile::native_layout.kDataTableRowStride;
         FNamePair key{};
         std::uintptr_t row{};
         if (!Read(reinterpret_cast<const void*>(data + elem), key.cmp) ||
             !Read(reinterpret_cast<const void*>(data + elem + 4), key.number) ||
-            !Read(reinterpret_cast<const void*>(data + elem + 8), row) ||
+            !Read(reinterpret_cast<const void*>(data + elem + profile::native_layout.kRowPointerOffset), row) ||
             key.cmp == 0) {
             continue;
         }
@@ -368,25 +357,25 @@ bool InputFieldOffset(const Host& host, std::uintptr_t owner,
                       std::int32_t size, std::int32_t& offset,
                       std::uint16_t buffer_size = 0) {
     std::uintptr_t property{};
-    Read(reinterpret_cast<const void*>(owner + kUStructPropertyLinkOffset), property);
+    Read(reinterpret_cast<const void*>(owner + profile::native_layout.kUStructPropertyLinkOffset), property);
     for (unsigned i = 0; property != 0 && i < 32; ++i) {
         std::uint32_t name_id{};
-        Read(reinterpret_cast<const void*>(property + kFFieldNameOffset), name_id);
+        Read(reinterpret_cast<const void*>(property + profile::native_layout.kFFieldNameOffset), name_id);
         if (ResolveName(host.names, name_id) == name) {
             std::uintptr_t field_class{};
             std::uint32_t type_id{};
             std::int32_t actual_size{};
-            if (!Read(reinterpret_cast<const void*>(property + kFFieldClassOffset), field_class) ||
+            if (!Read(reinterpret_cast<const void*>(property + profile::native_layout.kFFieldClassOffset), field_class) ||
                 !Read(reinterpret_cast<const void*>(field_class), type_id) ||
                 ResolveName(host.names, type_id) != type ||
-                !Read(reinterpret_cast<const void*>(property + kFPropertyElementSizeOffset), actual_size) ||
+                !Read(reinterpret_cast<const void*>(property + profile::native_layout.kFPropertyElementSizeOffset), actual_size) ||
                 actual_size != size ||
-                !Read(reinterpret_cast<const void*>(property + kFPropertyOffsetInternalOffset), offset) ||
+                !Read(reinterpret_cast<const void*>(property + profile::native_layout.kFPropertyOffsetInternalOffset), offset) ||
                 offset < 0 || (buffer_size != 0 && (size > buffer_size || offset > buffer_size - size))) return false;
             return true;
         }
         std::uintptr_t next{};
-        if (!Read(reinterpret_cast<const void*>(property + kFPropertyPropertyLinkNextOffset), next) || next == property) break;
+        if (!Read(reinterpret_cast<const void*>(property + profile::native_layout.kFPropertyPropertyLinkNextOffset), next) || next == property) break;
         property = next;
     }
     return false;
@@ -395,34 +384,34 @@ bool InputFieldOffset(const Host& host, std::uintptr_t owner,
 std::uintptr_t FindWidgetProperty(const Host& host, std::uintptr_t object,
                                   std::string_view property_name) noexcept {
     std::uintptr_t cls{};
-    Read(reinterpret_cast<const void*>(object + kObjectClassOffset), cls);
+    Read(reinterpret_cast<const void*>(object + profile::native_layout.kObjectClassOffset), cls);
     for (unsigned depth = 0; cls != 0 && depth < 64; ++depth) {
         std::uintptr_t property{};
-        Read(reinterpret_cast<const void*>(cls + kUStructPropertyLinkOffset), property);
+        Read(reinterpret_cast<const void*>(cls + profile::native_layout.kUStructPropertyLinkOffset), property);
         for (unsigned count = 0; property != 0 && count < 4096; ++count) {
             std::uint32_t name_id{};
-            if (!Read(reinterpret_cast<const void*>(property + kFFieldNameOffset), name_id)) return 0;
+            if (!Read(reinterpret_cast<const void*>(property + profile::native_layout.kFFieldNameOffset), name_id)) return 0;
             if (ResolveName(host.names, name_id) == property_name) {
                 std::uintptr_t field_class{}, value{};
                 std::uint32_t type_id{};
                 std::int32_t size{}, offset{};
-                if (!Read(reinterpret_cast<const void*>(property + kFFieldClassOffset), field_class) ||
+                if (!Read(reinterpret_cast<const void*>(property + profile::native_layout.kFFieldClassOffset), field_class) ||
                     !Read(reinterpret_cast<const void*>(field_class), type_id) ||
                     ResolveName(host.names, type_id) != "ObjectProperty" ||
-                    !Read(reinterpret_cast<const void*>(property + kFPropertyElementSizeOffset), size) ||
+                    !Read(reinterpret_cast<const void*>(property + profile::native_layout.kFPropertyElementSizeOffset), size) ||
                     size != sizeof(std::uintptr_t) ||
-                    !Read(reinterpret_cast<const void*>(property + kFPropertyOffsetInternalOffset), offset) ||
+                    !Read(reinterpret_cast<const void*>(property + profile::native_layout.kFPropertyOffsetInternalOffset), offset) ||
                     offset < 0 ||
                     !Read(reinterpret_cast<const void*>(object + offset), value)) return 0;
                 return value;
             }
             std::uintptr_t next{};
-            if (!Read(reinterpret_cast<const void*>(property + kFPropertyPropertyLinkNextOffset), next) ||
+            if (!Read(reinterpret_cast<const void*>(property + profile::native_layout.kFPropertyPropertyLinkNextOffset), next) ||
                 next == property) break;
             property = next;
         }
         std::uintptr_t super{};
-        if (!Read(reinterpret_cast<const void*>(cls + kUStructSuperStructOffset), super) ||
+        if (!Read(reinterpret_cast<const void*>(cls + profile::native_layout.kUStructSuperStructOffset), super) ||
             super == cls) break;
         cls = super;
     }
@@ -440,7 +429,7 @@ bool ResolveNormalAttackInput(Host& host, State& state) {
     binding = {};
     NormalAttackBinding next;
     std::uintptr_t cls{};
-    Read(reinterpret_cast<const void*>(state.controller + kObjectClassOffset), cls);
+    Read(reinterpret_cast<const void*>(state.controller + profile::native_layout.kObjectClassOffset), cls);
     if (!FindFunction(host.names, cls, "ActivateAbilityFromID", 2, 8, next.triggered) ||
         !FindFunction(host.names, cls, "ReleaseAbilityFromID", 2, 8, next.completed)) {
         SetStatus(host, "普攻输入：未找到配对的能力输入函数");
@@ -506,7 +495,13 @@ bool InvokeNormalAttack(Host& host, State& state) {
     return pressed && released;
 }
 
-bool ActivateSkillByInputId(Host& host, std::int32_t input_id) noexcept {
+// 技能冷却判定的容差：剩下不到这个秒数就当作可以放了。
+constexpr float kAutoCombatSkillReadyEpsilon = 0.05f;
+
+// `only_if_ready` 为真时，只施放「冷却已走完」的技能；其余（含冷却中与
+// 宿主未提供冷却信息的）静默跳过，由调用方决定改用别的手段。
+bool ActivateSkillByInputId(Host& host, std::int32_t input_id,
+                            bool only_if_ready = false) noexcept {
     // 原实现在这里用 `context.host` 现查 combat / skills / skill_invocation 三个服务；
     // 模块由 `Host` 注入，指针为空即视为服务不可用（`HasField` 对空指针返回 false）。
     if (!HasField<AnomalyNteCombatServiceV1, decltype(AnomalyNteCombatServiceV1::current_combatant)>(
@@ -537,6 +532,7 @@ bool ActivateSkillByInputId(Host& host, std::int32_t input_id) noexcept {
     for (auto& skill : skills) skill.struct_size = sizeof(skill);
     std::uint32_t offset{};
     bool matched{};
+    bool cooling{};
     while (offset < frame.skill_count) {
         AnomalyNteSkillPageRequestV1 page_request{sizeof(page_request)};
         page_request.generation = frame.generation;
@@ -553,6 +549,12 @@ bool ActivateSkillByInputId(Host& host, std::int32_t input_id) noexcept {
             // STALE describes sample age; activate revalidates live identities in the host.
             if (skill.input_id != input_id || (skill.flags & ANOMALY_NTE_SKILL_V1_VALID) == 0 ||
                 (skill.flags & ANOMALY_NTE_SKILL_V1_PENDING_REMOVE) != 0) continue;
+            if (only_if_ready &&
+                (skill.flags & ANOMALY_NTE_SKILL_V1_COOLDOWN_VALID) != 0 &&
+                skill.cooldown_remaining_seconds > kAutoCombatSkillReadyEpsilon) {
+                cooling = true;
+                continue;
+            }
             matched = true;
             AnomalyNteSkillInvocationRequestV1 request{sizeof(request)};
             request.world = combatant.world;
@@ -569,6 +571,8 @@ bool ActivateSkillByInputId(Host& host, std::int32_t input_id) noexcept {
         if (page.next_offset <= offset) break;
         offset = page.next_offset;
     }
+    // 冷却中不算失败，也不改写状态行 —— 调用方会接着试别的手段。
+    if (cooling) return false;
     SetStatus(host, matched ? std::string("框架技能未接受本次施放") :
         "框架未找到技能 ID " + std::to_string(input_id));
     return false;
@@ -986,20 +990,24 @@ Result Tick(Host& host, State& state) noexcept {
             SetStatus(host, std::to_string(host.search_radius_m) + "米内无怪");
         }
     }
-    // 完成判据（原来在副本流程里，CloneEnter/plugin.cpp:6868–6887）：必须先见过怪才开始
-    // 计秒，所以「本来就没怪的点」不会被误判为完成——那种点由调用方自己的首次接敌超时收场。
+    // 完成判据（原来在副本流程里，CloneEnter/plugin.cpp:6868–6887）：`host.require_seen_monster`
+    // 为真时必须先见过怪才开始计秒，所以「本来就没怪的点」不会被误判为完成——那种点由调用方
+    // 自己的超时收场；为假时进战斗就计，空点按同一时长结束。
     // 计数是秒级的：no_monster_tick_at 是下一次允许 +1 的时刻。
     if (state.target_valid) {
         state.met_monster = true;
         state.no_monster_seconds = 0;
-        // 丢目标后要过满一秒才 +1：置 {} 会让第一帧立刻计数，「连续 5 秒」实际只剩约 4 秒。
+        // 丢目标后要过满一秒才 +1：置 {} 会让第一帧立刻计数，「连续 N 秒」实际只剩约 N-1 秒。
         state.no_monster_tick_at = now + std::chrono::seconds(1);
-    } else if (state.met_monster) {
-        if (now >= state.no_monster_tick_at) {
+    } else if (state.met_monster || !host.require_seen_monster) {
+        // 首次无怪（还没见过怪、也没排过计秒）同样要先等满一秒，否则开打那一帧就算掉一秒。
+        if (state.no_monster_tick_at == std::chrono::steady_clock::time_point{}) {
+            state.no_monster_tick_at = now + std::chrono::seconds(1);
+        } else if (now >= state.no_monster_tick_at) {
             ++state.no_monster_seconds;
             state.no_monster_tick_at = now + std::chrono::seconds(1);
         }
-        if (state.no_monster_seconds >= kAutoCombatNoMonsterSeconds) {
+        if (state.no_monster_seconds >= host.no_monster_seconds) {
             // cleared 只在进入该状态的那一帧报一次；清空后的掉落拾取（原实现每秒都发一次，
             // CloneEnter/plugin.cpp:4571–4576）挂在这同一次跳变上，因此也只会发一次。
             if (!state.cleared_reported) {
@@ -1052,6 +1060,30 @@ Result Tick(Host& host, State& state) noexcept {
         }
     } else {
         StopAutoCombatMovement(host, state);
+        if (host.policy_custom) {
+            // 技能优先：大招 → 小技能（都要求冷却已走完），都没有可放的技能才平A。
+            // 三者各自受开关控制；单项被关掉时直接跳过，不再往下试。
+            bool acted = false;
+            if (host.use_skill_ultimate &&
+                ActivateSkillByInputId(host, host.skill_ultimate_input_id, true)) {
+                acted = true;
+                state.last_action_normal_attack = false;
+            }
+            if (!acted && host.use_skill_small &&
+                ActivateSkillByInputId(host, host.skill_small_input_id, true)) {
+                acted = true;
+                state.last_action_normal_attack = false;
+            }
+            if (!acted && host.use_normal_attack) {
+                if (!InvokeNormalAttack(host, state)) {
+                    state.attack_failed = true;
+                    ResetAutoCombatTarget(host, state);
+                    return Result::unavailable;
+                }
+                state.last_action_normal_attack = true;
+            }
+            return Result::working;
+        }
         if (host.melee_mode) {
             ++state.melee_attack_counter;
             bool do_normal_attack = true;

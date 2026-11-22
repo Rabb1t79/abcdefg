@@ -1,6 +1,7 @@
 #pragma once
 
 #include "anomaly/sdk/anomaly_sdk.h"
+#include "anomaly/hook_manager.hpp"
 #include "anomaly/plugin_file_watcher.hpp"
 #include "anomaly/plugin_config_watcher.hpp"
 #include "anomaly/plugin_enablement.hpp"
@@ -23,6 +24,7 @@
 #include <mutex>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -38,6 +40,11 @@ namespace ue5mem {
 struct UiResourceWorkerGate;
 struct PluginCacheOwnerLease;
 struct NteEscMenuButtonRegistry;
+
+struct PluginUsageObservation {
+    std::string id;
+    std::chrono::system_clock::time_point observed_at;
+};
 
 struct CallbackMetricsView {
     std::uint64_t calls{};
@@ -102,6 +109,7 @@ struct PluginView {
     std::string status_reason;
     CallbackMetricsView update_metrics;
     CallbackMetricsView draw_metrics;
+    CallbackMetricsView overlay_metrics;
     PluginPlatformDiagnosticsView platform_diagnostics;
 };
 
@@ -123,6 +131,7 @@ struct PluginMaintenanceTiming {
 enum class PluginCallbackEvidenceKind : std::uint8_t {
     Update,
     Draw,
+    Overlay,
 };
 
 struct PluginCallbackEvidence {
@@ -149,10 +158,6 @@ struct PluginStopDiagnostic {
 // indefinitely queued.
 using UiResourceWorkerDispatcher = std::function<bool(
     std::string owner, std::uint64_t generation, std::function<void()> callback)>;
-using PluginLoadPredicate = std::function<bool(const anomaly::PluginManifest& manifest)>;
-using PluginActivationObserver = std::function<void(
-    std::string_view plugin_id, std::uint64_t generation, bool entering)>;
-
 class PluginManager {
 public:
     PluginManager(
@@ -164,8 +169,7 @@ public:
         anomaly::HotkeyDispatcher input_dispatcher = {},
         UiResourceWorkerDispatcher ui_resource_worker_dispatcher = {},
         anomaly::IpcPost ipc_post = {},
-        PluginLoadPredicate load_predicate = {},
-        PluginActivationObserver activation_observer = {});
+        std::unique_ptr<anomaly::HookBackend> hook_backend = {});
     ~PluginManager();
 
     PluginManager(const PluginManager&) = delete;
@@ -189,6 +193,9 @@ public:
         std::function<void(std::string_view, std::uint64_t)> canceller);
     void SetCallbackEvidenceObserver(
         std::function<void(const PluginCallbackEvidence&)> observer);
+    // Set before LoadAll. Coalesces successful starts and active plugins (including
+    // those without frame callbacks), at most once a minute. Must only enqueue.
+    void SetUsageObserver(std::function<void(std::vector<PluginUsageObservation>)> observer);
     [[nodiscard]] anomaly::PluginScope::CallbackLease AcquireCallback(
         std::string_view plugin_id, std::uint64_t generation) noexcept;
     [[nodiscard]] std::vector<PluginStopDiagnostic> StopDiagnostics() const;
@@ -204,6 +211,10 @@ public:
     // synchronization, but callers must not hold a renderer/plugin gate: it
     // can perform filesystem I/O.
     void PersistUiWindowState();
+    // Favorites are a shell preference that travels with the persisted UI
+    // state. They never influence catalog validity, enablement, or loading.
+    void SetPluginFavorite(std::string_view plugin_id, bool favorite) noexcept;
+    [[nodiscard]] std::unordered_set<std::string> FavoritePlugins() const;
     // Must be called only from the validated game-thread anchor.
     void GameUpdate(double delta_seconds);
     void Draw(void* imgui_context);
@@ -293,9 +304,9 @@ public:
 
 private:
     struct LoadedPlugin;
-    [[nodiscard]] bool LoadAllowed(const anomaly::PluginCatalogEntry& entry) const;
-    void PublishSuspended(const anomaly::PluginCatalogEntry& entry);
     bool LoadCatalogEntry(const anomaly::PluginCatalogEntry& entry);
+    bool LoadStagedCatalogEntry(
+        const anomaly::PluginCatalogEntry& entry, anomaly::PluginShadowResult staged);
     void LogImpl(
         AnomalyCoreLogLevelV1 level,
         std::string message,
@@ -351,6 +362,10 @@ private:
     void* imgui_context_{};
     const AnomalyUiServiceV1* ui_service_{};
     std::uint64_t observed_adapter_service_revision_{};
+    // Services can publish late without changing the adapter revision again (a Profile that
+    // becomes ready, or a game tick hook that only starts on a later frame). Waiting plugins
+    // therefore also retry on a slow timer instead of only on a revision change.
+    std::chrono::steady_clock::time_point last_waiting_service_retry_{};
     anomaly::PluginShadowStore shadow_store_;
     anomaly::PluginFileWatcher file_watcher_;
     anomaly::PluginConfigFileWatcher enablement_file_watcher_;
@@ -366,6 +381,8 @@ private:
     std::chrono::steady_clock::time_point ui_window_state_last_save_{};
     mutable std::mutex plugin_window_visibility_mutex_;
     std::unordered_map<std::string, bool> plugin_window_visibility_;
+    mutable std::mutex favorite_plugins_mutex_;
+    std::unordered_set<std::string> favorite_plugins_;
     std::shared_ptr<anomaly::UiResourceRegistry> ui_resources_ =
         std::make_shared<anomaly::UiResourceRegistry>();
     anomaly::InputService input_service_;
@@ -375,8 +392,9 @@ private:
     std::shared_ptr<anomaly::UiResourceRenderBackend> ui_resource_render_backend_;
     std::function<void(std::string_view, std::uint64_t)> queued_callback_canceller_;
     std::function<void(const PluginCallbackEvidence&)> callback_evidence_observer_;
-    PluginLoadPredicate load_predicate_;
-    PluginActivationObserver activation_observer_;
+    std::function<void(std::vector<PluginUsageObservation>)> usage_observer_;
+    std::unordered_map<std::string, std::chrono::system_clock::time_point> pending_usage_;
+    std::chrono::steady_clock::time_point last_usage_observation_{};
     mutable std::mutex stop_diagnostics_mutex_;
     std::vector<PluginStopDiagnostic> stop_diagnostics_;
 };

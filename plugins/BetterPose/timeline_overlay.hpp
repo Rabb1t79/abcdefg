@@ -1,10 +1,10 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 // The on-screen keyframe timeline's geometry: where the track, keys, playhead
@@ -14,7 +14,33 @@
 namespace better_pose::timeline {
 
 inline constexpr int kNone = -1;
-enum class Hit : std::uint8_t { None, Track, Playhead, Key, Play, Stop, Record, Delete, Fit };
+enum class SpaceAction : std::uint8_t {
+  None,
+  ToggleKeyframes,
+  ToggleMotion
+};
+enum class Hit : std::uint8_t {
+  None,
+  Track,
+  Playhead,
+  Key,
+  Play,
+  Stop,
+  Record,
+  Delete,
+  Fit
+};
+
+inline SpaceAction ResolveSpaceAction(
+    const bool menu_owns_keyboard, const bool space_down,
+    const bool space_was_down, const bool typing, const bool control,
+    const bool motion_loaded, const bool keyframes_available) noexcept {
+  if (!menu_owns_keyboard || !space_down || space_was_down || typing || control)
+    return SpaceAction::None;
+  if (motion_loaded)
+    return SpaceAction::ToggleMotion;
+  return keyframes_available ? SpaceAction::ToggleKeyframes : SpaceAction::None;
+}
 
 struct Rect {
   float left{};
@@ -128,7 +154,7 @@ inline double XToFrame(const Layout &layout, const float x) noexcept {
 }
 
 inline Layout MakeLayout(const float width, const float height, const std::uint32_t length,
-                         const double frame, const std::vector<KeyMark> &marks,
+                         const double frame, std::vector<KeyMark> marks,
                          const View &requested_view = {}) {
   Layout out;
   constexpr float kBottomSafeArea = 78.0F;
@@ -154,7 +180,7 @@ inline Layout MakeLayout(const float width, const float height, const std::uint3
   out.frame_end = static_cast<float>(view.end);
   out.playhead_x = FrameToX(out, frame);
   out.playhead_visible = frame >= view.start && frame <= view.end;
-  out.keys = marks;
+  out.keys = std::move(marks);
   for (auto &key : out.keys) {
     key.x = FrameToX(out, key.frame);
     key.visible = key.frame >= view.start && key.frame <= view.end;
@@ -163,12 +189,14 @@ inline Layout MakeLayout(const float width, const float height, const std::uint3
 }
 
 inline int HitKey(const Layout &layout, const float x, const float y, const float radius = 9.0F) noexcept {
+  const float key_y = (layout.track.top + layout.track.bottom) * 0.5F;
   for (std::size_t i{}; i != layout.keys.size(); ++i) {
     if (!layout.keys[i].visible)
       continue;  // off the zoomed view: drawn nowhere, so not grabbable
     const float dx = x - layout.keys[i].x;
-    const float dy = y - (layout.track.top + layout.track.bottom) * 0.5F;
-    if (dx * dx + dy * dy <= radius * radius) return static_cast<int>(i);
+    const float dy = y - key_y;
+    if (dx * dx + dy * dy <= radius * radius)
+      return static_cast<int>(i);
   }
   return kNone;
 }
