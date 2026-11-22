@@ -1910,29 +1910,6 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         add_test(NAME autoclaw_localization
             COMMAND pwsh -NoProfile -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_plugin_i18n.ps1" -Plugin AutoClaw)
     endif()
-    anomaly_add_plugin(anomaly_builtin_autogacha
-        SOURCES plugins/AutoGacha/plugin.cpp
-        MANIFEST plugins/AutoGacha/manifest.json
-        PACKAGE_NAME AutoGacha
-        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/AutoGacha")
-    if(ANOMALY_BUILD_TEST_FIXTURES)
-        foreach(suite IN ITEMS runtime profile)
-            if(suite STREQUAL "runtime")
-                set(autogacha_suite_source tests.cpp)
-            else()
-                set(autogacha_suite_source profile_tests.cpp)
-            endif()
-            add_executable(anomaly_autogacha_${suite}_fixture plugins/AutoGacha/${autogacha_suite_source})
-            target_link_libraries(anomaly_autogacha_${suite}_fixture PRIVATE
-                Anomaly::sdk anomaly_plugin_profile ue5mem_memory)
-            target_include_directories(anomaly_autogacha_${suite}_fixture PRIVATE "${CMAKE_SOURCE_DIR}/apps/test_host")
-            target_compile_features(anomaly_autogacha_${suite}_fixture PRIVATE cxx_std_20)
-            target_compile_options(anomaly_autogacha_${suite}_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
-            add_test(NAME autogacha_${suite} COMMAND anomaly_autogacha_${suite}_fixture)
-        endforeach()
-        add_test(NAME autogacha_localization
-            COMMAND pwsh -NoProfile -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_plugin_i18n.ps1" -Plugin AutoGacha)
-    endif()
     anomaly_add_plugin(anomaly_builtin_skin_changer
         SOURCES plugins/SkinChanger/plugin.cpp plugins/SkinChanger/cosmetics.cpp
             plugins/SkinChanger/awakening.cpp plugins/SkinChanger/plates.cpp
@@ -2190,7 +2167,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         anomaly_builtin_nte_free_fly anomaly_builtin_skin_changer anomaly_builtin_ui_buttons
         anomaly_builtin_dll_loader anomaly_builtin_hifi_vehicle_music
         anomaly_builtin_model_scale anomaly_builtin_status_bar anomaly_builtin_autofish anomaly_builtin_autotaxi
-        anomaly_builtin_autoclaw anomaly_builtin_autogacha anomaly_builtin_character_studio
+        anomaly_builtin_autoclaw anomaly_builtin_character_studio
         anomaly_builtin_deserted anomaly_builtin_jelly anomaly_builtin_night999
         anomaly_builtin_npc_summon anomaly_builtin_training_dummy
         anomaly_builtin_summon_lab anomaly_builtin_health_display anomaly_builtin_memory_dump anomaly_builtin_nailong
@@ -2224,7 +2201,6 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         target_compile_options(anomaly_builtin_autofish PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_autotaxi PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_autoclaw PRIVATE /utf-8)
-        target_compile_options(anomaly_builtin_autogacha PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_ui_buttons PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_deserted PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_hifi_vehicle_music PRIVATE /utf-8)
