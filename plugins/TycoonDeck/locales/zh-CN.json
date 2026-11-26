@@ -23,7 +23,7 @@
     "status.pack": "正在确认卡包选择。",
     "status.settle": "正在请求结算。",
     "status.rejected": "游戏拒绝了本次请求，已停止自动推进。",
-    "status.settled": "本局已结束（{0}）。",
+    "status.settled": "本局已结束。",
     "status.data_changed": "牌局数据发生变化，自动推进已停止；重新开关一次即可重试。",
     "label.state": "阶段 {0} · 幕 {1} · 层 {2}",
     "label.score": "分数 {0} / 目标 {1} · 资金 {2} · 出牌 {3}",

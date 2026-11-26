@@ -20,9 +20,11 @@ struct Observation {
     std::int32_t pickCount{};
     std::int32_t playsLeft{};
 };
+// key 是本地化目录的键，fallback 是代码里的英文回退；两者必须同时给，目录缺项时显示回退而不是键名。
 struct Decision {
     Action action{};
-    const char* message{};
+    const char* key{};
+    const char* fallback{};
 };
 struct Settings {
     bool enabled{};
@@ -31,19 +33,19 @@ struct Settings {
 
 // 最短合法序列：能直接结束盲注就不出牌，能跳过盲注就不打，其余阶段只做推进动作。
 inline Decision Decide(const Observation& value) {
-    if (value.pendingPack && value.pickCount > 0) return {Action::ConfirmPack, "status.pack"};
+    if (value.pendingPack && value.pickCount > 0) return {Action::ConfirmPack, "status.pack", "Confirming the card pack choice."};
     switch (value.phase) {
-    case Phase::Idle: return {Action::StartGame, "status.starting"};
+    case Phase::Idle: return {Action::StartGame, "status.starting", "Requesting a new run."};
     case Phase::BlindSelection:
-        return value.canSkip ? Decision{Action::SkipBlind, "status.skip_blind"}
-                             : Decision{Action::StartBlind, "status.start_blind"};
+        return value.canSkip ? Decision{Action::SkipBlind, "status.skip_blind", "Skipping the current blind."}
+                             : Decision{Action::StartBlind, "status.start_blind", "Starting the current blind."};
     case Phase::Playing:
-        if (value.canFinish) return {Action::FinishBlind, "status.finish_blind"};
-        if (value.playsLeft > 0) return {Action::PlayAll, "status.play_all"};
-        return {Action::Settle, "status.settle"};
-    case Phase::BlindCleared: return {Action::FinishBlind, "status.finish_blind"};
+        if (value.canFinish) return {Action::FinishBlind, "status.finish_blind", "Ending the current blind."};
+        if (value.playsLeft > 0) return {Action::PlayAll, "status.play_all", "Playing every card in hand."};
+        return {Action::Settle, "status.settle", "Requesting settlement."};
+    case Phase::BlindCleared: return {Action::FinishBlind, "status.finish_blind", "Ending the current blind."};
     case Phase::Shop:
-    case Phase::ShopCleared: return {Action::SkipShop, "status.skip_shop"};
+    case Phase::ShopCleared: return {Action::SkipShop, "status.skip_shop", "Skipping the shop."};
     default: return {};
     }
 }
@@ -59,6 +61,20 @@ inline const char* PhaseKey(Phase phase) {
     case Phase::GameOverFailed: return "phase.game_over_failed";
     case Phase::SettlementAnimating: return "phase.settlement";
     default: return "phase.idle";
+    }
+}
+inline const char* PhaseFallback(Phase phase) {
+    switch (phase) {
+    case Phase::Idle: return "Idle";
+    case Phase::BlindSelection: return "Blind selection";
+    case Phase::Playing: return "Playing";
+    case Phase::BlindCleared: return "Blind cleared";
+    case Phase::Shop: return "Shop";
+    case Phase::ShopCleared: return "Shop cleared";
+    case Phase::GameOver: return "Run ended";
+    case Phase::GameOverFailed: return "Run failed";
+    case Phase::SettlementAnimating: return "Settling";
+    default: return "Idle";
     }
 }
 // 配置文档由本插件自己写，解析只需认这两项；未知字段忽略。

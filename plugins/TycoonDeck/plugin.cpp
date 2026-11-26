@@ -331,7 +331,8 @@ void ANOMALY_CALL Update(void*, double) noexcept {
         }
         const auto key = PhaseKey(value.phase);
         const auto state_text = localizer.Format("label.state", "Phase {0} act {1} floor {2}",
-            std::array<std::string_view, 3>{localizer.Text(key, key), std::to_string(value.act), std::to_string(value.floor)});
+            std::array<std::string_view, 3>{localizer.Text(key, PhaseFallback(value.phase)),
+                std::to_string(value.act), std::to_string(value.floor)});
         const auto score_text = localizer.Format("label.score", "Score {0} / {1} money {2} plays {3}",
             std::array<std::string_view, 4>{std::to_string(value.score), std::to_string(value.target),
                 std::to_string(value.money), std::to_string(value.playsLeft)});
@@ -339,20 +340,23 @@ void ANOMALY_CALL Update(void*, double) noexcept {
             value.pickCount, value.playsLeft});
         if (!fast_finish.load() && decision.action == tycoon::Action::FinishBlind &&
             value.phase == tycoon::Phase::Playing && value.playsLeft > 0)
-            decision = {tycoon::Action::PlayAll, "status.play_all"};
+            decision = {tycoon::Action::PlayAll, "status.play_all", "Playing every card in hand."};
         if (decision.action == tycoon::Action::None) {
             Publish(localizer.Text("status.settled", "This run has ended."), state_text);
             return;
         }
         const auto outcome = Submit(r, value, decision.action);
-        if (outcome == Dispatch::Waiting) { Publish(localizer.Text(decision.message, decision.message), state_text); return; }
+        if (outcome == Dispatch::Waiting) {
+            Publish(localizer.Text(decision.key, decision.fallback), state_text);
+            return;
+        }
         if (outcome == Dispatch::Failed) {
             Publish(localizer.Text("status.rejected", "The game rejected the request; automation stopped."), state_text);
             enabled.store(false);
             MarkDirty();
             return;
         }
-        Publish(localizer.Text(decision.message, decision.message), state_text + " · " + score_text);
+        Publish(localizer.Text(decision.key, decision.fallback), state_text + " | " + score_text);
         next_poll = now + std::chrono::milliseconds(700);
     } catch (...) {
         enabled.store(false);
