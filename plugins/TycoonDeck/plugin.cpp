@@ -184,6 +184,7 @@ bool RequestComponent(const Reader& r, uintptr_t player) {
     return fn && player && Invoke(r, player, fn, nullptr);
 }
 
+void DebugLog(const std::string& line);
 enum class Dispatch { Sent, Waiting, Failed };
 Dispatch Submit(const Reader& r, const State& value, tycoon::Action action) {
     uintptr_t fn{};
