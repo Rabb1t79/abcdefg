@@ -3,7 +3,7 @@
   "locale": "zh-CN",
   "messages": {
     "window.title": "铺满全城 · 直接完成事件",
-    "plugin.description": "直接完成铺满全城（TYCOON'S DECK）事件：读取组件上的上报任务 ID 并调用玩家状态自己的 ServerSubmitQuest 提交，或跑一次 NPC 挑战让事件目标挂上后上报；不模拟任何操作。",
+    "plugin.description": "直接完成铺满全城（TYCOON'S DECK）事件：读取组件上的上报任务 ID 并调用玩家状态自己的 ServerSubmitQuest 提交；本局没有目标时先开一局 NPC 挑战把目标挂上再上报。",
     "action.report_win": "直接上报获胜",
     "action.npc_flow": "跑 NPC 挑战并上报",
     "action.autoplay": "改为自动打完本局",
@@ -13,6 +13,7 @@
     "option.score_assist": "结算前把盲注分数抬到目标值",
     "option.skip_shop": "立即离开商店",
     "option.interval": "操作间隔（毫秒）",
+    "status.npc_needed": "本局没有可上报目标，先开一局挑战。",
     "status.npc_list_empty": "挑战列表是空的。",
     "status.npc_select_failed": "选择挑战失败。",
     "status.npc_started": "挑战已开始，接着上报。",

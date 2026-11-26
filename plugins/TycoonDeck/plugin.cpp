@@ -48,7 +48,7 @@ constexpr int kMaximumIntervalMs = 2000;
 constexpr int kDefaultIntervalMs = 400;
 // A request that never changes the observed state is not retried forever: the run either
 // advanced or this build's contract no longer matches what the plugin expects.
-constexpr int kStallLimit = 12;
+constexpr int kStallLimit = 4;
 
 struct Settings final {
     bool enabled{};
@@ -363,12 +363,14 @@ public:
                     }
                 }
             }
-            if (reporting_.load()) {
-                Report();
-                return;
-            }
+            // The challenge start runs before the report pass: it is what makes objectives
+            // exist in the first place.
             if (npc_stage_ != 0) {
                 AdvanceNpcFlow();
+                return;
+            }
+            if (reporting_.load()) {
+                Report();
                 return;
             }
             // A manual id is submitted before anything else: it is the direct-completion path.
@@ -513,11 +515,21 @@ private:
                     line += names[index];
                 }
                 Log(line);
-                npc_flow_ = ids.front();
+                // Prefer a real challenge flow over a character/tutorial entry: only a
+                // challenge run binds the activity objectives.
+                std::size_t chosen = 0;
+                for (std::size_t index = 0; index < names.size(); ++index) {
+                    if (names[index].rfind("NpcChallenge", 0) == 0) {
+                        chosen = index;
+                        break;
+                    }
+                }
+                npc_flow_ = ids[chosen];
                 bool selected{};
                 const bool invoked = bridge_->SelectNpcQuest(npc_flow_, selected);
                 Log(std::string{"tycoons-deck: npc select invoked="} + (invoked ? "1" : "0") +
-                    " selected=" + (selected ? "1" : "0") + " flow=" + bridge_->QuestName(npc_flow_));
+                    " selected=" + (selected ? "1" : "0") + " flow=" + bridge_->QuestName(npc_flow_) +
+                    " " + bridge_->SelectDiagnostic());
                 if (!invoked) {
                     Publish(localizer_.Text("status.npc_select_failed", "The challenge could not be selected."));
                     npc_stage_ = 0;
@@ -547,8 +559,14 @@ private:
         try {
             std::vector<tycoon::FName> ids;
             if (!bridge_->ReadQuestIds(ids) || ids.empty()) {
-                // A free-play run carries no report ids at all, so waiting forever would look
-                // like a dead button. Fall through to playing the run out instead.
+                // One press does whatever is needed: if this run carries no objectives, start
+                // the challenge that binds them, then report on a later tick.
+                if (!npc_attempted_.exchange(true)) {
+                    npc_stage_ = 1;
+                    Publish(localizer_.Text("status.npc_needed",
+                        "This run has no objectives, so a challenge is started first."));
+                    return;
+                }
                 if (++empty_report_polls_ >= 3) {
                     reporting_.store(false);
                     empty_report_polls_ = 0;
@@ -635,7 +653,7 @@ private:
         state_floor_.store(floor);
         state_plays_.store(state.plays_left);
         state_discards_.store(state.discards_left);
-        Publish(localizer_.Format("text.headline", "{0} 鐠?{1}", combined));
+        Publish(localizer_.Format("text.headline", "{0} 闁?{1}", combined));
     }
 
 public:
@@ -685,6 +703,7 @@ private:
     int last_report_count_{-1};
     int empty_report_polls_{};
     int npc_stage_{};
+    std::atomic<bool> npc_attempted_{};
     tycoon::FName npc_flow_{};
     int logged_states_{};
     int action_logs_{};
@@ -780,7 +799,7 @@ void Content(Context& context, const AnomalyUiServiceV1* ui) {
     const auto plays = std::to_string(context.Plays());
     const auto discards = std::to_string(context.Discards());
     const std::array plays_arguments{std::string_view(plays), std::string_view(discards)};
-    const auto plays_text = text.Format("text.plays", "Plays left {0} 鐠?Discards left {1}", plays_arguments);
+    const auto plays_text = text.Format("text.plays", "Plays left {0} 闁?Discards left {1}", plays_arguments);
     ui->text(ui->user, StringView(plays_text));
     const auto money = std::to_string(context.Money());
     const std::array money_arguments{std::string_view(money)};
@@ -788,7 +807,7 @@ void Content(Context& context, const AnomalyUiServiceV1* ui) {
     const auto act = std::to_string(context.Act());
     const auto floor = std::to_string(context.Floor());
     const std::array act_arguments{std::string_view(act), std::string_view(floor)};
-    ui->text(ui->user, StringView(text.Format("text.act", "Act {0} 鐠?Floor {1}", act_arguments)));
+    ui->text(ui->user, StringView(text.Format("text.act", "Act {0} 闁?Floor {1}", act_arguments)));
     const auto sent = std::to_string(context.Sent());
     const std::array sent_arguments{std::string_view(sent)};
     ui->text(ui->user, StringView(text.Format("text.sent", "Requests sent: {0}", sent_arguments)));
@@ -861,6 +880,9 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* raw) noexcept {
         const auto registered = windows->register_window(windows->user, &spec, &window);
         if (!Succeeded(registered)) return registered;
         context.SetWindow(window);
+        // A persisted enabled flag means the operator already asked for completion, so the
+        // whole chain (challenge start, then submit) resumes without another click.
+        if (context.Enabled()) context.StartReport();
         return Ok();
     } catch (...) {
         return {ANOMALY_STATUS_V1_FAILED, 0, {}};

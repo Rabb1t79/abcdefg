@@ -93,10 +93,10 @@ inline constexpr std::string_view kQuestsInProgressField = "QuestsInProgress";
 // Measured from the live row layout: ids sit at row offset 0 and rows are 0xE0 bytes apart.
 inline constexpr std::uintptr_t kProgressStride = 0xE0;
 inline constexpr std::size_t kMaximumReportQuests = 16;
-// AHTPlayerState::ServerSubmitQuest —— the server RPC the minigame itself calls when a
+// AHTPlayerState::ServerSubmitQuest 閳ユ柡鈧?the server RPC the minigame itself calls when a
 // run is won, so submitting it is the report path rather than a simulation of play.
 inline constexpr FunctionSpec kSubmitQuestFunction{"ServerSubmitQuest", 3, 20};
-// UHTBalatroLikeComponent::GetHandCards —— returns TArray<FHTBalatroCardInstance>.
+// UHTBalatroLikeComponent::GetHandCards 閳ユ柡鈧?returns TArray<FHTBalatroCardInstance>.
 inline constexpr FunctionSpec kGetHandCardsFunction{"GetHandCards", 1, 16};
 inline constexpr std::uintptr_t kCardInstanceStride = 0xA8;
 
@@ -114,7 +114,7 @@ inline constexpr FunctionSpec kPlayAllByIdFunction{"RequestPlayAllHandCardsByID"
 // NPC challenge entry: the flow list is what the lobby's challenge button selects from, so
 // starting one of these is the entry that binds the activity objectives.
 inline constexpr FunctionSpec kGetAllNpcIdsFunction{"GetAllNPCIDs", 1, 16};
-inline constexpr FunctionSpec kSelectNpcQuestFunction{"RequestSelectNPCChallengeQuest", 1, 12};
+inline constexpr FunctionSpec kSelectNpcQuestFunction{"RequestSelectNPCChallengeQuest", 2, 9};
 inline constexpr FunctionSpec kStartNpcChallengeFunction{"RequestStartNPCChallenge", 1, 8};
 
 struct NpcSelectFrame final {
@@ -130,7 +130,7 @@ struct GuidArray final {
     std::int32_t capacity{};
 };
 static_assert(sizeof(GuidArray) == 16);
-// UHTPlayerState::RequestBalatroLikeComponent 鈥斺€?the player state replicates the component
+// UHTPlayerState::RequestBalatroLikeComponent 闁炽儲鏌￠埀?the player state replicates the component
 // on demand, so this is the native way to obtain it when it is not replicated yet.
 inline constexpr FunctionSpec kRequestComponentFunction{"RequestBalatroLikeComponent", 0, 0};
 
@@ -173,6 +173,8 @@ public:
         get_all_npc_ids_ = {};
         select_npc_quest_ = {};
         start_npc_challenge_ = {};
+        select_npc_frame_ = {};
+        start_npc_frame_ = {};
         submit_quest_retry_ = {};
         quest_id_offset_ = -1;
         quest_component_offset_ = -1;
@@ -338,6 +340,7 @@ public:
     }
 
     [[nodiscard]] std::string QuestName(const FName quest) const { return reader_.Name(quest); }
+    [[nodiscard]] const std::string& SelectDiagnostic() const noexcept { return select_diag_; }
 
     // Diagnostic view of the report-id array, so an empty list can be told apart from an
     // unresolved field without another round trip.
@@ -471,7 +474,30 @@ public:
         return !ids.empty();
     }
 
+    // The generated marshal size of a name+bool function is not stable across builds (the
+    // SDK struct pads to 12, the engine frame can be 9), so the size is read from the
+    // UFunction instead of assumed.
+    [[nodiscard]] bool ValidateLoose(const AnomalyGenerationHandleV1 handle, const std::string_view name,
+        const std::uint8_t parameters, std::uint16_t& frame, const std::uint16_t minimum,
+        const std::uint16_t maximum) const {
+        const auto function = domain_.Pointer(reader_, handle);
+        if (function == 0) return false;
+        std::uint8_t observed_parameters{};
+        std::uint16_t observed_size{};
+        if (!reader_.IsA(function, "Function") ||
+            reader_.NameAt(function + profile::native_layout.ObjectName) != name ||
+            !reader_.Read(function + profile::native_layout.FunctionCount, observed_parameters) ||
+            observed_parameters != parameters ||
+            !reader_.Read(function + profile::native_layout.FunctionSize, observed_size) ||
+            observed_size < minimum || observed_size > maximum) {
+            return false;
+        }
+        frame = observed_size;
+        return true;
+    }
+
     [[nodiscard]] bool SelectNpcQuest(const FName flow, bool& selected) {
+        select_diag_.clear();
         if (select_npc_quest_.id == 0) {
             Clock::time_point deadline{};
             std::string path{"/Script/HTGame."};
@@ -479,13 +505,27 @@ public:
             path.push_back('.');
             path.append(kSelectNpcQuestFunction.name);
             const auto handle = Find(path, deadline);
-            if (handle.id == 0 || !Validate(handle, kSelectNpcQuestFunction)) return false;
+            if (handle.id == 0) {
+                select_diag_ = "resolve=0";
+                return false;
+            }
+            const auto function = domain_.Pointer(reader_, handle);
+            std::uint8_t parameters{};
+            std::uint16_t size{};
+            reader_.Read(function + profile::native_layout.FunctionCount, parameters);
+            reader_.Read(function + profile::native_layout.FunctionSize, size);
+            select_diag_ = "n=" + std::to_string(parameters) + " s=" + std::to_string(size);
+            if (!ValidateLoose(handle, kSelectNpcQuestFunction.name, kSelectNpcQuestFunction.parameters,
+                    select_npc_frame_, 8, 32)) {
+                select_diag_ += " validate=0";
+                return false;
+            }
             select_npc_quest_ = handle;
         }
-        NpcSelectFrame frame{};
-        frame.flow = flow;
-        if (!Invoke(select_npc_quest_, &frame, sizeof(frame))) return false;
-        selected = frame.selected != 0;
+        std::array<std::uint8_t, 16> frame{};
+        std::memcpy(frame.data(), &flow, sizeof(flow));
+        if (!Invoke(select_npc_quest_, frame.data(), select_npc_frame_)) return false;
+        selected = frame[8] != 0;
         return true;
     }
 
@@ -497,12 +537,16 @@ public:
             path.push_back('.');
             path.append(kStartNpcChallengeFunction.name);
             const auto handle = Find(path, deadline);
-            if (handle.id == 0 || !Validate(handle, kStartNpcChallengeFunction)) return false;
+            if (handle.id == 0) return false;
+            if (!ValidateLoose(handle, kStartNpcChallengeFunction.name, kStartNpcChallengeFunction.parameters,
+                    start_npc_frame_, 8, 16)) {
+                return false;
+            }
             start_npc_challenge_ = handle;
         }
-        FName frame{};
-        frame = flow;
-        return Invoke(start_npc_challenge_, &frame, sizeof(frame));
+        std::array<std::uint8_t, 16> frame{};
+        std::memcpy(frame.data(), &flow, sizeof(flow));
+        return Invoke(start_npc_challenge_, frame.data(), start_npc_frame_);
     }
 
     // Direct-completion discovery: the player's quest component lists what is still in
@@ -778,6 +822,9 @@ private:
     AnomalyGenerationHandleV1 get_all_npc_ids_{};
     AnomalyGenerationHandleV1 select_npc_quest_{};
     AnomalyGenerationHandleV1 start_npc_challenge_{};
+    std::uint16_t select_npc_frame_{};
+    std::uint16_t start_npc_frame_{};
+    std::string select_diag_;
     Clock::time_point submit_quest_retry_{};
     AnomalyGenerationHandleV1 request_component_function_{};
     std::array<AnomalyGenerationHandleV1, static_cast<std::size_t>(Request::count)> requests_{};
