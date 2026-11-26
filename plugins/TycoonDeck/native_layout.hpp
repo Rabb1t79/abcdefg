@@ -8,6 +8,7 @@
 #include <anomaly/sdk/profile.hpp>
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace tycoon::profile {
@@ -43,10 +44,19 @@ inline anomaly::sdk::ProfileSnapshot compatibility;
     return found == values.end() ? 0U : found->second;
 }
 
-[[nodiscard]] inline bool LoadCompatibility(const AnomalyHostApiV1* host) noexcept {
+[[nodiscard]] inline bool LoadCompatibility(const AnomalyHostApiV1* host, std::string& error) noexcept {
     try {
+        // Parse once through the public loader so a refused document reports the host's own
+        // reason instead of a bare "unavailable".
+        const auto document = anomaly::sdk::LoadProfile(anomaly::sdk::Host(host), "compatibility.profile.json",
+            {"nte", "HTGame.exe", ".text", "tycoons-deck-v1"});
+        if (!document) {
+            error = document.error();
+            return false;
+        }
         if (!compatibility.Load(host, "compatibility.profile.json",
-                {"nte", "HTGame.exe", ".text", "tycoons-deck-v1"}, {"Objects"})) {
+                {"nte", "HTGame.exe", ".text", "tycoons-deck-v1"}, {})) {
+            error = "signature scan did not complete";
             return false;
         }
         Layout parsed;
@@ -73,22 +83,30 @@ inline anomaly::sdk::ProfileSnapshot compatibility;
             !parsed.PropertySize || !parsed.PropertyNext || !parsed.FunctionCount ||
             !parsed.FunctionSize || !parsed.RegistryCount || !parsed.RegistryItems ||
             !parsed.ChunkSize || !parsed.ItemStride || !parsed.ItemSerial) {
+            error = "layout is missing a required key";
             return false;
         }
-        // The engine layout is only usable when the relationships between the fields
-        // hold: a property link follows its own header, and a UFunction's marshal size
-        // follows its parameter count.
-        if (parsed.ItemStride < sizeof(void*) ||
-            parsed.ItemSerial + sizeof(std::uint32_t) > parsed.ItemStride ||
+        // UFunction's two marshal fields sit back to back at the end of the UField header,
+        // and a property link follows its own header.
+        if (parsed.FunctionSize != parsed.FunctionCount + sizeof(std::uint16_t) ||
             parsed.PropertyNext <= parsed.PropertyOffset ||
             parsed.PropertySize + sizeof(std::int32_t) > parsed.PropertyOffset ||
-            parsed.FunctionSize + sizeof(std::uint16_t) > parsed.StructSuper ||
-            parsed.ChunkSize % 2U != 0) {
+            parsed.FunctionSize > 0x1000 || parsed.ChunkSize % 2U != 0) {
+            error = "layout relationships do not hold";
+            return false;
+        }
+        if (parsed.ItemStride < sizeof(void*) ||
+            parsed.ItemSerial + sizeof(std::uint32_t) > parsed.ItemStride) {
+            error = "object registry stride is implausible";
             return false;
         }
         native_layout = parsed;
         return true;
+    } catch (const std::exception& failure) {
+        error = failure.what();
+        return false;
     } catch (...) {
+        error = "unknown profile failure";
         return false;
     }
 }

@@ -62,6 +62,22 @@ AnomalyByteSpanV1 Bytes(const std::string_view text) noexcept {
     return {reinterpret_cast<const std::uint8_t*>(text.data()), text.size()};
 }
 
+// Both capabilities this plugin needs are appended extensions of their V1 service tables,
+// so an older host would hand back a shorter table. Reading past struct_size is undefined,
+// and reporting "not runnable" is the honest answer instead.
+[[nodiscard]] bool HasInvoke(const AnomalyUe5ProcessEventServiceV1* events) noexcept {
+    return events != nullptr &&
+        events->struct_size >= offsetof(AnomalyUe5ProcessEventServiceV1, invoke) + sizeof(events->invoke) &&
+        events->invoke != nullptr;
+}
+
+[[nodiscard]] bool HasPlayerHandles(const AnomalyNtePlayerServiceV1* players) noexcept {
+    return players != nullptr &&
+        players->struct_size >=
+            offsetof(AnomalyNtePlayerServiceV1, get_object_handles) + sizeof(players->get_object_handles) &&
+        players->get_object_handles != nullptr;
+}
+
 // The host hands the saved document back as compact JSON, and this plugin writes exactly
 // the five keys below, so a quoted-key scan is enough and keeps the package dependency
 // free. A key that cannot be parsed keeps its previous value.
@@ -112,7 +128,7 @@ public:
     explicit Context(const AnomalyHostApiV1* api) noexcept : api_(api), localizer_(api) {
         const Host query(api);
         core_ = query.Query<AnomalyCoreServiceV1>(ANOMALY_CORE_SERVICE_V1_ID).get();
-        names_ = query.Query<AnomalyUe5NamesServiceV1>(ANOMALY_UE5_NAMES_SERVICE_V1_ID, 2).get();
+        names_ = query.Query<AnomalyUe5NamesServiceV1>(ANOMALY_UE5_NAMES_SERVICE_V1_ID, 1).get();
         objects_ = query.Query<AnomalyUe5ObjectsServiceV1>(ANOMALY_UE5_OBJECTS_SERVICE_V1_ID).get();
         events_ = query.Query<AnomalyUe5ProcessEventServiceV1>(ANOMALY_UE5_PROCESS_EVENT_SERVICE_V1_ID).get();
         framework_ = query.Query<AnomalyUe5FrameworkServiceV1>(ANOMALY_UE5_FRAMEWORK_SERVICE_V1_ID).get();
@@ -124,7 +140,9 @@ public:
         if (reader_) bridge_ = std::make_unique<DeckBridge>(*reader_, objects_, players_, events_, domain_);
     }
 
-    [[nodiscard]] bool Ready() const noexcept { return bridge_ != nullptr && windows_ != nullptr && config_ != nullptr; }
+    [[nodiscard]] bool Ready() const noexcept {
+        return bridge_ != nullptr && windows_ != nullptr && config_ != nullptr && HasInvoke(events_);
+    }
     [[nodiscard]] const Localizer& Text() const noexcept { return localizer_; }
     [[nodiscard]] const AnomalyWindowServiceV1* Windows() const noexcept { return windows_; }
     [[nodiscard]] AnomalyGenerationHandleV1 Window() const noexcept { return window_; }
@@ -148,6 +166,35 @@ public:
     }
 
     [[nodiscard]] bool Reporting() const noexcept { return reporting_.load(); }
+
+    // Load-time diagnostics: names the exact prerequisite that is missing instead of
+    // leaving the host with a bare "not runnable".
+    [[nodiscard]] std::string Describe() const {
+        std::string text{"prerequisites:"};
+        text += " core=";
+        text += core_ != nullptr ? '1' : '0';
+        text += " names=";
+        text += names_ != nullptr ? '1' : '0';
+        text += " objects=";
+        text += objects_ != nullptr ? '1' : '0';
+        text += " events=";
+        text += events_ != nullptr ? '1' : '0';
+        text += "/";
+        text += std::to_string(events_ != nullptr ? events_->struct_size : 0U);
+        text += " invoke=";
+        text += HasInvoke(events_) ? '1' : '0';
+        text += " framework=";
+        text += framework_ != nullptr ? '1' : '0';
+        text += " players=";
+        text += players_ != nullptr ? '1' : '0';
+        text += " windows=";
+        text += windows_ != nullptr ? '1' : '0';
+        text += " config=";
+        text += config_ != nullptr ? '1' : '0';
+        text += " scheduler=";
+        text += scheduler_ != nullptr ? '1' : '0';
+        return text;
+    }
 
     // Primary path: report the run's completion through the player state's own submit RPC.
     void StartReport() noexcept {
@@ -408,7 +455,7 @@ private:
         state_floor_.store(floor);
         state_plays_.store(state.plays_left);
         state_discards_.store(state.discards_left);
-        Publish(localizer_.Format("text.headline", "{0} 路 {1}", combined));
+        Publish(localizer_.Format("text.headline", "{0} 璺?{1}", combined));
     }
 
 public:
@@ -520,7 +567,7 @@ void Content(Context& context, const AnomalyUiServiceV1* ui) {
     const auto plays = std::to_string(context.Plays());
     const auto discards = std::to_string(context.Discards());
     const std::array plays_arguments{std::string_view(plays), std::string_view(discards)};
-    const auto plays_text = text.Format("text.plays", "Plays left {0} 路 Discards left {1}", plays_arguments);
+    const auto plays_text = text.Format("text.plays", "Plays left {0} 璺?Discards left {1}", plays_arguments);
     ui->text(ui->user, StringView(plays_text));
     const auto money = std::to_string(context.Money());
     const std::array money_arguments{std::string_view(money)};
@@ -528,7 +575,7 @@ void Content(Context& context, const AnomalyUiServiceV1* ui) {
     const auto act = std::to_string(context.Act());
     const auto floor = std::to_string(context.Floor());
     const std::array act_arguments{std::string_view(act), std::string_view(floor)};
-    ui->text(ui->user, StringView(text.Format("text.act", "Act {0} 路 Floor {1}", act_arguments)));
+    ui->text(ui->user, StringView(text.Format("text.act", "Act {0} 璺?Floor {1}", act_arguments)));
     const auto sent = std::to_string(context.Sent());
     const std::array sent_arguments{std::string_view(sent)};
     ui->text(ui->user, StringView(text.Format("text.sent", "Requests sent: {0}", sent_arguments)));
@@ -541,12 +588,22 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** out) noex
     if (out == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     *out = nullptr;
     if (host == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
-    if (!tycoon::profile::LoadCompatibility(host)) {
+    // Load-time diagnostics go through the core log so a refused load names its cause.
+    const auto core = Host(host).Query<AnomalyCoreServiceV1>(ANOMALY_CORE_SERVICE_V1_ID).get();
+    const auto report = [core](const std::string_view text) {
+        if (core != nullptr && core->log != nullptr) {
+            core->log(core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
+        }
+    };
+    std::string profile_error;
+    if (!tycoon::profile::LoadCompatibility(host, profile_error)) {
+        report("tycoons-deck: profile refused: " + profile_error);
         return {ANOMALY_STATUS_V1_UNAVAILABLE, 0,
             StringView("Tycoon's Deck compatibility profile is unavailable for this build")};
     }
     auto* context = new (std::nothrow) Context(host);
     if (context == nullptr) return {ANOMALY_STATUS_V1_FAILED, 0, {}};
+    report("tycoons-deck: " + context->Describe());
     if (!context->Ready()) {
         delete context;
         return {ANOMALY_STATUS_V1_UNAVAILABLE, 0, StringView("Tycoon's Deck interfaces are unavailable")};
