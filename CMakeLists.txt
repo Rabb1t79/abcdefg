@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22)
+﻿cmake_minimum_required(VERSION 3.22)
 
 set(ANOMALY_RELEASE_VERSION "1.0.0" CACHE STRING
     "Release version used to configure Anomaly")
@@ -1525,7 +1525,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         PACKAGE_NAME HealthDisplay
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/HealthDisplay")
     target_compile_options(anomaly_builtin_health_display PRIVATE /utf-8)
-    # 开发者测试插件：只在 ANOMALY_BUILD_TEST_PLUGINS 打开时构建，并只随 TestPlugins 组件安装。
+    # 寮€鍙戣€呮祴璇曟彃浠讹細鍙湪 ANOMALY_BUILD_TEST_PLUGINS 鎵撳紑鏃舵瀯寤猴紝骞跺彧闅?TestPlugins 缁勪欢瀹夎銆?
     anomaly_add_plugin(anomaly_builtin_mod_name_export TEST_PLUGIN
         SOURCES plugins/ModNameExport/plugin.cpp
         MANIFEST plugins/ModNameExport/manifest.json
@@ -1733,13 +1733,13 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
             SCENE_LOADER_ZH_CN_CATALOG="${CMAKE_SOURCE_DIR}/plugins/SceneLoader/locales/zh-CN.json")
     endif()
 
-    # DamageDashboard 已归档：源码保留在 plugins/DamageDashboard（含 ARCHIVED.md），
-    # 不再注册 target，因此不参与构建、打包与安装。
+    # DamageDashboard 宸插綊妗ｏ細婧愮爜淇濈暀鍦?plugins/DamageDashboard锛堝惈 ARCHIVED.md锛夛紝
+    # 涓嶅啀娉ㄥ唽 target锛屽洜姝や笉鍙備笌鏋勫缓銆佹墦鍖呬笌瀹夎銆?
 
-    # 战斗统计：插件只采集，呈现交给随包分发的独立 Overlay 进程（NteCombatTracker.exe）。
-    # 采集引擎刻意不依赖 SDK，便于在没有插件 ABI 的情况下做单元验证。
+    # 鎴樻枟缁熻锛氭彃浠跺彧閲囬泦锛屽憟鐜颁氦缁欓殢鍖呭垎鍙戠殑鐙珛 Overlay 杩涚▼锛圢teCombatTracker.exe锛夈€?
+    # 閲囬泦寮曟搸鍒绘剰涓嶄緷璧?SDK锛屼究浜庡湪娌℃湁鎻掍欢 ABI 鐨勬儏鍐典笅鍋氬崟鍏冮獙璇併€?
     set(ANOMALY_NTE_COMBAT_DIR "plugins/NteCombatTracker")
-    # 插件版本号只来自 manifest 的 version；生成的头文件让插件与 Overlay 共用同一份字符串。
+    # 鎻掍欢鐗堟湰鍙峰彧鏉ヨ嚜 manifest 鐨?version锛涚敓鎴愮殑澶存枃浠惰鎻掍欢涓?Overlay 鍏辩敤鍚屼竴浠藉瓧绗︿覆銆?
     file(READ "${CMAKE_SOURCE_DIR}/${ANOMALY_NTE_COMBAT_DIR}/manifest.json"
         ANOMALY_NTE_COMBAT_MANIFEST_JSON)
     string(JSON ANOMALY_NTE_COMBAT_PLUGIN_VERSION GET
@@ -1797,8 +1797,8 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
     target_link_libraries(anomaly_nte_combat_uid PUBLIC
         anomaly_nte_combat_engine Anomaly::sdk)
 
-    # Overlay 是独立 GUI 进程：Direct2D/DirectWrite/WIC 自绘，不受宿主 ImGui 能力限制。
-    # 文案目录来自 anomaly_nte_combat_model，Overlay 与离线夹具共用同一份实现。
+    # Overlay 鏄嫭绔?GUI 杩涚▼锛欴irect2D/DirectWrite/WIC 鑷粯锛屼笉鍙楀涓?ImGui 鑳藉姏闄愬埗銆?
+    # 鏂囨鐩綍鏉ヨ嚜 anomaly_nte_combat_model锛孫verlay 涓庣绾垮す鍏峰叡鐢ㄥ悓涓€浠藉疄鐜般€?
     add_executable(anomaly_nte_combat_overlay WIN32
         ${ANOMALY_NTE_COMBAT_DIR}/src/overlay_app.cpp)
     target_compile_definitions(anomaly_nte_combat_overlay PRIVATE
@@ -1821,7 +1821,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         anomaly_nte_combat_model anomaly_nte_combat_uid)
 
     if(ANOMALY_BUILD_TEST_FIXTURES)
-        # 离线夹具：采集引擎/日志仓库 与 界面模型/协议/ABI 两组各自在没有游戏进程时验证。
+        # 绂荤嚎澶瑰叿锛氶噰闆嗗紩鎿?鏃ュ織浠撳簱 涓?鐣岄潰妯″瀷/鍗忚/ABI 涓ょ粍鍚勮嚜鍦ㄦ病鏈夋父鎴忚繘绋嬫椂楠岃瘉銆?
         set(ANOMALY_NTE_COMBAT_TEST_SOURCE_DIR
             "${CMAKE_SOURCE_DIR}/${ANOMALY_NTE_COMBAT_DIR}")
         # One fixture executable per dependency group; each test source defines its
@@ -1975,12 +1975,12 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         target_link_libraries(anomaly_quick_ultimate_sequence_fixture PRIVATE
             anomaly_quick_ultimate_sequence)
     endif()
-    # 共享自动战斗：插件是独立 DLL、不能互相调用，所以战斗逻辑放在静态库里由两边链接
-    # （同 anomaly_mmd2bip_converter 的模式：一份源码，两个使用方）。
+    # 鍏变韩鑷姩鎴樻枟锛氭彃浠舵槸鐙珛 DLL銆佷笉鑳戒簰鐩歌皟鐢紝鎵€浠ユ垬鏂楅€昏緫鏀惧湪闈欐€佸簱閲岀敱涓よ竟閾炬帴
+    # 锛堝悓 anomaly_mmd2bip_converter 鐨勬ā寮忥細涓€浠芥簮鐮侊紝涓や釜浣跨敤鏂癸級銆?
     add_library(anomaly_plugin_combat STATIC
         plugins/common/combat/auto_combat.cpp)
     target_include_directories(anomaly_plugin_combat PUBLIC plugins/common)
-    # SDK 头（anomaly/sdk/...）只随 Anomaly::sdk 的 INTERFACE 包含目录传播；静态库自己也要编。
+    # SDK 澶达紙anomaly/sdk/...锛夊彧闅?Anomaly::sdk 鐨?INTERFACE 鍖呭惈鐩綍浼犳挱锛涢潤鎬佸簱鑷繁涔熻缂栥€?
     target_link_libraries(anomaly_plugin_combat PUBLIC Anomaly::sdk)
     target_compile_options(anomaly_plugin_combat PRIVATE /W4 /permissive- /EHsc /utf-8)
     target_compile_definitions(anomaly_plugin_combat PRIVATE
@@ -1994,14 +1994,14 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         target_compile_options(anomaly_combat_auto_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
         target_link_libraries(anomaly_combat_auto_fixture PRIVATE anomaly_plugin_combat)
     endif()
-    # 空无一人／Deserted：把人群密度的环境倍率与车辆生成器的数量旋钮压下去，
-    # 一键让街上既没有行人也没有车；勾选时记下当前值当初始值，取消时还原。
+    # 绌烘棤涓€浜猴紡Deserted锛氭妸浜虹兢瀵嗗害鐨勭幆澧冨€嶇巼涓庤溅杈嗙敓鎴愬櫒鐨勬暟閲忔棆閽帇涓嬪幓锛?
+    # 涓€閿琛椾笂鏃㈡病鏈夎浜轰篃娌℃湁杞︼紱鍕鹃€夋椂璁颁笅褰撳墠鍊煎綋鍒濆鍊硷紝鍙栨秷鏃惰繕鍘熴€?
     anomaly_add_plugin(anomaly_builtin_deserted
         SOURCES plugins/deserted/plugin.cpp
         MANIFEST plugins/deserted/manifest.json
         PACKAGE_NAME Deserted
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/Deserted")
-    # UI 按钮调试面板：anomaly.nte.ui-buttons 服务的消费者，功能全部在 Host。
+    # UI 鎸夐挳璋冭瘯闈㈡澘锛歛nomaly.nte.ui-buttons 鏈嶅姟鐨勬秷璐硅€咃紝鍔熻兘鍏ㄩ儴鍦?Host銆?
     anomaly_add_plugin(anomaly_builtin_ui_buttons
         SOURCES plugins/UiButtons/plugin.cpp
         MANIFEST plugins/UiButtons/manifest.json
@@ -2017,7 +2017,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/TimeAccel/manifest.json
         PACKAGE_NAME TimeAccel
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/TimeAccel")
-    # 插件源码把中文直接写在字符串字面量里（非 locale），MSVC 需按 UTF-8 读源码并编码窄字符串。
+    # 鎻掍欢婧愮爜鎶婁腑鏂囩洿鎺ュ啓鍦ㄥ瓧绗︿覆瀛楅潰閲忛噷锛堥潪 locale锛夛紝MSVC 闇€鎸?UTF-8 璇绘簮鐮佸苟缂栫爜绐勫瓧绗︿覆銆?
     target_compile_options(anomaly_builtin_time_accel PRIVATE /utf-8)
     target_link_libraries(anomaly_builtin_fake_uid PRIVATE nlohmann_json::nlohmann_json)
     target_link_libraries(anomaly_builtin_camera_tools PRIVATE nlohmann_json::nlohmann_json)
@@ -2080,16 +2080,16 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         add_test(NAME status_bar_real_host_overlay
             COMMAND anomaly_ui_overlay_fixture "$<TARGET_FILE_DIR:anomaly_builtin_status_bar>")
     endif()
-    # 奶龙换装：插件用 UE ProceduralMeshComponent 生成原生角色模型，源蒙皮与骨架绑定
-    # 放在插件自己的 assets/mesh 下，由 anomaly_add_plugin 照常同步进包目录并随包安装。
-    # 源码含中文 UI 文本与诊断，需要 /utf-8。
+    # 濂堕緳鎹㈣锛氭彃浠剁敤 UE ProceduralMeshComponent 鐢熸垚鍘熺敓瑙掕壊妯″瀷锛屾簮钂欑毊涓庨鏋剁粦瀹?
+    # 鏀惧湪鎻掍欢鑷繁鐨?assets/mesh 涓嬶紝鐢?anomaly_add_plugin 鐓у父鍚屾杩涘寘鐩綍骞堕殢鍖呭畨瑁呫€?
+    # 婧愮爜鍚腑鏂?UI 鏂囨湰涓庤瘖鏂紝闇€瑕?/utf-8銆?
     anomaly_add_plugin(anomaly_builtin_nailong
         SOURCES plugins/Nailong/plugin.cpp
         MANIFEST plugins/Nailong/manifest.json
         PACKAGE_NAME Nailong
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/Nailong")
     if(ANOMALY_BUILD_TEST_FIXTURES)
-        # 离线夹具：只解析随包模型与骨架绑定，确认顶点、权重和骨数自洽，不需要游戏。
+        # 绂荤嚎澶瑰叿锛氬彧瑙ｆ瀽闅忓寘妯″瀷涓庨鏋剁粦瀹氾紝纭椤剁偣銆佹潈閲嶅拰楠ㄦ暟鑷唇锛屼笉闇€瑕佹父鎴忋€?
         add_executable(anomaly_nailong_model_fixture
             plugins/Nailong/tests/model_contract.cpp)
         target_compile_features(anomaly_nailong_model_fixture PRIVATE cxx_std_20)
@@ -2118,9 +2118,9 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         COMPILE_DEFINITIONS "PLATFORM_WINDOWS;UNICODE;_UNICODE")
 
     # Jelly uses the shared Profile packaging. The mapped plugin exports the C++ bridge.
-    # _CxxThrowException 的 C++ 镜像导出异常桥，且不允许 loader 管理的静态 TLS：桥源码
-    # 与 /Zc:threadSafeInit- 让同一个包在旧宿主上也能加载；新版 SDK 自带这两样
-    # （ANOMALY_CXX_THROW_BRIDGE）时桥源码不再重复编译。
+    # _CxxThrowException 鐨?C++ 闀滃儚瀵煎嚭寮傚父妗ワ紝涓斾笉鍏佽 loader 绠＄悊鐨勯潤鎬?TLS锛氭ˉ婧愮爜
+    # 涓?/Zc:threadSafeInit- 璁╁悓涓€涓寘鍦ㄦ棫瀹夸富涓婁篃鑳藉姞杞斤紱鏂扮増 SDK 鑷甫杩欎袱鏍?
+    # 锛圓NOMALY_CXX_THROW_BRIDGE锛夋椂妗ユ簮鐮佷笉鍐嶉噸澶嶇紪璇戙€?
     anomaly_add_plugin(anomaly_builtin_jelly
         SOURCES
             plugins/Jelly/plugin.cpp
@@ -2138,7 +2138,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         target_sources(anomaly_builtin_jelly PRIVATE plugins/Jelly/src/plugin_cxx_throw_bridge.cpp)
     endif()
     if(ANOMALY_BUILD_TEST_FIXTURES)
-        # 离线夹具：纯逻辑与合成 UE 镜像，不需要游戏、运行中的宿主或网络。
+        # 绂荤嚎澶瑰叿锛氱函閫昏緫涓庡悎鎴?UE 闀滃儚锛屼笉闇€瑕佹父鎴忋€佽繍琛屼腑鐨勫涓绘垨缃戠粶銆?
         add_executable(anomaly_jelly_logic_fixture
             plugins/Jelly/tests/main.cpp
             plugins/Jelly/tests/test_logic.cpp
@@ -2153,6 +2153,11 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         target_compile_options(anomaly_jelly_logic_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
     endif()
 
+    anomaly_add_plugin(anomaly_builtin_tycoons_deck
+        SOURCES plugins/TycoonDeck/plugin.cpp
+        MANIFEST plugins/TycoonDeck/manifest.json
+        PACKAGE_NAME TycoonDeck
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/TycoonDeck")
     # Test packages exist only when ANOMALY_BUILD_TEST_PLUGINS is on, so every list that
     # reaches their targets is built from the targets that actually exist.
     set(ANOMALY_BUILTIN_PLUGIN_TARGETS
@@ -2171,7 +2176,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         anomaly_builtin_deserted anomaly_builtin_jelly anomaly_builtin_night999
         anomaly_builtin_npc_summon anomaly_builtin_training_dummy
         anomaly_builtin_summon_lab anomaly_builtin_health_display anomaly_builtin_memory_dump anomaly_builtin_nailong
-        anomaly_builtin_better_tv anomaly_builtin_nte_combat_tracker)
+        anomaly_builtin_better_tv anomaly_builtin_nte_combat_tracker anomaly_builtin_tycoons_deck)
 
     if(ANOMALY_BUILD_TEST_PLUGINS)
         list(APPEND ANOMALY_BUILTIN_PLUGIN_TARGETS
@@ -2199,6 +2204,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         target_compile_options(anomaly_builtin_nte_free_fly PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_skin_changer PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_autofish PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_tycoons_deck PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_autotaxi PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_autoclaw PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_ui_buttons PRIVATE /utf-8)

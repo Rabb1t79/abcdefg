@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "game": "nte",
+  "module": "HTGame.exe",
+  "section": ".text",
+  "contract": "tycoons-deck-v1",
+  "layout": {
+    "ObjectClass": 16,
+    "ObjectName": 24,
+    "ObjectIndex": 12,
+    "StructSuper": 64,
+    "StructProperties": 112,
+    "PropertyName": 32,
+    "PropertyOffset": 68,
+    "PropertySize": 52,
+    "PropertyNext": 72,
+    "FunctionCount": 180,
+    "FunctionSize": 182,
+    "RegistryCount": 36,
+    "RegistryItems": 16,
+    "ChunkSize": 65536,
+    "ItemStride": 24,
+    "ItemSerial": 16,
+    "RegistrySubtract": 16
+  },
+  "symbols": [
+    {
+      "name": "Objects",
+      "candidates": [
+        {
+          "pattern": "48 8B 05 ?? ?? ?? ?? 48 8B 0C C8 48 8B 04 D1 C3 33 C0 48 8B 00 C3",
+          "entry": "48 8B 05",
+          "values": {}
+        }
+      ]
+    }
+  ]
+}
