@@ -1,0 +1,85 @@
+#pragma once
+#include <cstdint>
+#include <string>
+#include <string_view>
+
+namespace tycoon {
+// 与 HTGame.EHTBalatroPhase 一致；只列插件会分支的取值。
+enum class Phase : std::uint8_t {
+    Idle = 0, BlindSelection = 1, Playing = 2, BlindCleared = 3,
+    Shop = 4, ShopCleared = 5, GameOver = 6, GameOverFailed = 7, SettlementAnimating = 8,
+};
+enum class Action : std::uint8_t {
+    None, StartGame, StartBlind, SkipBlind, FinishBlind, PlayAll, SkipShop, ConfirmPack, Settle,
+};
+struct Observation {
+    Phase phase{};
+    bool canFinish{};
+    bool canSkip{};
+    bool pendingPack{};
+    std::int32_t pickCount{};
+    std::int32_t playsLeft{};
+};
+struct Decision {
+    Action action{};
+    const char* message{};
+};
+struct Settings {
+    bool enabled{};
+    bool fastFinish{true};
+};
+
+// 最短合法序列：能直接结束盲注就不出牌，能跳过盲注就不打，其余阶段只做推进动作。
+inline Decision Decide(const Observation& value) {
+    if (value.pendingPack && value.pickCount > 0) return {Action::ConfirmPack, "status.pack"};
+    switch (value.phase) {
+    case Phase::Idle: return {Action::StartGame, "status.starting"};
+    case Phase::BlindSelection:
+        return value.canSkip ? Decision{Action::SkipBlind, "status.skip_blind"}
+                             : Decision{Action::StartBlind, "status.start_blind"};
+    case Phase::Playing:
+        if (value.canFinish) return {Action::FinishBlind, "status.finish_blind"};
+        if (value.playsLeft > 0) return {Action::PlayAll, "status.play_all"};
+        return {Action::Settle, "status.settle"};
+    case Phase::BlindCleared: return {Action::FinishBlind, "status.finish_blind"};
+    case Phase::Shop:
+    case Phase::ShopCleared: return {Action::SkipShop, "status.skip_shop"};
+    default: return {};
+    }
+}
+inline const char* PhaseKey(Phase phase) {
+    switch (phase) {
+    case Phase::Idle: return "phase.idle";
+    case Phase::BlindSelection: return "phase.blind_selection";
+    case Phase::Playing: return "phase.playing";
+    case Phase::BlindCleared: return "phase.blind_cleared";
+    case Phase::Shop: return "phase.shop";
+    case Phase::ShopCleared: return "phase.shop_cleared";
+    case Phase::GameOver: return "phase.game_over";
+    case Phase::GameOverFailed: return "phase.game_over_failed";
+    case Phase::SettlementAnimating: return "phase.settlement";
+    default: return "phase.idle";
+    }
+}
+// 配置文档由本插件自己写，解析只需认这两项；未知字段忽略。
+inline Settings ParseSettings(std::string_view document) {
+    Settings value{};
+    const auto flag = [&](std::string_view key, bool fallback) {
+        const auto at = document.find("\"" + std::string(key) + "\"");
+        if (at == std::string_view::npos) return fallback;
+        const auto colon = document.find(':', at);
+        if (colon == std::string_view::npos) return fallback;
+        const auto rest = document.substr(colon + 1, 16);
+        if (rest.find("true") != std::string_view::npos) return true;
+        if (rest.find("false") != std::string_view::npos) return false;
+        return fallback;
+    };
+    value.enabled = flag("enabled", false);
+    value.fastFinish = flag("fastFinish", true);
+    return value;
+}
+inline std::string FormatSettings(const Settings& value) {
+    return std::string{"{\"enabled\":"} + (value.enabled ? "true" : "false") +
+        ",\"fastFinish\":" + (value.fastFinish ? "true" : "false") + "}";
+}
+}

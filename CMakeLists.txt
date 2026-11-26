@@ -1887,6 +1887,19 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         add_test(NAME autotaxi_localization
             COMMAND pwsh -NoProfile -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_plugin_i18n.ps1" -Plugin Autotaxi)
     endif()
+    anomaly_add_plugin(anomaly_builtin_tycoondeck
+        SOURCES plugins/TycoonDeck/plugin.cpp
+        MANIFEST plugins/TycoonDeck/manifest.json
+        PACKAGE_NAME TycoonDeck
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/TycoonDeck")
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        add_executable(anomaly_tycoondeck_fixture plugins/TycoonDeck/tests.cpp)
+        target_compile_features(anomaly_tycoondeck_fixture PRIVATE cxx_std_20)
+        target_compile_options(anomaly_tycoondeck_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        add_test(NAME tycoondeck_flow COMMAND anomaly_tycoondeck_fixture)
+        add_test(NAME tycoondeck_localization
+            COMMAND pwsh -NoProfile -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_plugin_i18n.ps1" -Plugin TycoonDeck)
+    endif()
     anomaly_add_plugin(anomaly_builtin_autoclaw
         SOURCES plugins/AutoClaw/plugin.cpp
         MANIFEST plugins/AutoClaw/manifest.json
@@ -2167,6 +2180,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         anomaly_builtin_nte_free_fly anomaly_builtin_skin_changer anomaly_builtin_ui_buttons
         anomaly_builtin_dll_loader anomaly_builtin_hifi_vehicle_music
         anomaly_builtin_model_scale anomaly_builtin_status_bar anomaly_builtin_autofish anomaly_builtin_autotaxi
+        anomaly_builtin_tycoondeck
         anomaly_builtin_autoclaw anomaly_builtin_character_studio
         anomaly_builtin_deserted anomaly_builtin_jelly anomaly_builtin_night999
         anomaly_builtin_npc_summon anomaly_builtin_training_dummy
@@ -2200,6 +2214,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         target_compile_options(anomaly_builtin_skin_changer PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_autofish PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_autotaxi PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_tycoondeck PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_autoclaw PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_ui_buttons PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_deserted PRIVATE /utf-8)
