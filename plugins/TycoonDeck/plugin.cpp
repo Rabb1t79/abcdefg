@@ -193,6 +193,11 @@ public:
         text += config_ != nullptr ? '1' : '0';
         text += " scheduler=";
         text += scheduler_ != nullptr ? '1' : '0';
+        text += " objectsSignature=0x";
+        char address[24]{};
+        std::snprintf(address, sizeof(address), "%llX",
+            static_cast<unsigned long long>(tycoon::profile::compatibility.Address("Objects")));
+        text += address;
         return text;
     }
 
@@ -307,12 +312,32 @@ public:
                 return;
             }
             if (!domain_.Initialize(*reader_, objects_)) {
-                Publish(localizer_.Text("status.waiting_interfaces", "Waiting for the game interfaces."));
+                Publish(localizer_.Text("status.waiting_signature",
+                    "Waiting for the object registry signature."));
                 return;
             }
             if (!bridge_->Refresh()) {
                 Publish(localizer_.Text("status.waiting_component", "Waiting for the Tycoon's Deck session."));
                 return;
+            }
+            // The component fills its report ids from the active activity configuration, so
+            // log the count whenever it changes: an empty list means this run has nothing
+            // to report (free play), not that the field moved.
+            {
+                std::vector<tycoon::FName> report_ids;
+                const auto count = bridge_->ReadQuestIds(report_ids)
+                    ? static_cast<int>(report_ids.size())
+                    : 0;
+                if (count != last_report_count_) {
+                    last_report_count_ = count;
+                    std::string line{"tycoons-deck: report ids="};
+                    line += std::to_string(count);
+                    line += " ";
+                    line += bridge_->DescribeQuestIds();
+                    if (core_ != nullptr && core_->log != nullptr) {
+                        core_->log(core_->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(line));
+                    }
+                }
             }
             if (reporting_.load()) {
                 Report();
@@ -502,6 +527,7 @@ private:
     int report_index_{};
     int report_sent_{};
     int report_failures_{};
+    int last_report_count_{-1};
     std::atomic<int> sent_{};
     std::atomic<std::int32_t> state_score_{};
     std::atomic<std::int32_t> state_target_{};

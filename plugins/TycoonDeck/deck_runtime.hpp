@@ -263,6 +263,31 @@ public:
 
     [[nodiscard]] std::string QuestName(const FName quest) const { return reader_.Name(quest); }
 
+    // Diagnostic view of the report-id array, so an empty list can be told apart from an
+    // unresolved field without another round trip.
+    [[nodiscard]] std::string DescribeQuestIds() {
+        std::string text{"reportIds"};
+        if (component_.id == 0) return text + "=no-component";
+        const auto component = domain_.Pointer(reader_, component_);
+        if (component == 0) return text + "=no-pointer";
+        if (quest_id_offset_ < 0) {
+            quest_id_offset_ = reader_.PropertyOffset(component, kQuestIdField,
+                static_cast<std::int32_t>(sizeof(QuestIdArray)));
+        }
+        text += " offset=";
+        text += std::to_string(quest_id_offset_);
+        if (quest_id_offset_ < 0) return text;
+        QuestIdArray ids{};
+        if (!reader_.Read(component + static_cast<std::uintptr_t>(quest_id_offset_), ids)) {
+            return text + " unreadable";
+        }
+        text += " count=";
+        text += std::to_string(ids.count);
+        text += " capacity=";
+        text += std::to_string(ids.capacity);
+        return text;
+    }
+
 private:
     static constexpr std::size_t Index(const Request value) noexcept { return static_cast<std::size_t>(value); }
     static constexpr std::size_t Index(const Query value) noexcept { return static_cast<std::size_t>(value); }

@@ -1,11 +1,11 @@
-﻿{
+{
   "schemaVersion": 2,
   "id": "yg.tycoons-deck",
   "name": "Tycoon's Deck Autopilot",
   "description": "One press reports the win through the same server RPC the minigame uses (AHTPlayerState::ServerSubmitQuest) with the report ids the Tycoon's Deck component carries, and falls back to playing every blind out through the component's own requests when the server refuses.",
   "author": "YG",
   "license": "AGPL-3.0-only",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
@@ -66,6 +66,10 @@
       "optional": true
     },
     {
+      "id": "anomaly.interop.signature",
+      "minVersion": 1
+    },
+    {
       "id": "anomaly.profile",
       "minVersion": 1
     },
@@ -85,6 +89,7 @@
     "ue5-objects",
     "game-events",
     "nte-player-snapshot",
+    "interop-signature",
     "json"
   ]
 }

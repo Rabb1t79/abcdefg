@@ -15,6 +15,7 @@
     "status.report_done": "已上报 {0} 个任务。",
     "status.report_failed": "服务器拒绝了 {0}。",
     "status.waiting_interfaces": "正在等待游戏接口…",
+    "status.waiting_signature": "正在等待对象注册表签名…",
     "status.waiting_component": "正在等待铺满全城牌桌…",
     "status.waiting_state": "暂时读不到牌局状态。",
     "status.run_finished": "本局已通关。",
