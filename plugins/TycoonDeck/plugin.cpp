@@ -224,6 +224,52 @@ Dispatch Submit(const Reader& r, const State& value, tycoon::Action action) {
 }
 
 // 调试日志：只在插件 state 目录追加小行，便于在没有控制台时定位请求被拒的原因。
+// ---- 入口扫描：DT_NPCChallenges 的 RowMap（TMap<FName, row*>） ----
+struct RowEntry { std::string flow; std::string npc; int32_t open_day{}; };
+struct RowArrayHdr { uintptr_t data{}; int32_t count{}, capacity{}; };
+static_assert(sizeof(RowArrayHdr) == 16);
+
+int32_t MapCount(const Reader& r, uintptr_t map_addr, uintptr_t& data) {
+    RowArrayHdr header{};
+    if (!r.Read(map_addr, header) || header.count < 0 || header.count > 4096) return -1;
+    data = header.data;
+    return header.count;
+}
+bool MapEntryKey(const Reader& r, uintptr_t data, int32_t index, FName& key) {
+    return r.Read(data + 24u * static_cast<uintptr_t>(index) + 8, key);
+}
+std::vector<RowEntry> ScanChallenges(const Reader& r) {
+    std::vector<RowEntry> out;
+    const auto util = Find(r, "/Script/HTGame.Default__HTUtil");
+    const auto get = Checked(r, "HTGame", "HTUtil", "GetBalatroLikeDataAsset", 1, 8, {{"ReturnValue", 0, 8, "ObjectProperty"}});
+    uintptr_t asset{};
+    if (!util || !get || !Invoke(r, util, get, &asset) || !asset) return out;
+    const auto table_offset = Field(r, asset, "DT_NPCChallenges", 8, "ObjectProperty");
+    uintptr_t table{};
+    if (table_offset < 0 || !r.Read(asset + table_offset, table)) return out;
+    const auto map_offset = Field(r, table, "RowMap", 0x50, "MapProperty");
+    uintptr_t data{};
+    if (map_offset < 0) return out;
+    const auto count = MapCount(r, table + map_offset, data);
+    if (count <= 0 || !data) return out;
+    for (int32_t i = 0; i < count && out.size() < 64; ++i) {
+        FName key{};
+        if (!MapEntryKey(r, data, i, key)) continue;
+        const auto flow = r.Name(key);
+        if (flow.empty() || flow.size() > 120) continue;
+        RowEntry row{flow, {}, 0};
+        uintptr_t record{};
+        if (r.Read(data + 24u * static_cast<uintptr_t>(i) + 16, record) && record) {
+            char text[256]{};
+            std::size_t size = sizeof(text);
+            if (names && names->resolve_ftext_utf8 && names->resolve_ftext_utf8(names->user, record + 0x08, text, &size).code == ANOMALY_STATUS_V1_OK && size > 0)
+                row.npc.assign(text, size);
+            static_cast<void>(r.Read(record + 0x50, row.open_day));
+        }
+        out.push_back(std::move(row));
+    }
+    return out;
+}
 void DebugLog(const std::string& line) {
     if (state_directory.empty()) return;
     const auto path = state_directory + "\\tycoondeck-debug.log";
