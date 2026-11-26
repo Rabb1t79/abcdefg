@@ -293,6 +293,87 @@ uint64_t Signature(const State& value) {
     return h;
 }
 // 事件流上报：直接调用 PlayerState 的原生提交 RPC，让游戏自己做校验与结算。
+std::wstring Wide(const std::string& text) {
+    if (text.empty()) return {};
+    const int length = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (length <= 0) return {};
+    std::wstring wide(static_cast<size_t>(length), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), length);
+    return wide;
+}
+bool NameIdOf(const std::string& text, uint32_t& id) {
+    if (!names || !names->find_utf8 || text.empty()) return false;
+    AnomalyStringViewV1 view{text.data(), text.size()};
+    return names->find_utf8(names->user, view, &id).code == ANOMALY_STATUS_V1_OK && id;
+}
+bool Derives(const Reader& r, uintptr_t cls, const char* base) {
+    for (int i = 0; cls && i < 32; ++i) {
+        if (r.NameAt(cls + tycoon::profile::snapshot.layout.ObjectName) == base) return true;
+        if (!r.Read(cls + tycoon::profile::snapshot.layout.Super, cls)) break;
+    }
+    return false;
+}
+// 兜底入口：点活动页原生的“开始游玩”按钮（HUD 的 ActivedWidgetMap 里找控件，不模拟鼠标）。
+bool ClickActivityGo(const Reader& r, uintptr_t player) {
+    const auto controller_fn = Checked(r, "HTGame", "HTUtil", "GetMainPlayerController", 2, 16,
+        {{"WorldContextObject", 0, 8, "ObjectProperty"}, {"ReturnValue", 8, 8, "ObjectProperty"}});
+    const auto util = Find(r, "/Script/HTGame.Default__HTUtil");
+    ObjectQuery query{World(r)};
+    if (!util || !controller_fn || !Invoke(r, util, controller_fn, &query) || !query.result) return false;
+    const auto hud = Child(r, query.result, "MyHUD");
+    if (!hud || !r.IsA(hud, "HTHUD")) return false;
+    const auto map_offset = Field(r, hud, "ActivedWidgetMap", 0x50, "MapProperty");
+    RowArrayHdr map{};
+    uintptr_t extra{};
+    int32_t bits{}, max_bits{};
+    const auto& layout = tycoon::profile::snapshot.layout;
+    if (map_offset < 0 || !r.Read(hud + map_offset, map) || map.count <= 0 || map.count > 256 || !map.data ||
+        !r.Read(hud + map_offset + layout.MapBitsData, extra) ||
+        !r.Read(hud + map_offset + layout.MapBitCount, bits) ||
+        !r.Read(hud + map_offset + layout.MapBitCapacity, max_bits) || max_bits < bits || bits < map.count) return false;
+    const auto getter = Checked(r, "HTGame", "HTHUD", "BP_GetUIByClass", 2, 24,
+        {{"UIClass", 0, 16, "StrProperty"}, {"ReturnValue", 16, 8, "ObjectProperty"}});
+    const auto click = Checked(r, "HTGame", "HTUI_OpActBalatroLikeMain", "OnGoButtonClicked", 1, 8,
+        {{"InButton", 0, 8, "ObjectProperty"}});
+    if (!getter || !click) return false;
+    for (int32_t i = 0; i < map.count; ++i) {
+        uint32_t flags{};
+        const auto flags_at = extra ? extra : hud + map_offset + layout.MapInlineBits;
+        if (!r.Read(flags_at + sizeof(uint32_t) * static_cast<uintptr_t>(i / 32), flags) || !(flags & (1u << (i % 32)))) continue;
+        uintptr_t cls{};
+        FName label{};
+        if (!r.Read(map.data + layout.MapEntryStride * static_cast<uintptr_t>(i), cls) || !Derives(r, cls, "HTUI_OpActBalatroLikeMain") ||
+            !r.Read(map.data + layout.MapEntryStride * static_cast<uintptr_t>(i) + layout.MapValue, label)) continue;
+        const auto text = r.Name(label);
+        const auto wide = Wide(text);
+        if (wide.empty()) continue;
+        struct { const wchar_t* data; int32_t count, capacity; uintptr_t result; } call{wide.c_str(),
+            static_cast<int32_t>(wide.size() + 1), static_cast<int32_t>(wide.size() + 1), 0};
+        if (!Invoke(r, hud, getter, &call) || !call.result) continue;
+        const auto button = Child(r, call.result, "HTButton_Go");
+        if (!button) continue;
+        DebugLog("click go widget=0x" + std::to_string(call.result) + " button=0x" + std::to_string(button));
+        return Invoke(r, call.result, click, &button);
+    }
+    return false;
+}
+// 在场景内按 FlowID 直接开挑战；组件不在就返回 false，由上层先走 Go。
+bool StartChallenge(const Reader& r, uintptr_t player, const std::string& flow) {
+    const auto component = Child(r, player, "BalatroLikeComponentPtr");
+    if (!component) return false;
+    uint32_t id{};
+    if (!NameIdOf(flow, id)) return false;
+    const auto select = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestSelectFlow", 1, 8,
+        {{"InFlowID", 0, 8, "NameProperty"}});
+    const auto start = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestStartNPCChallenge", 1, 8,
+        {{"InFlowID", 0, 8, "NameProperty"}});
+    FName name{id, 0};
+    bool ok = false;
+    if (select) ok = Invoke(r, component, select, &name);
+    if (start) ok = Invoke(r, component, start, &name) || ok;
+    DebugLog(std::string("start challenge flow=") + flow + " select=" + std::to_string(select != 0) + " start=" + std::to_string(start != 0));
+    return ok;
+}
 bool SubmitQuest(const Reader& r, uintptr_t player, const std::string& quest) {
     uint32_t id{};
     if (!names || !names->find_utf8 || quest.empty()) return false;
@@ -490,11 +571,19 @@ void ANOMALY_CALL Update(void*, double) noexcept {
             return;
         }
         if (entries.empty() && now >= next_scan) { next_scan = now + std::chrono::seconds(10); entries = ScanChallenges(r); }
-        if (const auto index = pending_submit.exchange(-1); index >= 0) {
-            if (static_cast<size_t>(index) < entries.size() && !entries[static_cast<size_t>(index)].quest.empty()) {
-                Publish(localizer.Text("status.submitting", "Reporting the challenge completion."), entries[static_cast<size_t>(index)].quest);
-                if (!SubmitQuest(r, value.player, entries[static_cast<size_t>(index)].quest))
-                    Publish(localizer.Text("status.submit_failed", "The completion report was rejected."), entries[static_cast<size_t>(index)].quest);
+        if (const auto index = pending_submit.exchange(-1); index >= 0 && static_cast<size_t>(index) < entries.size()) {
+            const auto& entry = entries[static_cast<size_t>(index)];
+            bool done = false;
+            if (!entry.quest.empty()) {
+                Publish(localizer.Text("status.submitting", "Reporting the challenge completion."), entry.quest);
+                done = SubmitQuest(r, value.player, entry.quest);
+            }
+            if (!done && !entry.flow.empty()) done = StartChallenge(r, value.player, entry.flow);
+            if (done) Publish(localizer.Text("status.submitted", "The completion was reported."), entry.flow);
+            else {
+                const auto opened = ClickActivityGo(r, value.player);
+                Publish(localizer.Text("status.opening", "Opening the activity scene."), entry.flow);
+                if (!opened) DebugLog("fallbacks exhausted for " + entry.flow);
             }
         }
         const auto key = PhaseKey(value.phase);

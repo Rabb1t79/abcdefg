@@ -31,6 +31,8 @@
     "status.settled": "本局已结束。",
     "status.submitting": "正在上报挑战完成。",
     "status.submit_failed": "完成上报被拒绝。",
+    "status.submitted": "完成已上报。",
+    "status.opening": "正在打开活动场景。",
     "label.entries": "挑战入口：{0}",
     "button.submit": "上报完成",
     "status.data_changed": "牌局数据发生变化，自动推进已停止；重新开关一次即可重试。",

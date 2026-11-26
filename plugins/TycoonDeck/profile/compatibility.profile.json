@@ -28,7 +28,13 @@
     "RegistryLoad": 25,
     "RegistrySubtract": 16,
     "FieldClass": 8,
-    "FieldClassName": 0
+    "FieldClassName": 0,
+    "MapEntryStride": 24,
+    "MapValue": 8,
+    "MapInlineBits": 16,
+    "MapBitsData": 32,
+    "MapBitCount": 40,
+    "MapBitCapacity": 44
   },
   "symbols": [
     {
