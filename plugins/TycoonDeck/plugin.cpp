@@ -32,7 +32,7 @@ constexpr std::string_view kTitle = "Tycoon's Deck Autopilot";
 constexpr std::string_view kAuthor = "YG";
 constexpr std::string_view kVersion = "0.1.0";
 constexpr std::string_view kConfigId = "settings";
-constexpr std::uint32_t kConfigVersion = 1;
+constexpr std::uint32_t kConfigVersion = 2;
 constexpr std::string_view kConfigSchema =
     R"({"type":"object","required":["enabled","skip_blinds","skip_shop","confirm_packs","score_assist","interval_ms"],)"
     R"("additionalProperties":false,"properties":{)"
@@ -167,6 +167,22 @@ public:
 
     [[nodiscard]] bool Reporting() const noexcept { return reporting_.load(); }
 
+    // Direct completion by id: the objective id is resolved through the name pool and the
+    // player state submits it with its own RPC, so nothing is simulated.
+    void QueueManualSubmit(const std::string& quest_id) {
+        const std::lock_guard<std::mutex> guard(manual_mutex_);
+        manual_quest_ = quest_id;
+        manual_pending_ = true;
+    }
+
+    [[nodiscard]] bool TakeManualSubmit(std::string& quest_id) {
+        const std::lock_guard<std::mutex> guard(manual_mutex_);
+        if (!manual_pending_) return false;
+        manual_pending_ = false;
+        quest_id = manual_quest_;
+        return !quest_id.empty();
+    }
+
     // Load-time diagnostics: names the exact prerequisite that is missing instead of
     // leaving the host with a bare "not runnable".
     [[nodiscard]] std::string Describe() const {
@@ -212,6 +228,14 @@ public:
 
     // Fallback path: play the run out through the component's requests.
     void StartAutoplay() noexcept {
+        reporting_.store(false);
+        SetEnabled(true);
+    }
+
+    // Entry path: start one NPC challenge flow (the lobby's own select/start requests) and
+    // then report whatever objectives the run binds.
+    void StartNpcFlow() noexcept {
+        npc_stage_ = 1;
         reporting_.store(false);
         SetEnabled(true);
     }
@@ -343,6 +367,31 @@ public:
                 Report();
                 return;
             }
+            if (npc_stage_ != 0) {
+                AdvanceNpcFlow();
+                return;
+            }
+            // A manual id is submitted before anything else: it is the direct-completion path.
+            {
+                std::string manual_id;
+                if (TakeManualSubmit(manual_id)) {
+                    std::uint32_t name_id{};
+                    if (names_ != nullptr && names_->find_utf8 != nullptr &&
+                        Succeeded(names_->find_utf8(names_->user, StringView(manual_id), &name_id)) &&
+                        name_id != 0) {
+                        tycoon::FName quest{};
+                        quest.id = name_id;
+                        const bool submitted = bridge_->SubmitQuest(quest);
+                        Publish(localizer_.Format(submitted ? "status.manual_sent" : "status.manual_failed",
+                            submitted ? "Submitted {0}." : "The server rejected {0}.",
+                            std::array{std::string_view(manual_id)}));
+                    } else {
+                        Publish(localizer_.Format("status.manual_unknown",
+                            "The name pool has no id named {0}.", std::array{std::string_view(manual_id)}));
+                    }
+                    return;
+                }
+            }
             DeckState state;
             if (!bridge_->Read(state)) {
                 Publish(localizer_.Text("status.waiting_state", "The session state is unavailable right now."));
@@ -355,6 +404,37 @@ public:
             std::int32_t floor{};
             const bool detailed = bridge_->ReadScore(score, target, money, act, floor);
             ShowState(state, score, target, money, act, floor, detailed);
+            // Observed-state trace: bounded, one line per distinct state, so a run that does
+            // not advance can be read back from the log without the UI.
+            const auto observed = Signature(state);
+            if (observed != logged_signature_ && logged_states_ < 32) {
+                logged_signature_ = observed;
+                ++logged_states_;
+                std::string line{"tycoons-deck: state phase="};
+                line += std::to_string(state.phase);
+                line += " plays=";
+                line += std::to_string(state.plays_left);
+                line += " discards=";
+                line += std::to_string(state.discards_left);
+                line += " canFinish=";
+                line += state.can_finish ? '1' : '0';
+                line += " score=";
+                line += std::to_string(score);
+                line += " target=";
+                line += std::to_string(target);
+                std::vector<tycoon::Guid> hand;
+                std::int32_t hand_count{};
+                const bool hand_ok = bridge_->ReadHandCardIds(hand, hand_count);
+                line += " hand=";
+                line += hand_ok ? std::to_string(hand_count) : std::string{"unreadable"};
+                line += " ";
+                line += bridge_->DescribeHand();
+                line += " ";
+                line += bridge_->DescribeQuests();
+                if (core_ != nullptr && core_->log != nullptr) {
+                    core_->log(core_->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(line));
+                }
+            }
             if (state.phase == static_cast<std::int32_t>(tycoon::Phase::game_over)) {
                 Finish(localizer_.Text("status.run_finished", "The run is finished."));
                 return;
@@ -389,20 +469,95 @@ public:
                 signature_ = signature;
                 stall_count_ = 0;
             }
-            if (bridge_->Send(action, state.pack_pick_count)) sent_.store(sent_.load() + 1);
+            if (bridge_->Send(action, state.pack_pick_count)) {
+                sent_.store(sent_.load() + 1);
+                if (action_logs_ < 32) {
+                    ++action_logs_;
+                    std::string line{"tycoons-deck: send action="};
+                    line += std::to_string(static_cast<std::size_t>(action));
+                    line += " phase=";
+                    line += std::to_string(state.phase);
+                    if (core_ != nullptr && core_->log != nullptr) {
+                        core_->log(core_->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(line));
+                    }
+                }
+            }
         } catch (...) {
             Publish(localizer_.Text("status.waiting_state", "The session state is unavailable right now."));
         }
     }
 
 private:
+    void Log(const std::string& text) const noexcept {
+        if (core_ != nullptr && core_->log != nullptr) {
+            core_->log(core_->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
+        }
+    }
+
+    // Two steps, one per control tick: the lobby list, then select + start.
+    void AdvanceNpcFlow() noexcept {
+        try {
+            if (npc_stage_ == 1) {
+                std::vector<tycoon::FName> ids;
+                std::vector<std::string> names;
+                if (!bridge_->ReadNpcFlowIds(ids, names)) {
+                    Log("tycoons-deck: npc flow list is empty");
+                    Publish(localizer_.Text("status.npc_list_empty", "The challenge list is empty."));
+                    npc_stage_ = 0;
+                    return;
+                }
+                std::string line{"tycoons-deck: npc flows="};
+                line += std::to_string(ids.size());
+                for (std::size_t index = 0; index < names.size() && index < 16; ++index) {
+                    line += " ";
+                    line += names[index];
+                }
+                Log(line);
+                npc_flow_ = ids.front();
+                bool selected{};
+                const bool invoked = bridge_->SelectNpcQuest(npc_flow_, selected);
+                Log(std::string{"tycoons-deck: npc select invoked="} + (invoked ? "1" : "0") +
+                    " selected=" + (selected ? "1" : "0") + " flow=" + bridge_->QuestName(npc_flow_));
+                if (!invoked) {
+                    Publish(localizer_.Text("status.npc_select_failed", "The challenge could not be selected."));
+                    npc_stage_ = 0;
+                    return;
+                }
+                npc_stage_ = 2;
+                return;
+            }
+            if (npc_stage_ == 2) {
+                const bool started = bridge_->StartNpcChallenge(npc_flow_);
+                Log(std::string{"tycoons-deck: npc start invoked="} + (started ? "1" : "0"));
+                npc_stage_ = 0;
+                reporting_.store(true);
+                empty_report_polls_ = 0;
+                Publish(started ? localizer_.Text("status.npc_started", "Challenge started; reporting next.")
+                                : localizer_.Text("status.npc_start_failed", "The challenge did not start."));
+                return;
+            }
+        } catch (...) {
+            npc_stage_ = 0;
+        }
+    }
+
     // Submits one report id per control step so the server sees the same cadence the
     // minigame itself uses, then stops as soon as the list is exhausted.
     void Report() noexcept {
         try {
             std::vector<tycoon::FName> ids;
-            if (!bridge_->ReadQuestIds(ids)) {
-                Publish(localizer_.Text("status.report_waiting_ids", "Waiting for this run's report ids."));
+            if (!bridge_->ReadQuestIds(ids) || ids.empty()) {
+                // A free-play run carries no report ids at all, so waiting forever would look
+                // like a dead button. Fall through to playing the run out instead.
+                if (++empty_report_polls_ >= 3) {
+                    reporting_.store(false);
+                    empty_report_polls_ = 0;
+                    Publish(localizer_.Text("status.report_fallback",
+                        "This run has no report objectives, so it is played through instead."));
+                } else {
+                    Publish(localizer_.Text("status.report_waiting_ids",
+                        "Waiting for this run's report ids."));
+                }
                 return;
             }
             if (report_index_ >= static_cast<int>(ids.size())) {
@@ -480,7 +635,7 @@ private:
         state_floor_.store(floor);
         state_plays_.store(state.plays_left);
         state_discards_.store(state.discards_left);
-        Publish(localizer_.Format("text.headline", "{0} 璺?{1}", combined));
+        Publish(localizer_.Format("text.headline", "{0} 鐠?{1}", combined));
     }
 
 public:
@@ -519,7 +674,7 @@ private:
     std::atomic<bool> skip_blinds_{true};
     std::atomic<bool> skip_shop_{true};
     std::atomic<bool> confirm_packs_{true};
-    std::atomic<bool> score_assist_{true};
+    std::atomic<bool> score_assist_{};
     std::atomic<int> interval_ms_{kDefaultIntervalMs};
     std::atomic<bool> pending_save_{};
     std::atomic<bool> shown_{};
@@ -528,6 +683,12 @@ private:
     int report_sent_{};
     int report_failures_{};
     int last_report_count_{-1};
+    int empty_report_polls_{};
+    int npc_stage_{};
+    tycoon::FName npc_flow_{};
+    int logged_states_{};
+    int action_logs_{};
+    std::uint64_t logged_signature_{};
     std::atomic<int> sent_{};
     std::atomic<std::int32_t> state_score_{};
     std::atomic<std::int32_t> state_target_{};
@@ -537,6 +698,17 @@ private:
     std::atomic<std::int32_t> state_plays_{};
     std::atomic<std::int32_t> state_discards_{};
     std::atomic<std::shared_ptr<const std::string>> status_;
+    std::mutex manual_mutex_;
+    std::string manual_quest_;
+    bool manual_pending_{};
+
+public:
+    static constexpr std::size_t kQuestBufferSize = 128;
+    [[nodiscard]] char* QuestBuffer() noexcept { return quest_buffer_; }
+    [[nodiscard]] const char* QuestBuffer() const noexcept { return quest_buffer_; }
+
+private:
+    char quest_buffer_[kQuestBufferSize]{};
     Clock::time_point next_tick_{};
     std::uint64_t signature_{};
     std::uint64_t assist_signature_{};
@@ -559,9 +731,24 @@ void Content(Context& context, const AnomalyUiServiceV1* ui) {
         context.RequestSave();
     }
     if (!context.Enabled() && ui->button(ui->user,
+            StringView(text.Text("action.npc_flow", "Start a challenge run and report")), 0.0F, 0.0F) != 0) {
+        context.StartNpcFlow();
+        context.RequestSave();
+    }
+    if (!context.Enabled() && ui->button(ui->user,
             StringView(text.Text("action.autoplay", "Play the run through instead")), 0.0F, 0.0F) != 0) {
         context.StartAutoplay();
         context.RequestSave();
+    }
+    // Direct completion by objective id: type the id the activity uses, submit it with the
+    // player state's own RPC. The edit buffer persists so a submit is one deliberate click.
+    if (ui->input_text != nullptr && ui->button != nullptr) {
+        ui->input_text(ui->user, StringView(text.Text("option.quest_id", "Objective id")),
+            context.QuestBuffer(), Context::kQuestBufferSize, 0);
+        if (ui->button(ui->user, StringView(text.Text("action.submit_id", "Submit this objective")),
+                0.0F, 0.0F) != 0) {
+            context.QueueManualSubmit(std::string(context.QuestBuffer()));
+        }
     }
     int score_assist = context.ScoreAssist() ? 1 : 0;
     if (ui->checkbox(ui->user, StringView(text.Text("option.score_assist", "Raise the blind score to its target")),
@@ -593,7 +780,7 @@ void Content(Context& context, const AnomalyUiServiceV1* ui) {
     const auto plays = std::to_string(context.Plays());
     const auto discards = std::to_string(context.Discards());
     const std::array plays_arguments{std::string_view(plays), std::string_view(discards)};
-    const auto plays_text = text.Format("text.plays", "Plays left {0} 璺?Discards left {1}", plays_arguments);
+    const auto plays_text = text.Format("text.plays", "Plays left {0} 鐠?Discards left {1}", plays_arguments);
     ui->text(ui->user, StringView(plays_text));
     const auto money = std::to_string(context.Money());
     const std::array money_arguments{std::string_view(money)};
@@ -601,7 +788,7 @@ void Content(Context& context, const AnomalyUiServiceV1* ui) {
     const auto act = std::to_string(context.Act());
     const auto floor = std::to_string(context.Floor());
     const std::array act_arguments{std::string_view(act), std::string_view(floor)};
-    ui->text(ui->user, StringView(text.Format("text.act", "Act {0} 璺?Floor {1}", act_arguments)));
+    ui->text(ui->user, StringView(text.Format("text.act", "Act {0} 鐠?Floor {1}", act_arguments)));
     const auto sent = std::to_string(context.Sent());
     const std::array sent_arguments{std::string_view(sent)};
     ui->text(ui->user, StringView(text.Format("text.sent", "Requests sent: {0}", sent_arguments)));

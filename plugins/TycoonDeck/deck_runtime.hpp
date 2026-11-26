@@ -12,6 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -87,10 +88,48 @@ inline constexpr std::string_view kBlindScoreField = "CurrentBlindScore";
 // The ids this run reports on completion. UHTBalatroLikeComponent fills them from the
 // active OpActivity_BalatroLike configuration.
 inline constexpr std::string_view kQuestIdField = "BalatroQuestIDs";
+inline constexpr std::string_view kQuestComponentField = "QuestComponent";
+inline constexpr std::string_view kQuestsInProgressField = "QuestsInProgress";
+// Measured from the live row layout: ids sit at row offset 0 and rows are 0xE0 bytes apart.
+inline constexpr std::uintptr_t kProgressStride = 0xE0;
 inline constexpr std::size_t kMaximumReportQuests = 16;
 // AHTPlayerState::ServerSubmitQuest —— the server RPC the minigame itself calls when a
 // run is won, so submitting it is the report path rather than a simulation of play.
 inline constexpr FunctionSpec kSubmitQuestFunction{"ServerSubmitQuest", 3, 20};
+// UHTBalatroLikeComponent::GetHandCards —— returns TArray<FHTBalatroCardInstance>.
+inline constexpr FunctionSpec kGetHandCardsFunction{"GetHandCards", 1, 16};
+inline constexpr std::uintptr_t kCardInstanceStride = 0xA8;
+
+struct TArrayHeader final {
+    const void* data{};
+    std::int32_t count{};
+    std::int32_t capacity{};
+};
+static_assert(sizeof(TArrayHeader) == 16);
+
+// The RPC layer only carries the id form of a play, so the hand's instance ids are what
+// the server accepts.
+inline constexpr FunctionSpec kPlayAllByIdFunction{"RequestPlayAllHandCardsByID", 1, 16};
+
+// NPC challenge entry: the flow list is what the lobby's challenge button selects from, so
+// starting one of these is the entry that binds the activity objectives.
+inline constexpr FunctionSpec kGetAllNpcIdsFunction{"GetAllNPCIDs", 1, 16};
+inline constexpr FunctionSpec kSelectNpcQuestFunction{"RequestSelectNPCChallengeQuest", 1, 12};
+inline constexpr FunctionSpec kStartNpcChallengeFunction{"RequestStartNPCChallenge", 1, 8};
+
+struct NpcSelectFrame final {
+    FName flow{};
+    std::uint8_t selected{};
+    std::uint8_t reserved[3]{};
+};
+static_assert(sizeof(NpcSelectFrame) == 12);
+
+struct GuidArray final {
+    const Guid* data{};
+    std::int32_t count{};
+    std::int32_t capacity{};
+};
+static_assert(sizeof(GuidArray) == 16);
 // UHTPlayerState::RequestBalatroLikeComponent 鈥斺€?the player state replicates the component
 // on demand, so this is the native way to obtain it when it is not replicated yet.
 inline constexpr FunctionSpec kRequestComponentFunction{"RequestBalatroLikeComponent", 0, 0};
@@ -129,8 +168,15 @@ public:
         component_ = {};
         player_state_ = {};
         submit_quest_ = {};
+        get_hand_cards_ = {};
+        play_all_by_id_ = {};
+        get_all_npc_ids_ = {};
+        select_npc_quest_ = {};
+        start_npc_challenge_ = {};
         submit_quest_retry_ = {};
         quest_id_offset_ = -1;
+        quest_component_offset_ = -1;
+        progress_offset_ = -1;
         functions_ready_ = false;
         request_component_function_ = {};
         for (auto& handle : requests_) handle = {};
@@ -152,11 +198,14 @@ public:
 
     [[nodiscard]] bool Read(DeckState& state) {
         if (component_.id == 0) return false;
-        std::int32_t phase{};
+        // GetCurrentPhase returns the EHTBalatroPhase enum, so its frame is one byte wide.
+        std::uint8_t phase{};
         if (!QueryValue(Query::phase, phase)) return false;
         std::int32_t plays{};
         std::int32_t discards{};
         std::int32_t picks{};
+        std::int32_t score{};
+        std::int32_t target{};
         if (!QueryValue(Query::plays_left, plays) || !QueryValue(Query::discards_left, discards) ||
             !QueryValue(Query::can_finish, state.can_finish) ||
             !QueryValue(Query::can_skip_blind, state.can_skip_blind) ||
@@ -164,10 +213,17 @@ public:
             !QueryValue(Query::pack_pick_count, picks)) {
             return false;
         }
-        state.phase = phase;
+        // Score and target decide whether playing more hands can still help, so a missing
+        // value must not silently become zero.
+        if (!QueryValue(Query::current_score, score) || !QueryValue(Query::target_score, target)) {
+            return false;
+        }
+        state.phase = static_cast<std::int32_t>(phase);
         state.plays_left = plays;
         state.discards_left = discards;
         state.pack_pick_count = picks;
+        state.score = score;
+        state.target = target;
         return true;
     }
 
@@ -180,7 +236,27 @@ public:
     [[nodiscard]] bool Send(const Action action, const std::int32_t pack_picks) {        switch (action) {
         case Action::start_blind: return SendRequest(Request::start_blind);
         case Action::skip_blind: return SendRequest(Request::skip_blind);
-        case Action::play_hand: return SendRequest(Request::play_hand);
+        case Action::play_hand: {
+            // Prefer the id form: the zero-argument variant only replays whatever selection
+            // the UI staged, which is empty when the plugin drives the run.
+            if (play_all_by_id_.id == 0) {
+                Clock::time_point deadline{};
+                std::string path{"/Script/HTGame."};
+                path.append(kComponentClass);
+                path.push_back('.');
+                path.append(kPlayAllByIdFunction.name);
+                const auto handle = Find(path, deadline);
+                if (handle.id != 0 && Validate(handle, kPlayAllByIdFunction)) play_all_by_id_ = handle;
+            }
+            std::vector<Guid> ids;
+            std::int32_t count{};
+            if (play_all_by_id_.id != 0 && ReadHandCardIds(ids, count) && !ids.empty()) {
+                GuidArray selection{ids.data(), static_cast<std::int32_t>(ids.size()),
+                    static_cast<std::int32_t>(ids.size())};
+                return Invoke(play_all_by_id_, &selection, sizeof(selection));
+            }
+            return SendRequest(Request::play_hand);
+        }
         case Action::finish_blind: return SendRequest(Request::finish_blind);
         case Action::skip_shop: return SendRequest(Request::skip_shop);
         case Action::manual_settlement: return SendRequest(Request::manual_settlement);
@@ -288,9 +364,275 @@ public:
         return text;
     }
 
+    // Reads this hand's card instance ids. GetHandCards returns a TArray by value, so its
+    // 16-byte return slot carries the array header inline; each element is an
+    // FHTBalatroCardInstance whose first member is the instance id.
+    [[nodiscard]] bool ReadHandCardIds(std::vector<Guid>& ids, std::int32_t& count) {
+        ids.clear();
+        count = -1;
+        if (component_.id == 0) return false;
+        if (get_hand_cards_.id == 0) {
+            Clock::time_point deadline{};
+            std::string path{"/Script/HTGame."};
+            path.append(kComponentClass);
+            path.push_back('.');
+            path.append(kGetHandCardsFunction.name);
+            const auto handle = Find(path, deadline);
+            if (handle.id == 0 || !Validate(handle, kGetHandCardsFunction)) return false;
+            get_hand_cards_ = handle;
+        }
+        TArrayHeader header{};
+        if (!Invoke(get_hand_cards_, &header, sizeof(header))) return false;
+        count = header.count;
+        if (header.count <= 0 || header.count > 32 || header.data == nullptr) return false;
+        for (std::int32_t index = 0; index < header.count; ++index) {
+            Guid id{};
+            if (!reader_.Read(reinterpret_cast<std::uintptr_t>(header.data) +
+                    static_cast<std::uintptr_t>(index) * kCardInstanceStride, id)) {
+                return false;
+            }
+            ids.push_back(id);
+        }
+        return true;
+    }
+
+    // The in-progress quest rows whose id names the minigame (measured stride 0xE0, id at
+    // row offset 0). Submitting these with ServerSubmitQuest completes the activity without
+    // touching the board.
+    [[nodiscard]] bool ReadActivityQuestIds(std::vector<FName>& out, std::vector<std::string>& names) {
+        out.clear();
+        names.clear();
+        if (player_state_.id == 0) return false;
+        const auto state = domain_.Pointer(reader_, player_state_);
+        if (state == 0) return false;
+        const auto component = reader_.PointerField(state, kQuestComponentField, quest_component_offset_);
+        if (quest_component_offset_ < 0) {
+            quest_component_offset_ = reader_.PropertyOffset(state, kQuestComponentField,
+                static_cast<std::int32_t>(sizeof(std::uintptr_t)));
+        }
+        if (component == 0) return false;
+        if (progress_offset_ < 0) {
+            progress_offset_ = reader_.PropertyOffset(component, kQuestsInProgressField,
+                static_cast<std::int32_t>(sizeof(TArrayHeader)));
+        }
+        if (progress_offset_ < 0) return false;
+        TArrayHeader array{};
+        if (!reader_.Read(component + static_cast<std::uintptr_t>(progress_offset_), array)) return false;
+        if (array.count <= 0 || array.count > 256 || array.data == nullptr) return false;
+        for (std::int32_t index = 0; index < array.count; ++index) {
+            FName id{};
+            if (!reader_.Read(reinterpret_cast<std::uintptr_t>(array.data) +
+                    kProgressStride * static_cast<std::uintptr_t>(index), id)) {
+                continue;
+            }
+            auto name = reader_.Name(id);
+            if (name.empty() || name.size() > 96) continue;
+            std::string lower{name};
+            for (auto& character : lower) {
+                if (character >= 'A' && character <= 'Z') character = static_cast<char>(character - 'A' + 'a');
+            }
+            if (lower.find("alatro") == std::string::npos && lower.find("ycoon") == std::string::npos) continue;
+            out.push_back(id);
+            names.push_back(std::move(name));
+        }
+        return !out.empty();
+    }
+
+    // NPC challenge entry: read the lobby's flow list, then select and start one flow. Both
+    // requests are the lobby buttons' own entry points.
+    [[nodiscard]] bool ReadNpcFlowIds(std::vector<FName>& ids, std::vector<std::string>& names) {
+        ids.clear();
+        names.clear();
+        if (component_.id == 0) return false;
+        if (get_all_npc_ids_.id == 0) {
+            Clock::time_point deadline{};
+            std::string path{"/Script/HTGame."};
+            path.append(kComponentClass);
+            path.push_back('.');
+            path.append(kGetAllNpcIdsFunction.name);
+            const auto handle = Find(path, deadline);
+            if (handle.id == 0 || !Validate(handle, kGetAllNpcIdsFunction)) return false;
+            get_all_npc_ids_ = handle;
+        }
+        TArrayHeader header{};
+        if (!Invoke(get_all_npc_ids_, &header, sizeof(header))) return false;
+        if (header.count <= 0 || header.count > 64 || header.data == nullptr) return false;
+        for (std::int32_t index = 0; index < header.count; ++index) {
+            FName id{};
+            if (!reader_.Read(reinterpret_cast<std::uintptr_t>(header.data) +
+                    sizeof(FName) * static_cast<std::uintptr_t>(index), id)) {
+                continue;
+            }
+            auto name = reader_.Name(id);
+            if (name.empty() || name.size() > 96) continue;
+            ids.push_back(id);
+            names.push_back(std::move(name));
+        }
+        return !ids.empty();
+    }
+
+    [[nodiscard]] bool SelectNpcQuest(const FName flow, bool& selected) {
+        if (select_npc_quest_.id == 0) {
+            Clock::time_point deadline{};
+            std::string path{"/Script/HTGame."};
+            path.append(kComponentClass);
+            path.push_back('.');
+            path.append(kSelectNpcQuestFunction.name);
+            const auto handle = Find(path, deadline);
+            if (handle.id == 0 || !Validate(handle, kSelectNpcQuestFunction)) return false;
+            select_npc_quest_ = handle;
+        }
+        NpcSelectFrame frame{};
+        frame.flow = flow;
+        if (!Invoke(select_npc_quest_, &frame, sizeof(frame))) return false;
+        selected = frame.selected != 0;
+        return true;
+    }
+
+    [[nodiscard]] bool StartNpcChallenge(const FName flow) {
+        if (start_npc_challenge_.id == 0) {
+            Clock::time_point deadline{};
+            std::string path{"/Script/HTGame."};
+            path.append(kComponentClass);
+            path.push_back('.');
+            path.append(kStartNpcChallengeFunction.name);
+            const auto handle = Find(path, deadline);
+            if (handle.id == 0 || !Validate(handle, kStartNpcChallengeFunction)) return false;
+            start_npc_challenge_ = handle;
+        }
+        FName frame{};
+        frame = flow;
+        return Invoke(start_npc_challenge_, &frame, sizeof(frame));
+    }
+
+    // Direct-completion discovery: the player's quest component lists what is still in
+    // progress, which is where an activity objective id can be read from without the
+    // component's transient report list.
+    [[nodiscard]] std::string DescribeQuests() {
+        std::string text{"quests"};
+        if (player_state_.id == 0) return text + "=no-state";
+        const auto state = domain_.Pointer(reader_, player_state_);
+        if (state == 0) return text + "=no-pointer";
+        const auto component = reader_.PointerField(state, kQuestComponentField, quest_component_offset_);
+        if (quest_component_offset_ < 0) {
+            quest_component_offset_ = reader_.PropertyOffset(state, kQuestComponentField,
+                static_cast<std::int32_t>(sizeof(std::uintptr_t)));
+        }
+        text += " comp=";
+        text += component != 0 ? '1' : '0';
+        if (component == 0) return text;
+        if (progress_offset_ < 0) {
+            progress_offset_ = reader_.PropertyOffset(component, kQuestsInProgressField,
+                static_cast<std::int32_t>(sizeof(TArrayHeader)));
+        }
+        text += " offset=";
+        text += std::to_string(progress_offset_);
+        if (progress_offset_ < 0) return text;
+        TArrayHeader array{};
+        if (!reader_.Read(component + static_cast<std::uintptr_t>(progress_offset_), array)) {
+            return text + " unreadable";
+        }
+        text += " count=";
+        text += std::to_string(array.count);
+        if (array.count <= 0 || array.count > 256 || array.data == nullptr) return text;
+        // One element's first bytes: the quest id is expected to lead the row, and this is
+        // what the caller needs to size the stride.
+        std::array<std::uint8_t, 32> bytes{};
+        if (!reader_.Read(reinterpret_cast<std::uintptr_t>(array.data), bytes)) return text + " elem-unreadable";
+        text += " first=";
+        char byte[4]{};
+        for (const auto value : bytes) {
+            std::snprintf(byte, sizeof(byte), "%02X", value);
+            text += byte;
+        }
+        // Element layout probe: an FName anywhere in the first 0x80 bytes of row 0 is
+        // reported by its offset, which tells where the quest id lives; the stride follows
+        // from resolving the same offset in row 1.
+        char field[24]{};
+        for (std::uintptr_t offset = 0; offset < 0x80; offset += 8) {
+            FName id{};
+            if (!reader_.Read(reinterpret_cast<std::uintptr_t>(array.data) + offset, id)) continue;
+            const auto name = reader_.Name(id);
+            if (name.empty() || name.size() > 96) continue;
+            std::snprintf(field, sizeof(field), " f0x%02X=", static_cast<unsigned>(offset));
+            text += field;
+            text += name;
+        }
+        // Row 0 starts with a quest id, so the stride is the offset whose row 1 **and**
+        // row 2 both resolve to a different printable id.
+        text += " strides:";
+        constexpr std::array<std::uintptr_t, 14> candidates{
+            0x78, 0x80, 0x88, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0x100, 0x120, 0x140, 0x180, 0x200};
+        for (const auto stride : candidates) {
+            FName first{};
+            FName second{};
+            if (!reader_.Read(reinterpret_cast<std::uintptr_t>(array.data) + stride, first) ||
+                !reader_.Read(reinterpret_cast<std::uintptr_t>(array.data) + stride * 2, second)) {
+                continue;
+            }
+            const auto one = reader_.Name(first);
+            const auto two = reader_.Name(second);
+            if (one.empty() || two.empty() || one == two) continue;
+            std::snprintf(field, sizeof(field), " 0x%02X=%s/%s", static_cast<unsigned>(stride),
+                one.c_str(), two.c_str());
+            text += field;
+        }
+        // Every id, so the minigame's rows can be named instead of guessed.
+        text += " ids:";
+        for (std::int32_t index = 0; index < array.count; ++index) {
+            FName row{};
+            if (!reader_.Read(reinterpret_cast<std::uintptr_t>(array.data) +
+                    kProgressStride * static_cast<std::uintptr_t>(index), row)) {
+                break;
+            }
+            const auto name = reader_.Name(row);
+            if (name.empty()) continue;
+            text += " ";
+            text += name;
+        }
+        return text;
+    }
+
+    // Raw view of the hand query: the resolved UFunction's marshal fields and the bytes it
+    // writes back, so a layout mismatch is visible instead of just "unreadable".
+    [[nodiscard]] std::string DescribeHand() {
+        std::string text{"hand"};
+        Clock::time_point deadline{};
+        std::string path{"/Script/HTGame."};
+        path.append(kComponentClass);
+        path.push_back('.');
+        path.append(kGetHandCardsFunction.name);
+        const auto handle = Find(path, deadline);
+        text += " found=";
+        text += handle.id != 0 ? '1' : '0';
+        if (handle.id == 0) return text;
+        const auto function = domain_.Pointer(reader_, handle);
+        text += " fn=";
+        text += function != 0 ? '1' : '0';
+        if (function == 0) return text;
+        std::uint8_t parameters{};
+        std::uint16_t frame_size{};
+        if (reader_.Read(function + profile::native_layout.FunctionCount, parameters)) {
+            text += " n=";
+            text += std::to_string(parameters);
+        }
+        if (reader_.Read(function + profile::native_layout.FunctionSize, frame_size)) {
+            text += " s=";
+            text += std::to_string(frame_size);
+        }
+        std::array<std::uint8_t, 16> frame{};
+        if (!InvokeOn(component_, handle, frame.data(), frame.size())) return text + " invoke=fail";
+        text += " bytes=";
+        char byte[4]{};
+        for (const auto value : frame) {
+            std::snprintf(byte, sizeof(byte), "%02X", value);
+            text += byte;
+        }
+        return text;
+    }
+
 private:
-    static constexpr std::size_t Index(const Request value) noexcept { return static_cast<std::size_t>(value); }
-    static constexpr std::size_t Index(const Query value) noexcept { return static_cast<std::size_t>(value); }
+    static constexpr std::size_t Index(const Request value) noexcept { return static_cast<std::size_t>(value); }    static constexpr std::size_t Index(const Query value) noexcept { return static_cast<std::size_t>(value); }
 
     [[nodiscard]] bool InvokeOn(const AnomalyGenerationHandleV1 receiver, const AnomalyGenerationHandleV1 function,
         void* const frame, const std::size_t size) const {
@@ -431,6 +773,11 @@ private:
     AnomalyGenerationHandleV1 component_{};
     AnomalyGenerationHandleV1 player_state_{};
     AnomalyGenerationHandleV1 submit_quest_{};
+    AnomalyGenerationHandleV1 get_hand_cards_{};
+    AnomalyGenerationHandleV1 play_all_by_id_{};
+    AnomalyGenerationHandleV1 get_all_npc_ids_{};
+    AnomalyGenerationHandleV1 select_npc_quest_{};
+    AnomalyGenerationHandleV1 start_npc_challenge_{};
     Clock::time_point submit_quest_retry_{};
     AnomalyGenerationHandleV1 request_component_function_{};
     std::array<AnomalyGenerationHandleV1, static_cast<std::size_t>(Request::count)> requests_{};
@@ -441,6 +788,8 @@ private:
     int component_offset_{-1};
     int blind_score_offset_{-1};
     int quest_id_offset_{-1};
+    int quest_component_offset_{-1};
+    int progress_offset_{-1};
     Clock::time_point component_requested_at_{};
     bool functions_ready_{};
 };
