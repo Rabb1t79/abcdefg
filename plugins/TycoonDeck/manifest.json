@@ -29,6 +29,10 @@
       "minVersion": 1
     },
     {
+      "id": "anomaly.plugin-state",
+      "minVersion": 1
+    },
+    {
       "id": "anomaly.ui",
       "minVersion": 1
     },

@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <span>
@@ -24,6 +25,8 @@ const AnomalyUe5FrameworkServiceV1* framework{};
 const AnomalyUe5BuildServiceV1* build_service{};
 const AnomalyWindowServiceV1* window_service{};
 const AnomalyConfigServiceV1* config_service{};
+const AnomalyPluginStateServiceV1* state_service{};
+std::string state_directory;
 anomaly::sdk::Localizer localizer;
 AnomalyGenerationHandleV1 window_handle{};
 AnomalyGenerationHandleV1 schema_handle{};
@@ -207,7 +210,7 @@ Dispatch Submit(const Reader& r, const State& value, tycoon::Action action) {
     }
     default: return Dispatch::Waiting;
     }
-    if (!fn) return Dispatch::Failed;
+    if (!fn) { DebugLog("function missing for action=" + std::to_string(static_cast<int>(action))); return Dispatch::Failed; }
     // 防止在请求已被接受、状态尚未刷新时重复下发。
     State current;
     Stage current_stage{};
@@ -219,6 +222,17 @@ Dispatch Submit(const Reader& r, const State& value, tycoon::Action action) {
     return Invoke(r, value.component, fn, parameters) ? Dispatch::Sent : Dispatch::Failed;
 }
 
+// 调试日志：只在插件 state 目录追加小行，便于在没有控制台时定位请求被拒的原因。
+void DebugLog(const std::string& line) {
+    if (state_directory.empty()) return;
+    const auto path = state_directory + "\\tycoondeck-debug.log";
+    FILE* file = nullptr;
+    if (fopen_s(&file, path.c_str(), "ab") == 0 && file) {
+        std::fputs(line.c_str(), file);
+        std::fputc('\n', file);
+        std::fclose(file);
+    }
+}
 uint64_t Signature(const State& value) {
     uint64_t h = 1469598103934665603ull;
     const uint32_t parts[6] = {static_cast<uint32_t>(value.phase), static_cast<uint32_t>(value.score), static_cast<uint32_t>(value.playsLeft),
@@ -298,6 +312,15 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
         window_service = services.Query<AnomalyWindowServiceV1>(ANOMALY_WINDOW_SERVICE_V1_ID).get();
         core = services.Query<AnomalyCoreServiceV1>(ANOMALY_CORE_SERVICE_V1_ID).get();
         config_service = services.Query<AnomalyConfigServiceV1>(ANOMALY_CONFIG_SERVICE_V1_ID).get();
+        state_service = services.Query<AnomalyPluginStateServiceV1>(ANOMALY_PLUGIN_STATE_SERVICE_V1_ID).get();
+        if (state_service && state_service->directory) {
+            std::array<char, 512> buffer{};
+            std::size_t size = buffer.size();
+            if (state_service->directory(state_service->user, buffer.data(), &size).code == ANOMALY_STATUS_V1_OK && size > 0 && size < buffer.size())
+                state_directory.assign(buffer.data(), size);
+            while (!state_directory.empty() && (state_directory.back() == '\0' || state_directory.back() == '\r' || state_directory.back() == '\n'))
+                state_directory.pop_back();
+        }
         if (config_service && config_service->register_schema)
             static_cast<void>(config_service->register_schema(config_service->user, StringView(kSchemaId), 1,
                 {reinterpret_cast<const uint8_t*>(kSchemaDocument.data()), kSchemaDocument.size()}, &schema_handle));
@@ -431,11 +454,17 @@ void ANOMALY_CALL Update(void*, double) noexcept {
             return;
         }
         if (outcome == Dispatch::Failed) {
+            DebugLog("dispatch failed action=" + std::to_string(static_cast<int>(decision.action)));
             Publish(localizer.Text("status.rejected", "The game rejected the request; automation stopped."), state_text);
             enabled.store(false);
             MarkDirty();
             return;
         }
+        DebugLog("phase=" + std::to_string(static_cast<int>(value.phase)) + " score=" + std::to_string(value.score) +
+            " money=" + std::to_string(value.money) + " hand=" + std::to_string(value.handCount) +
+            " cells=" + std::to_string(value.cellCount) + " cell=" + std::to_string(value.cellX) + "," + std::to_string(value.cellY) +
+            " canFinish=" + std::to_string(value.canFinish ? 1 : 0) + " canSkip=" + std::to_string(value.canSkip ? 1 : 0) +
+            " action=" + std::to_string(static_cast<int>(decision.action)) + " outcome=" + std::to_string(static_cast<int>(outcome)));
         Publish(localizer.Text(decision.key, decision.fallback), state_text + " | " + score_text);
         next_poll = now + std::chrono::milliseconds(700);
     } catch (...) {
