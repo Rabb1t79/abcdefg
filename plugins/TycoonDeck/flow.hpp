@@ -10,7 +10,7 @@ enum class Phase : std::uint8_t {
     Shop = 4, ShopCleared = 5, GameOver = 6, GameOverFailed = 7, SettlementAnimating = 8,
 };
 enum class Action : std::uint8_t {
-    None, StartGame, StartBlind, SkipBlind, FinishBlind, PlayAll, SkipShop, ConfirmPack, Settle,
+    None, StartGame, StartBlind, SkipBlind, FinishBlind, PlaceBuilding, SkipShop, ConfirmPack, Settle,
 };
 struct Observation {
     Phase phase{};
@@ -18,7 +18,8 @@ struct Observation {
     bool canSkip{};
     bool pendingPack{};
     std::int32_t pickCount{};
-    std::int32_t playsLeft{};
+    std::int32_t handCount{};
+    std::int32_t cellCount{};
 };
 // key 是本地化目录的键，fallback 是代码里的英文回退；两者必须同时给，目录缺项时显示回退而不是键名。
 struct Decision {
@@ -31,7 +32,7 @@ struct Settings {
     bool fastFinish{true};
 };
 
-// 最短合法序列：能直接结束盲注就不出牌，能跳过盲注就不打，其余阶段只做推进动作。
+// 这个玩法是“把建筑卡放上格子 → 结算计分”，没有扑克式出牌，所以 Playing 阶段只做放卡或结算。
 inline Decision Decide(const Observation& value) {
     if (value.pendingPack && value.pickCount > 0) return {Action::ConfirmPack, "status.pack", "Confirming the card pack choice."};
     switch (value.phase) {
@@ -41,8 +42,8 @@ inline Decision Decide(const Observation& value) {
                              : Decision{Action::StartBlind, "status.start_blind", "Starting the current blind."};
     case Phase::Playing:
         if (value.canFinish) return {Action::FinishBlind, "status.finish_blind", "Ending the current blind."};
-        if (value.playsLeft > 0) return {Action::PlayAll, "status.play_all", "Playing every card in hand."};
-        return {Action::Settle, "status.settle", "Requesting settlement."};
+        if (value.handCount > 0 && value.cellCount > 0) return {Action::PlaceBuilding, "status.place_building", "Placing a building card."};
+        return {Action::Settle, "status.settle", "Settling the current board."};
     case Phase::BlindCleared: return {Action::FinishBlind, "status.finish_blind", "Ending the current blind."};
     case Phase::Shop:
     case Phase::ShopCleared: return {Action::SkipShop, "status.skip_shop", "Skipping the shop."};

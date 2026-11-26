@@ -44,6 +44,9 @@ std::atomic_uint64_t intent{};
 uint64_t applied_intent{};
 Clock::time_point next_poll{};
 Clock::time_point next_bootstrap{};
+int32_t last_action{-1};
+uint64_t last_signature{};
+int stall_rounds{};
 struct View {
     std::string status;
     std::string detail;
@@ -60,6 +63,7 @@ struct State {
     tycoon::Phase phase{};
     bool canFinish{}, canSkip{}, pendingPack{};
     int32_t pickCount{}, playsLeft{}, score{}, target{}, money{}, act{}, floor{};
+    int32_t handCount{}, cellCount{}, cellX{}, cellY{};
 };
 struct Pending {
     tycoon::Action action{};
@@ -94,7 +98,25 @@ uintptr_t Checked(const Reader& r, const char* package, const char* owner, const
     const auto fn = Fn(r, package, owner, name, count, size);
     return ParametersMatch(r, fn, {parameters.begin(), parameters.size()}) ? fn : 0;
 }
-int ReadBool(const Reader& r, uintptr_t object, uintptr_t fn, bool& value) {
+// 数组只读头部计数（TArray = 数据指针 + Num + Max），不搬运元素，避免返回数组的生命周期问题。
+int ArrayCount(const Reader& r, uintptr_t object, const char* name) {
+    const auto offset = Field(r, object, name, 16, "ArrayProperty");
+    int32_t count{};
+    if (offset < 0 || !r.Read(object + offset + 8, count) || count < 0 || count > 4096) return -1;
+    return count;
+}
+int ReadCell(const Reader& r, uintptr_t object, int32_t& x, int32_t& y) {
+    const auto offset = Field(r, object, "SyncedAvailableGridCells", 16, "ArrayProperty");
+    uintptr_t data{};
+    int32_t count{};
+    if (offset < 0) return -1;
+    if (!r.Read(object + offset, data) || !r.Read(object + offset + 8, count) || !data || count <= 0) return 0;
+    int32_t cell[2]{};
+    if (!r.Read(data, cell)) return -1;
+    x = cell[0];
+    y = cell[1];
+    return count;
+}int ReadBool(const Reader& r, uintptr_t object, uintptr_t fn, bool& value) {
     uint8_t raw{};
     if (!fn || !Invoke(r, object, fn, &raw) || raw > 1) return 0;
     value = raw != 0;
@@ -145,6 +167,11 @@ bool ReadState(const Reader& r, State& value, Stage& stage) {
     static_cast<void>(ReadInt(r, value.component, money, value.money));
     static_cast<void>(ReadInt(r, value.component, act, value.act));
     static_cast<void>(ReadInt(r, value.component, floor, value.floor));
+    const auto hand = ArrayCount(r, value.component, "HandCards");
+    const auto cells = ReadCell(r, value.component, value.cellX, value.cellY);
+    if (hand < 0 || cells < 0) return false;
+    value.handCount = hand;
+    value.cellCount = cells;
     stage = Stage::Ok;
     return true;
 }
@@ -164,7 +191,10 @@ Dispatch Submit(const Reader& r, const State& value, tycoon::Action action) {
     case tycoon::Action::StartBlind: fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestStartCurrentBlind", 0, 0, {}); break;
     case tycoon::Action::SkipBlind: fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestSkipCurrentBlind", 0, 0, {}); break;
     case tycoon::Action::FinishBlind: fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestFinishCurrentBlind", 0, 0, {}); break;
-    case tycoon::Action::PlayAll: fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestPlayAllHandCards", 0, 0, {}); break;
+    case tycoon::Action::PlaceBuilding:
+        fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestPlaceBuilding", 3, 12,
+            {{"InHandIndex", 0, 4, "IntProperty"}, {"InGridX", 4, 4, "IntProperty"}, {"InGridY", 8, 4, "IntProperty"}});
+        break;
     case tycoon::Action::SkipShop: fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestSkipShop", 0, 0, {}); break;
     case tycoon::Action::Settle: fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestManualSettlement", 0, 0, {}); break;
     case tycoon::Action::ConfirmPack: {
@@ -183,10 +213,19 @@ Dispatch Submit(const Reader& r, const State& value, tycoon::Action action) {
     Stage current_stage{};
     if (!ReadState(r, current, current_stage) || current.component != value.component || current.phase != value.phase ||
         current.score != value.score) return Dispatch::Waiting;
-    const auto parameters = action == tycoon::Action::ConfirmPack ? static_cast<void*>(&picks) : nullptr;
+    std::array<int32_t, 3> place{0, value.cellX, value.cellY};
+    const auto parameters = action == tycoon::Action::ConfirmPack ? static_cast<void*>(&picks)
+        : action == tycoon::Action::PlaceBuilding ? static_cast<void*>(place.data()) : nullptr;
     return Invoke(r, value.component, fn, parameters) ? Dispatch::Sent : Dispatch::Failed;
 }
 
+uint64_t Signature(const State& value) {
+    uint64_t h = 1469598103934665603ull;
+    const uint32_t parts[6] = {static_cast<uint32_t>(value.phase), static_cast<uint32_t>(value.score), static_cast<uint32_t>(value.playsLeft),
+        static_cast<uint32_t>(value.handCount), static_cast<uint32_t>(value.cellCount), static_cast<uint32_t>(value.money)};
+    for (const auto part : parts) { h ^= part; h *= 1099511628211ull; }
+    return h;
+}
 bool EnsureWindow() noexcept {
     if (window_handle.id) return true;
     if (!window_service || window_service->struct_size < offsetof(AnomalyWindowServiceV1, end) + sizeof(window_service->end) ||
@@ -369,12 +408,21 @@ void ANOMALY_CALL Update(void*, double) noexcept {
             std::array<std::string_view, 4>{std::to_string(value.score), std::to_string(value.target),
                 std::to_string(value.money), std::to_string(value.playsLeft)});
         auto decision = tycoon::Decide({value.phase, value.canFinish, value.canSkip, value.pendingPack,
-            value.pickCount, value.playsLeft});
+            value.pickCount, value.handCount, value.cellCount});
         if (!fast_finish.load() && decision.action == tycoon::Action::FinishBlind &&
-            value.phase == tycoon::Phase::Playing && value.playsLeft > 0)
-            decision = {tycoon::Action::PlayAll, "status.play_all", "Playing every card in hand."};
+            value.phase == tycoon::Phase::Playing && value.handCount > 0 && value.cellCount > 0)
+            decision = {tycoon::Action::PlaceBuilding, "status.place_building", "Placing a building card."};
         if (decision.action == tycoon::Action::None) {
             Publish(localizer.Text("status.settled", "This run has ended."), state_text);
+            return;
+        }
+        const auto signature = Signature(value);
+        if (last_action == static_cast<int32_t>(decision.action) && signature == last_signature) ++stall_rounds;
+        else { stall_rounds = 0; last_signature = signature; last_action = static_cast<int32_t>(decision.action); }
+        if (stall_rounds >= 4) {
+            Publish(localizer.Text("status.stalled", "The game stopped accepting the action; automation stopped."), state_text);
+            enabled.store(false);
+            MarkDirty();
             return;
         }
         const auto outcome = Submit(r, value, decision.action);

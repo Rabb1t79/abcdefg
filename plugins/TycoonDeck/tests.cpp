@@ -13,8 +13,8 @@ void Check(bool condition, const char* what) {
 using tycoon::Action;
 using tycoon::Phase;
 Action Next(Phase phase, bool canFinish = false, bool canSkip = false, bool pack = false,
-    std::int32_t picks = 0, std::int32_t plays = 0) {
-    return tycoon::Decide({phase, canFinish, canSkip, pack, picks, plays}).action;
+    std::int32_t picks = 0, std::int32_t hand = 0, std::int32_t cells = 0) {
+    return tycoon::Decide({phase, canFinish, canSkip, pack, picks, hand, cells}).action;
 }
 }
 
@@ -23,12 +23,13 @@ int main() {
     Check(Next(Phase::BlindSelection, false, true) == Action::SkipBlind, "skippable blind is skipped");
     Check(Next(Phase::BlindSelection) == Action::StartBlind, "locked blind is started");
     Check(Next(Phase::Playing, true) == Action::FinishBlind, "finishable blind ends directly");
-    Check(Next(Phase::Playing, false, false, false, 0, 3) == Action::PlayAll, "no direct finish falls back to playing");
-    Check(Next(Phase::Playing, false, false, false, 0, 0) == Action::Settle, "no plays left settles");
+    Check(Next(Phase::Playing, false, false, false, 0, 3, 25) == Action::PlaceBuilding, "hand and cells place a building");
+    Check(Next(Phase::Playing, false, false, false, 0, 0, 25) == Action::Settle, "empty hand settles the board");
+    Check(Next(Phase::Playing, false, false, false, 0, 3, 0) == Action::Settle, "full board settles the board");
     Check(Next(Phase::BlindCleared) == Action::FinishBlind, "cleared blind is finalized");
     Check(Next(Phase::Shop) == Action::SkipShop, "shop is skipped");
     Check(Next(Phase::ShopCleared) == Action::SkipShop, "cleared shop is skipped");
-    Check(Next(Phase::Playing, true, false, true, 2) == Action::ConfirmPack, "pending pack is confirmed first");
+    Check(Next(Phase::Playing, true, false, true, 2, 3, 25) == Action::ConfirmPack, "pending pack is confirmed first");
     Check(Next(Phase::GameOver) == Action::None, "game over is terminal");
     Check(Next(Phase::GameOverFailed) == Action::None, "failed run is terminal");
     Check(Next(Phase::SettlementAnimating) == Action::None, "settlement animation is terminal");
