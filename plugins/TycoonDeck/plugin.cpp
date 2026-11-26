@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -134,7 +135,10 @@ public:
     [[nodiscard]] bool Enabled() const noexcept { return enabled_.load(); }
     void SetEnabled(const bool value) noexcept {
         enabled_.store(value);
-        if (!value) bridge_.reset();
+        if (!value) {
+            reporting_.store(false);
+            bridge_.reset();
+        }
         if (value && reader_) bridge_ = std::make_unique<DeckBridge>(*reader_, objects_, players_, events_, domain_);
         start_sent_ = 0;
         stall_count_ = 0;
@@ -143,8 +147,24 @@ public:
         next_tick_ = {};
     }
 
-    [[nodiscard]] Rules CurrentRules() const noexcept {
-        Rules rules;
+    [[nodiscard]] bool Reporting() const noexcept { return reporting_.load(); }
+
+    // Primary path: report the run's completion through the player state's own submit RPC.
+    void StartReport() noexcept {
+        reporting_.store(true);
+        report_index_ = 0;
+        report_sent_ = 0;
+        report_failures_ = 0;
+        SetEnabled(true);
+    }
+
+    // Fallback path: play the run out through the component's requests.
+    void StartAutoplay() noexcept {
+        reporting_.store(false);
+        SetEnabled(true);
+    }
+
+    [[nodiscard]] Rules CurrentRules() const noexcept {        Rules rules;
         rules.skip_blinds = skip_blinds_.load();
         rules.skip_shop = skip_shop_.load();
         rules.confirm_packs = confirm_packs_.load();
@@ -247,6 +267,10 @@ public:
                 Publish(localizer_.Text("status.waiting_component", "Waiting for the Tycoon's Deck session."));
                 return;
             }
+            if (reporting_.load()) {
+                Report();
+                return;
+            }
             DeckState state;
             if (!bridge_->Read(state)) {
                 Publish(localizer_.Text("status.waiting_state", "The session state is unavailable right now."));
@@ -300,6 +324,38 @@ public:
     }
 
 private:
+    // Submits one report id per control step so the server sees the same cadence the
+    // minigame itself uses, then stops as soon as the list is exhausted.
+    void Report() noexcept {
+        try {
+            std::vector<tycoon::FName> ids;
+            if (!bridge_->ReadQuestIds(ids)) {
+                Publish(localizer_.Text("status.report_waiting_ids", "Waiting for this run's report ids."));
+                return;
+            }
+            if (report_index_ >= static_cast<int>(ids.size())) {
+                const std::string count = std::to_string(report_sent_);
+                const std::array arguments{std::string_view(count)};
+                Finish(localizer_.Format("status.report_done", "Reported {0} objectives.", arguments));
+                return;
+            }
+            const auto quest = ids[static_cast<std::size_t>(report_index_)];
+            if (bridge_->SubmitQuest(quest)) {
+                ++report_sent_;
+                ++report_index_;
+                report_failures_ = 0;
+                const std::string name = bridge_->QuestName(quest);
+                const std::array arguments{std::string_view(name)};
+                Publish(localizer_.Format("status.report_sent", "Reported {0}.", arguments));
+            } else if (++report_failures_ >= 8) {
+                const std::string name = bridge_->QuestName(quest);
+                const std::array arguments{std::string_view(name)};
+                Finish(localizer_.Format("status.report_failed", "The server rejected {0}.", arguments));
+            }
+        } catch (...) {
+        }
+    }
+
     static void ANOMALY_CALL SaveTask(void* user, AnomalyGenerationHandleV1) noexcept {
         static_cast<Context*>(user)->SaveSettings();
     }
@@ -317,6 +373,7 @@ private:
     void Finish(const std::string& message) noexcept {
         Publish(message);
         enabled_.store(false);
+        reporting_.store(false);
         pending_save_.store(true);
         RequestSave();
         bridge_.reset();
@@ -394,6 +451,10 @@ private:
     std::atomic<int> interval_ms_{kDefaultIntervalMs};
     std::atomic<bool> pending_save_{};
     std::atomic<bool> shown_{};
+    std::atomic<bool> reporting_{};
+    int report_index_{};
+    int report_sent_{};
+    int report_failures_{};
     std::atomic<int> sent_{};
     std::atomic<std::int32_t> state_score_{};
     std::atomic<std::int32_t> state_target_{};
@@ -412,16 +473,21 @@ private:
 
 void Content(Context& context, const AnomalyUiServiceV1* ui) {
     const auto& text = context.Text();
-    // One press starts the whole run: the plugin then plays every blind through the
-    // component's own requests until the run is won or lost.
+    // The primary action is the win report: it submits the run's own quest ids through
+    // AHTPlayerState::ServerSubmitQuest instead of playing the hand out.
     if (context.Enabled()) {
         if (ui->button(ui->user, StringView(text.Text("action.stop", "Stop")), 0.0F, 0.0F) != 0) {
             context.SetEnabled(false);
             context.RequestSave();
         }
     } else if (ui->button(ui->user,
-                   StringView(text.Text("action.finish_run", "Finish and win the run now")), 0.0F, 0.0F) != 0) {
-        context.SetEnabled(true);
+                   StringView(text.Text("action.report_win", "Submit the win report")), 0.0F, 0.0F) != 0) {
+        context.StartReport();
+        context.RequestSave();
+    }
+    if (!context.Enabled() && ui->button(ui->user,
+            StringView(text.Text("action.autoplay", "Play the run through instead")), 0.0F, 0.0F) != 0) {
+        context.StartAutoplay();
         context.RequestSave();
     }
     int score_assist = context.ScoreAssist() ? 1 : 0;

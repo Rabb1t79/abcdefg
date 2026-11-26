@@ -15,6 +15,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace tycoon {
 
@@ -83,6 +84,13 @@ inline constexpr std::string_view kPlayerStateClass = "HTPlayerState";
 inline constexpr std::string_view kComponentField = "BalatroLikeComponentPtr";
 inline constexpr std::string_view kPlayerStateField = "PlayerState";
 inline constexpr std::string_view kBlindScoreField = "CurrentBlindScore";
+// The ids this run reports on completion. UHTBalatroLikeComponent fills them from the
+// active OpActivity_BalatroLike configuration.
+inline constexpr std::string_view kQuestIdField = "BalatroQuestIDs";
+inline constexpr std::size_t kMaximumReportQuests = 16;
+// AHTPlayerState::ServerSubmitQuest —— the server RPC the minigame itself calls when a
+// run is won, so submitting it is the report path rather than a simulation of play.
+inline constexpr FunctionSpec kSubmitQuestFunction{"ServerSubmitQuest", 3, 20};
 // UHTPlayerState::RequestBalatroLikeComponent 鈥斺€?the player state replicates the component
 // on demand, so this is the native way to obtain it when it is not replicated yet.
 inline constexpr FunctionSpec kRequestComponentFunction{"RequestBalatroLikeComponent", 0, 0};
@@ -94,6 +102,22 @@ struct TArrayInt32 final {
 };
 static_assert(sizeof(TArrayInt32) == 16);
 
+// TArray<FName> as the component stores its reportable quest ids.
+struct QuestIdArray final {
+    const FName* data{};
+    std::int32_t count{};
+    std::int32_t capacity{};
+};
+static_assert(sizeof(QuestIdArray) == 16);
+
+// UHTPlayerState::ServerSubmitQuest(const FName&, const FName&, int32)
+struct SubmitQuestFrame final {
+    FName quest{};
+    FName group{};
+    std::int32_t quality{};
+};
+static_assert(sizeof(SubmitQuestFrame) == 20);
+
 class DeckBridge final {
 public:
     DeckBridge(const Reader& reader, const AnomalyUe5ObjectsServiceV1* objects,
@@ -103,6 +127,10 @@ public:
 
     void Reset() noexcept {
         component_ = {};
+        player_state_ = {};
+        submit_quest_ = {};
+        submit_quest_retry_ = {};
+        quest_id_offset_ = -1;
         functions_ready_ = false;
         request_component_function_ = {};
         for (auto& handle : requests_) handle = {};
@@ -183,14 +211,71 @@ public:
         return reader_.Write(component + static_cast<std::uintptr_t>(blind_score_offset_), &value, sizeof(value));
     }
 
+    // Reads the report ids the minigame keeps for this run: the same ids the component
+    // submits when the run is won.
+    [[nodiscard]] bool ReadQuestIds(std::vector<FName>& out) {
+        out.clear();
+        if (component_.id == 0) return false;
+        const auto component = domain_.Pointer(reader_, component_);
+        if (component == 0) return false;
+        if (quest_id_offset_ < 0) {
+            quest_id_offset_ = reader_.PropertyOffset(component, kQuestIdField,
+                static_cast<std::int32_t>(sizeof(QuestIdArray)));
+        }
+        if (quest_id_offset_ < 0) return false;
+        QuestIdArray ids{};
+        if (!reader_.Read(component + static_cast<std::uintptr_t>(quest_id_offset_), ids)) return false;
+        if (ids.count <= 0 || ids.data == nullptr ||
+            ids.count > static_cast<std::int32_t>(kMaximumReportQuests)) {
+            return false;
+        }
+        for (std::int32_t index = 0; index < ids.count; ++index) {
+            FName id{};
+            if (!reader_.Read(reinterpret_cast<std::uintptr_t>(ids.data) +
+                    sizeof(FName) * static_cast<std::uintptr_t>(index), id)) {
+                return false;
+            }
+            if (id.id != 0) out.push_back(id);
+        }
+        return !out.empty();
+    }
+
+    // The win report itself: AHTPlayerState::ServerSubmitQuest for one report id.
+    [[nodiscard]] bool SubmitQuest(const FName quest) {
+        if (player_state_.id == 0 || quest.id == 0) return false;
+        if (submit_quest_.id == 0) {
+            const auto now = Clock::now();
+            if (now < submit_quest_retry_) return false;
+            submit_quest_retry_ = now + std::chrono::seconds(5);
+            std::string path{"/Script/HTGame."};
+            path.append(kPlayerStateClass);
+            path.push_back('.');
+            path.append(kSubmitQuestFunction.name);
+            Clock::time_point deadline{};
+            const auto handle = Find(path, deadline);
+            if (handle.id == 0 || !Validate(handle, kSubmitQuestFunction)) return false;
+            submit_quest_ = handle;
+        }
+        SubmitQuestFrame frame{};
+        frame.quest = quest;
+        return InvokeOn(player_state_, submit_quest_, &frame, sizeof(frame));
+    }
+
+    [[nodiscard]] std::string QuestName(const FName quest) const { return reader_.Name(quest); }
+
 private:
     static constexpr std::size_t Index(const Request value) noexcept { return static_cast<std::size_t>(value); }
     static constexpr std::size_t Index(const Query value) noexcept { return static_cast<std::size_t>(value); }
 
+    [[nodiscard]] bool InvokeOn(const AnomalyGenerationHandleV1 receiver, const AnomalyGenerationHandleV1 function,
+        void* const frame, const std::size_t size) const {
+        if (receiver.id == 0 || function.id == 0 || events_ == nullptr || events_->invoke == nullptr) return false;
+        return events_->invoke(events_->user, receiver, function, frame, size).code == ANOMALY_STATUS_V1_OK;
+    }
+
     [[nodiscard]] bool Invoke(const AnomalyGenerationHandleV1 function, void* const frame,
         const std::size_t size) const {
-        if (component_.id == 0 || function.id == 0 || events_ == nullptr || events_->invoke == nullptr) return false;
-        return events_->invoke(events_->user, component_, function, frame, size).code == ANOMALY_STATUS_V1_OK;
+        return InvokeOn(component_, function, frame, size);
     }
 
     template <class Value>
@@ -290,6 +375,7 @@ private:
             return false;
         }
         component_ = domain_.Handle(reader_, objects_, component);
+        player_state_ = domain_.Handle(reader_, objects_, player_state);
         return component_.id != 0;
     }
 
@@ -318,6 +404,9 @@ private:
     const AnomalyUe5ProcessEventServiceV1* events_;
     ObjectDomain& domain_;
     AnomalyGenerationHandleV1 component_{};
+    AnomalyGenerationHandleV1 player_state_{};
+    AnomalyGenerationHandleV1 submit_quest_{};
+    Clock::time_point submit_quest_retry_{};
     AnomalyGenerationHandleV1 request_component_function_{};
     std::array<AnomalyGenerationHandleV1, static_cast<std::size_t>(Request::count)> requests_{};
     std::array<AnomalyGenerationHandleV1, static_cast<std::size_t>(Query::count)> queries_{};
@@ -326,6 +415,7 @@ private:
     int player_state_offset_{-1};
     int component_offset_{-1};
     int blind_score_offset_{-1};
+    int quest_id_offset_{-1};
     Clock::time_point component_requested_at_{};
     bool functions_ready_{};
 };
