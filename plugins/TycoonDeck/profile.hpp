@@ -11,6 +11,7 @@ struct Layout {
     std::uint32_t RegistryCount{}, RegistryItems{}, ItemStride{}, Serial{}, ChunkSize{};
     std::uint32_t ProcessEventSlot{}, RegistryLoad{}, RegistrySubtract{};
     std::uint32_t FieldClass{}, FieldClassName{};
+    std::uint32_t MapEntryStride{}, MapValue{}, MapInlineBits{}, MapBitsData{}, MapBitCount{}, MapBitCapacity{};
 };
 
 struct Snapshot {
@@ -69,6 +70,12 @@ inline bool Load(const AnomalyHostApiV1* api) noexcept {
         parsed.layout.RegistrySubtract = value("RegistrySubtract");
         parsed.layout.FieldClass = value("FieldClass");
         parsed.layout.FieldClassName = value("FieldClassName");
+        parsed.layout.MapEntryStride = value("MapEntryStride");
+        parsed.layout.MapValue = value("MapValue");
+        parsed.layout.MapInlineBits = value("MapInlineBits");
+        parsed.layout.MapBitsData = value("MapBitsData");
+        parsed.layout.MapBitCount = value("MapBitCount");
+        parsed.layout.MapBitCapacity = value("MapBitCapacity");
         const auto& v = parsed.layout;
         if (!v.ChunkSize || v.ItemStride < sizeof(std::uintptr_t) ||
             v.Serial + sizeof(std::uint32_t) > v.ItemStride ||
