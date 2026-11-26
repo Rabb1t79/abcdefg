@@ -50,6 +50,7 @@ Clock::time_point next_bootstrap{};
 int32_t last_action{-1};
 uint64_t last_signature{};
 int stall_rounds{};
+std::atomic_int pending_submit{-1};
 struct View {
     std::string status;
     std::string detail;
@@ -225,7 +226,7 @@ Dispatch Submit(const Reader& r, const State& value, tycoon::Action action) {
 
 // 调试日志：只在插件 state 目录追加小行，便于在没有控制台时定位请求被拒的原因。
 // ---- 入口扫描：DT_NPCChallenges 的 RowMap（TMap<FName, row*>） ----
-struct RowEntry { std::string flow; std::string npc; int32_t open_day{}; };
+struct RowEntry { std::string flow; std::string npc; std::string quest; int32_t open_day{}; };
 struct RowArrayHdr { uintptr_t data{}; int32_t count{}, capacity{}; };
 static_assert(sizeof(RowArrayHdr) == 16);
 
@@ -257,7 +258,7 @@ std::vector<RowEntry> ScanChallenges(const Reader& r) {
         if (!MapEntryKey(r, data, i, key)) continue;
         const auto flow = r.Name(key);
         if (flow.empty() || flow.size() > 120) continue;
-        RowEntry row{flow, {}, 0};
+        RowEntry row{flow, {}, {}, 0};
         uintptr_t record{};
         if (r.Read(data + 24u * static_cast<uintptr_t>(i) + 16, record) && record) {
             char text[256]{};
@@ -265,11 +266,15 @@ std::vector<RowEntry> ScanChallenges(const Reader& r) {
             if (names && names->resolve_ftext_utf8 && names->resolve_ftext_utf8(names->user, record + 0x08, text, &size).code == ANOMALY_STATUS_V1_OK && size > 0)
                 row.npc.assign(text, size);
             static_cast<void>(r.Read(record + 0x50, row.open_day));
+            FName quest{};
+            if (r.Read(record + 0x78, quest)) row.quest = r.Name(quest);
         }
         out.push_back(std::move(row));
     }
     return out;
 }
+std::vector<RowEntry> entries;
+Clock::time_point next_scan{};
 void DebugLog(const std::string& line) {
     if (state_directory.empty()) return;
     const auto path = state_directory + "\\tycoondeck-debug.log";
@@ -286,6 +291,20 @@ uint64_t Signature(const State& value) {
         static_cast<uint32_t>(value.handCount), static_cast<uint32_t>(value.cellCount), static_cast<uint32_t>(value.money)};
     for (const auto part : parts) { h ^= part; h *= 1099511628211ull; }
     return h;
+}
+// 事件流上报：直接调用 PlayerState 的原生提交 RPC，让游戏自己做校验与结算。
+bool SubmitQuest(const Reader& r, uintptr_t player, const std::string& quest) {
+    uint32_t id{};
+    if (!names || !names->find_utf8 || quest.empty()) return false;
+    AnomalyStringViewV1 view{quest.data(), quest.size()};
+    if (names->find_utf8(names->user, view, &id).code != ANOMALY_STATUS_V1_OK || !id) return false;
+    const auto fn = Checked(r, "HTGame", "HTPlayerState", "ServerSubmitQuest", 3, 20,
+        {{"QuestId", 0, 8, "NameProperty"}, {"InGroupId", 8, 8, "NameProperty"}, {"Quality", 16, 4, "IntProperty"}});
+    if (!fn) { DebugLog("ServerSubmitQuest missing"); return false; }
+    struct { FName quest; FName group; int32_t quality; } params{};
+    params.quest = {id, 0};
+    DebugLog("submit quest=" + quest + " id=" + std::to_string(id));
+    return Invoke(r, player, fn, &params);
 }
 bool EnsureWindow() noexcept {
     if (window_handle.id) return true;
@@ -470,6 +489,14 @@ void ANOMALY_CALL Update(void*, double) noexcept {
             next_poll = now + std::chrono::seconds(2);
             return;
         }
+        if (entries.empty() && now >= next_scan) { next_scan = now + std::chrono::seconds(10); entries = ScanChallenges(r); }
+        if (const auto index = pending_submit.exchange(-1); index >= 0) {
+            if (static_cast<size_t>(index) < entries.size() && !entries[static_cast<size_t>(index)].quest.empty()) {
+                Publish(localizer.Text("status.submitting", "Reporting the challenge completion."), entries[static_cast<size_t>(index)].quest);
+                if (!SubmitQuest(r, value.player, entries[static_cast<size_t>(index)].quest))
+                    Publish(localizer.Text("status.submit_failed", "The completion report was rejected."), entries[static_cast<size_t>(index)].quest);
+            }
+        }
         const auto key = PhaseKey(value.phase);
         const auto state_text = localizer.Format("label.state", "Phase {0} act {1} floor {2}",
             std::array<std::string_view, 3>{localizer.Text(key, PhaseFallback(value.phase)),
@@ -536,6 +563,18 @@ void DrawControls(const AnomalyUiServiceV1* ui) noexcept {
                 StringView(localizer.Label("option.fast", "End blinds directly when allowed", "tycoondeck-fast")), &fast)) {
             fast_finish.store(fast != 0);
             MarkDirty();
+        }
+        if (!entries.empty() && ui->button && ui->same_line) {
+            ui->text(ui->user, StringView(localizer.Format("label.entries", "Challenge entries: {0}",
+                std::array<std::string_view, 1>{std::to_string(entries.size())})));
+            for (size_t i = 0; i < entries.size() && i < 12; ++i) {
+                const auto label = entries[i].npc.empty() ? entries[i].flow : entries[i].npc + "  " + entries[i].flow;
+                ui->text(ui->user, StringView(label));
+                ui->same_line(ui->user);
+                if (ui->button(ui->user, StringView(localizer.Label("button.submit", "Report", "tycoondeck-submit"))))
+                    pending_submit.store(static_cast<int>(i));
+            }
+            ui->separator(ui->user);
         }
         ui->text(ui->user, StringView(localizer.Text("instructions.start",
             "Open the activity page, press play, then enable automatic completion.")));
