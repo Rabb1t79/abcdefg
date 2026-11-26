@@ -43,6 +43,7 @@ std::atomic_bool settings_dirty{};
 std::atomic_uint64_t intent{};
 uint64_t applied_intent{};
 Clock::time_point next_poll{};
+Clock::time_point next_bootstrap{};
 struct View {
     std::string status;
     std::string detail;
@@ -109,8 +110,10 @@ int ReadPhase(const Reader& r, uintptr_t object, uintptr_t fn, tycoon::Phase& va
     return 1;
 }
 
-bool ReadState(const Reader& r, State& value) {
+enum class Stage { Ok, NoWorld, NoPlayer, NoComponent, NoInterface };
+bool ReadState(const Reader& r, State& value, Stage& stage) {
     value = {};
+    stage = Stage::NoWorld;
     const auto world = World(r);
     const auto util = Find(r, "/Script/HTGame.Default__HTUtil");
     const auto player = Checked(r, "HTGame", "HTUtil", "GetMainPlayerState", 2, 16,
@@ -118,9 +121,11 @@ bool ReadState(const Reader& r, State& value) {
     ObjectQuery query{world};
     if (!world || !util || !player || !Invoke(r, util, player, &query)) return false;
     value.player = query.result;
-    if (!r.IsA(value.player, "HTPlayerState")) return false;
+    if (!value.player || !r.IsA(value.player, "HTPlayerState")) return false;
+    stage = Stage::NoComponent;
     value.component = Child(r, value.player, "BalatroLikeComponentPtr");
     if (!value.component || !r.IsA(value.component, "HTBalatroLikeComponent")) return false;
+    stage = Stage::NoInterface;
     const auto phase = Checked(r, "HTGame", "HTBalatroLikeComponent", "GetCurrentPhase", 0, 1, {{"ReturnValue", 0, 1, "EnumProperty"}});
     const auto finish = Checked(r, "HTGame", "HTBalatroLikeComponent", "CanFinishCurrentBlind", 0, 1, {{"ReturnValue", 0, 1, "BoolProperty"}});
     const auto skip = Checked(r, "HTGame", "HTBalatroLikeComponent", "CanSkipCurrentBlind", 0, 1, {{"ReturnValue", 0, 1, "BoolProperty"}});
@@ -140,7 +145,13 @@ bool ReadState(const Reader& r, State& value) {
     static_cast<void>(ReadInt(r, value.component, money, value.money));
     static_cast<void>(ReadInt(r, value.component, act, value.act));
     static_cast<void>(ReadInt(r, value.component, floor, value.floor));
+    stage = Stage::Ok;
     return true;
+}
+// 组件由服务端按请求复制到 PlayerState 上；没有它时先申请，等下一轮再读。
+bool RequestComponent(const Reader& r, uintptr_t player) {
+    const auto fn = Checked(r, "HTGame", "HTPlayerState", "RequestBalatroLikeComponent", 0, 0, {});
+    return fn && player && Invoke(r, player, fn, nullptr);
 }
 
 enum class Dispatch { Sent, Waiting, Failed };
@@ -169,7 +180,8 @@ Dispatch Submit(const Reader& r, const State& value, tycoon::Action action) {
     if (!fn) return Dispatch::Failed;
     // 防止在请求已被接受、状态尚未刷新时重复下发。
     State current;
-    if (!ReadState(r, current) || current.component != value.component || current.phase != value.phase ||
+    Stage current_stage{};
+    if (!ReadState(r, current, current_stage) || current.component != value.component || current.phase != value.phase ||
         current.score != value.score) return Dispatch::Waiting;
     const auto parameters = action == tycoon::Action::ConfirmPack ? static_cast<void*>(&picks) : nullptr;
     return Invoke(r, value.component, fn, parameters) ? Dispatch::Sent : Dispatch::Failed;
@@ -262,6 +274,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) noexcept {
         applied_intent = ++intent;
         registry = world_slot = 0;
         next_poll = {};
+        next_bootstrap = {};
         next_services = {};
         ResetBindings();
         published.store({});
@@ -325,8 +338,27 @@ void ANOMALY_CALL Update(void*, double) noexcept {
         }
         const Reader r{names};
         State value;
-        if (!ReadState(r, value)) {
-            Publish(localizer.Text("status.no_component", "Open the activity page and press play to start a run."));
+        Stage stage{};
+        const auto read = ReadState(r, value, stage);
+        if (!read) {
+            if (stage == Stage::NoComponent && now >= next_bootstrap) {
+                next_bootstrap = now + std::chrono::seconds(3);
+                // 组件是服务端请求后才复制到 PlayerState 上的；先申请，下一轮再读。
+                if (RequestComponent(r, value.player)) {
+                    Publish(localizer.Text("status.bootstrap", "Requesting the activity from the server."));
+                    return;
+                }
+            }
+            const auto message = stage == Stage::NoWorld ? "status.no_world"
+                : stage == Stage::NoPlayer ? "status.no_player"
+                : stage == Stage::NoInterface ? "status.interface_missing_activity"
+                : "status.no_component";
+            const auto fallback = stage == Stage::NoWorld ? "Waiting for the game world."
+                : stage == Stage::NoPlayer ? "Waiting for the player state."
+                : stage == Stage::NoInterface ? "The activity component does not expose the expected functions."
+                : "Press play on the activity page, or enable the plugin again.";
+            Publish(localizer.Text(message, fallback));
+            next_poll = now + std::chrono::seconds(2);
             return;
         }
         const auto key = PhaseKey(value.phase);
