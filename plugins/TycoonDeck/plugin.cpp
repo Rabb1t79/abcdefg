@@ -274,8 +274,8 @@ bool MapEntryKey(const Reader& r, uintptr_t data, int32_t index, FName& key) {
 }
 std::vector<RowEntry> ScanChallenges(const Reader& r) {
     std::vector<RowEntry> out;
-    uintptr_t asset = Find(r, "/Script/HTGame.Default__HTBalatroLikeDataAsset");
-    if (!asset) asset = Find(r, "/Game/DataAssets/DataAssetSet/BalatroLike/DA_BalatroLike");
+    uintptr_t asset = Find(r, "/Game/DataAssets/DataAssetSet/BalatroLike/DA_BalatroLike");
+    if (!asset || (asset & 7)) asset = Find(r, "/Script/HTGame.Default__HTBalatroLikeDataAsset");
     if (!asset) return out;
     const auto table_offset = Field(r, asset, "DT_NPCChallenges", 8, "ObjectProperty");
     uintptr_t table{};
