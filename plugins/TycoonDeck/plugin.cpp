@@ -350,7 +350,7 @@ bool ClickActivityGo(const Reader& r, uintptr_t player) {
         struct { const wchar_t* data; int32_t count, capacity; uintptr_t result; } call{wide.c_str(),
             static_cast<int32_t>(wide.size() + 1), static_cast<int32_t>(wide.size() + 1), 0};
         if (!Invoke(r, hud, getter, &call) || !call.result) continue;
-        const auto button = Child(r, call.result, "HTButton_Go");
+        auto button = Child(r, call.result, "HTButton_Go");
         if (!button) continue;
         DebugLog("click go widget=0x" + std::to_string(call.result) + " button=0x" + std::to_string(button));
         return Invoke(r, call.result, click, &button);
@@ -659,8 +659,8 @@ void DrawControls(const AnomalyUiServiceV1* ui) noexcept {
             for (size_t i = 0; i < entries.size() && i < 12; ++i) {
                 const auto label = entries[i].npc.empty() ? entries[i].flow : entries[i].npc + "  " + entries[i].flow;
                 ui->text(ui->user, StringView(label));
-                ui->same_line(ui->user);
-                if (ui->button(ui->user, StringView(localizer.Label("button.submit", "Report", "tycoondeck-submit"))))
+                ui->same_line(ui->user, 0.0f, 8.0f);
+                if (ui->button(ui->user, StringView(localizer.Label("button.submit", "Report", "tycoondeck-submit")), 64.0f, 0.0f))
                     pending_submit.store(static_cast<int>(i));
             }
             ui->separator(ui->user);
