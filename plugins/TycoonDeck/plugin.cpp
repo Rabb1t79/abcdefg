@@ -137,6 +137,16 @@ int ReadPhase(const Reader& r, uintptr_t object, uintptr_t fn, tycoon::Phase& va
 }
 
 enum class Stage { Ok, NoWorld, NoPlayer, NoComponent, NoInterface };
+bool ReadPlayer(const Reader& r, uintptr_t& player) {
+    const auto util = Find(r, "/Script/HTGame.Default__HTUtil");
+    const auto fn = Checked(r, "HTGame", "HTUtil", "GetMainPlayerState", 2, 16,
+        {{"WorldContextObject", 0, 8, "ObjectProperty"}, {"ReturnValue", 8, 8, "ObjectProperty"}});
+    ObjectQuery query{World(r)};
+    player = 0;
+    if (!util || !fn || !Invoke(r, util, fn, &query) || !query.result) return false;
+    player = query.result;
+    return r.IsA(player, "HTPlayerState");
+}
 bool ReadState(const Reader& r, State& value, Stage& stage) {
     value = {};
     stage = Stage::NoWorld;
@@ -548,6 +558,29 @@ void ANOMALY_CALL Update(void*, double) noexcept {
             return;
         }
         const Reader r{names};
+        uintptr_t player{};
+        static_cast<void>(ReadPlayer(r, player));
+        if (entries.empty() && now >= next_scan) {
+            entries = ScanChallenges(r);
+            DebugLog("scan entries=" + std::to_string(entries.size()));
+            next_scan = now + std::chrono::seconds(10);
+        }
+        if (const auto index = pending_submit.exchange(-1); index >= 0 && static_cast<size_t>(index) < entries.size() && player) {
+            const auto& entry = entries[static_cast<size_t>(index)];
+            bool done = false;
+            if (!entry.quest.empty()) {
+                Publish(localizer.Text("status.submitting", "Reporting the challenge completion."), entry.quest);
+                done = SubmitQuest(r, player, entry.quest);
+            }
+            if (!done && !entry.flow.empty()) done = StartChallenge(r, player, entry.flow);
+            if (done) Publish(localizer.Text("status.submitted", "The completion was reported."), entry.flow);
+            else {
+                const auto opened = ClickActivityGo(r, player);
+                Publish(localizer.Text("status.opening", "Opening the activity scene."), entry.flow);
+                if (!opened) DebugLog("fallbacks exhausted for " + entry.flow);
+            }
+        }
+        if (!enabled.load()) return;
         State value;
         Stage stage{};
         const auto read = ReadState(r, value, stage);
@@ -572,24 +605,7 @@ void ANOMALY_CALL Update(void*, double) noexcept {
             next_poll = now + std::chrono::seconds(2);
             return;
         }
-        if (entries.empty() && now >= next_scan) { next_scan = now + std::chrono::seconds(10); entries = ScanChallenges(r); }
-        const auto auto_mode = enabled.load();
-        if (const auto index = pending_submit.exchange(-1); index >= 0 && static_cast<size_t>(index) < entries.size()) {
-            const auto& entry = entries[static_cast<size_t>(index)];
-            bool done = false;
-            if (!entry.quest.empty()) {
-                Publish(localizer.Text("status.submitting", "Reporting the challenge completion."), entry.quest);
-                done = SubmitQuest(r, value.player, entry.quest);
-            }
-            if (!done && !entry.flow.empty()) done = StartChallenge(r, value.player, entry.flow);
-            if (done) Publish(localizer.Text("status.submitted", "The completion was reported."), entry.flow);
-            else {
-                const auto opened = ClickActivityGo(r, value.player);
-                Publish(localizer.Text("status.opening", "Opening the activity scene."), entry.flow);
-                if (!opened) DebugLog("fallbacks exhausted for " + entry.flow);
-            }
-        }
-        if (!auto_mode) return;
+
         const auto key = PhaseKey(value.phase);
         const auto state_text = localizer.Format("label.state", "Phase {0} act {1} floor {2}",
             std::array<std::string_view, 3>{localizer.Text(key, PhaseFallback(value.phase)),
