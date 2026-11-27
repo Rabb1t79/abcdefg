@@ -278,17 +278,15 @@ bool MapEntryKey(const Reader& r, uintptr_t data, int32_t index, FName& key) {
 }
 std::vector<RowEntry> ScanChallenges(const Reader& r) {
     std::vector<RowEntry> out;
-    const auto util = Find(r, "/Script/HTGame.Default__HTUtil");
-    const auto get = Checked(r, "HTGame", "HTUtil", "GetBalatroLikeDataAsset", 1, 8, {{"ReturnValue", 0, 8, "ObjectProperty"}});
-    uintptr_t asset{};
-    if (!util || !get || !Invoke(r, util, get, &asset) || !asset) return out;
+    uintptr_t asset = Find(r, "/Script/HTGame.Default__HTBalatroLikeDataAsset");
+    if (!asset) asset = Find(r, "/Game/DataAssets/DataAssetSet/BalatroLike/DA_BalatroLike");
+    if (!asset) return out;
     const auto table_offset = Field(r, asset, "DT_NPCChallenges", 8, "ObjectProperty");
     uintptr_t table{};
-    if (table_offset < 0 || !r.Read(asset + table_offset, table)) return out;
+    if (table_offset < 0 || !r.Read(asset + table_offset, table) || !table) return out;
     auto map_offset = Field(r, table, "RowMap", 0x50, "MapProperty");
     if (map_offset < 0) map_offset = static_cast<int>(tycoon::profile::snapshot.layout.DataTableRowMap);
     uintptr_t data{};
-    if (map_offset < 0) return out;
     const auto count = MapCount(r, table + map_offset, data);
     if (count <= 0 || !data) return out;
     for (int32_t i = 0; i < count && out.size() < 64; ++i) {
