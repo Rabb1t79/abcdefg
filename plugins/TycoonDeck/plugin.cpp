@@ -311,11 +311,8 @@ Clock::time_point next_scan{};
 // 侦查扫描：把入口数据链与关键字段/函数逐项写进日志，任何一环断了都能从日志定位。
 void Diagnose(const Reader& r, uintptr_t player, uintptr_t component) noexcept {
     try {
-        const auto util = Find(r, "/Script/HTGame.Default__HTUtil");
-        const auto get = Checked(r, "HTGame", "HTUtil", "GetBalatroLikeDataAsset", 1, 8, {{"ReturnValue", 0, 8, "ObjectProperty"}});
-        uintptr_t asset{};
-        if (util && get) static_cast<void>(Invoke(r, util, get, &asset));
-        DebugLog("diag player=0x" + std::to_string(player) + " comp=0x" + std::to_string(component) + " asset=0x" + std::to_string(asset) + " getfn=" + std::to_string(get != 0));
+        uintptr_t asset = Find(r, "/Script/HTGame.Default__HTBalatroLikeDataAsset");
+        DebugLog("diag cdo=0x" + std::to_string(asset) + " aligned=" + std::to_string((asset & 7) == 0));
         if (asset) {
             const auto table_off = Field(r, asset, "DT_NPCChallenges", 8, "ObjectProperty");
             uintptr_t table{};
