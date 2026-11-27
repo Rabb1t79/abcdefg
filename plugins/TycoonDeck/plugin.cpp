@@ -280,7 +280,8 @@ std::vector<RowEntry> ScanChallenges(const Reader& r) {
     const auto table_offset = Field(r, asset, "DT_NPCChallenges", 8, "ObjectProperty");
     uintptr_t table{};
     if (table_offset < 0 || !r.Read(asset + table_offset, table)) return out;
-    const auto map_offset = Field(r, table, "RowMap", 0x50, "MapProperty");
+    auto map_offset = Field(r, table, "RowMap", 0x50, "MapProperty");
+    if (map_offset < 0) map_offset = static_cast<int>(tycoon::profile::snapshot.layout.DataTableRowMap);
     uintptr_t data{};
     if (map_offset < 0) return out;
     const auto count = MapCount(r, table + map_offset, data);

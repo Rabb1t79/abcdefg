@@ -29,6 +29,7 @@
     "RegistrySubtract": 16,
     "FieldClass": 8,
     "FieldClassName": 0,
+    "DataTableRowMap": 48,
     "MapEntryStride": 24,
     "MapValue": 8,
     "MapInlineBits": 16,
