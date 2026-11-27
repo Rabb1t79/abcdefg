@@ -201,7 +201,10 @@ Dispatch Submit(const Reader& r, const State& value, tycoon::Action action) {
             {{"InHandIndex", 0, 4, "IntProperty"}, {"InGridX", 4, 4, "IntProperty"}, {"InGridY", 8, 4, "IntProperty"}});
         break;
     case tycoon::Action::SkipShop: fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestSkipShop", 0, 0, {}); break;
-    case tycoon::Action::Settle: fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestManualSettlement", 0, 0, {}); break;
+    case tycoon::Action::Settle:
+        fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestManualSettlement", 0, 0, {});
+        if (!fn) fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestFinishCurrentBlind", 0, 0, {});
+        break;
     case tycoon::Action::ConfirmPack: {
         fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestConfirmPackSelection", 1, 16,
             {{"InSelectedIndices", 0, 16, "ArrayProperty"}});
@@ -529,7 +532,6 @@ void ANOMALY_CALL Update(void*, double) noexcept {
         if (!framework->is_game_thread || !framework->is_game_thread(framework->user)) return;
         const auto token = intent.load();
         if (applied_intent != token) { applied_intent = token; next_poll = {}; }
-        if (!enabled.load()) return;
         const auto now = Clock::now();
         if (now < next_poll) return;
         next_poll = now + std::chrono::milliseconds(400);
@@ -571,6 +573,7 @@ void ANOMALY_CALL Update(void*, double) noexcept {
             return;
         }
         if (entries.empty() && now >= next_scan) { next_scan = now + std::chrono::seconds(10); entries = ScanChallenges(r); }
+        const auto auto_mode = enabled.load();
         if (const auto index = pending_submit.exchange(-1); index >= 0 && static_cast<size_t>(index) < entries.size()) {
             const auto& entry = entries[static_cast<size_t>(index)];
             bool done = false;
@@ -586,6 +589,7 @@ void ANOMALY_CALL Update(void*, double) noexcept {
                 if (!opened) DebugLog("fallbacks exhausted for " + entry.flow);
             }
         }
+        if (!auto_mode) return;
         const auto key = PhaseKey(value.phase);
         const auto state_text = localizer.Format("label.state", "Phase {0} act {1} floor {2}",
             std::array<std::string_view, 3>{localizer.Text(key, PhaseFallback(value.phase)),
@@ -599,7 +603,9 @@ void ANOMALY_CALL Update(void*, double) noexcept {
             value.phase == tycoon::Phase::Playing && value.handCount > 0 && value.cellCount > 0)
             decision = {tycoon::Action::PlaceBuilding, "status.place_building", "Placing a building card."};
         if (decision.action == tycoon::Action::None) {
-            Publish(localizer.Text("status.settled", "This run has ended."), state_text);
+            if (value.phase == tycoon::Phase::Idle)
+                Publish(localizer.Text("status.waiting_play", "Press play in the game to start a run."), state_text);
+            else Publish(localizer.Text("status.settled", "This run has ended."), state_text);
             return;
         }
         const auto signature = Signature(value);

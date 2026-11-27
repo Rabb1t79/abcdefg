@@ -36,10 +36,8 @@ struct Settings {
 inline Decision Decide(const Observation& value) {
     if (value.pendingPack && value.pickCount > 0) return {Action::ConfirmPack, "status.pack", "Confirming the card pack choice."};
     switch (value.phase) {
-    case Phase::Idle: return {Action::StartGame, "status.starting", "Requesting a new run."};
-    case Phase::BlindSelection:
-        return value.canSkip ? Decision{Action::SkipBlind, "status.skip_blind", "Skipping the current blind."}
-                             : Decision{Action::StartBlind, "status.start_blind", "Starting the current blind."};
+    case Phase::Idle: return {};   // 不自动开局：必须由玩家在游戏里点“开始游玩”。
+    case Phase::BlindSelection: return {Action::StartBlind, "status.start_blind", "Starting the current blind."};   // 跳过不等于通过，绝不自动跳过。
     case Phase::Playing:
         if (value.canFinish) return {Action::FinishBlind, "status.finish_blind", "Ending the current blind."};
         if (value.handCount > 0 && value.cellCount > 0) return {Action::PlaceBuilding, "status.place_building", "Placing a building card."};

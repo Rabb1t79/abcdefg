@@ -19,8 +19,8 @@ Action Next(Phase phase, bool canFinish = false, bool canSkip = false, bool pack
 }
 
 int main() {
-    Check(Next(Phase::Idle) == Action::StartGame, "idle starts a run");
-    Check(Next(Phase::BlindSelection, false, true) == Action::SkipBlind, "skippable blind is skipped");
+    Check(Next(Phase::Idle) == Action::None, "idle never starts a run by itself");
+    Check(Next(Phase::BlindSelection, false, true) == Action::StartBlind, "blind is never skipped automatically");
     Check(Next(Phase::BlindSelection) == Action::StartBlind, "locked blind is started");
     Check(Next(Phase::Playing, true) == Action::FinishBlind, "finishable blind ends directly");
     Check(Next(Phase::Playing, false, false, false, 0, 3, 25) == Action::PlaceBuilding, "hand and cells place a building");
