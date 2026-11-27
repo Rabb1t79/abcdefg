@@ -52,6 +52,7 @@ uint64_t last_signature{};
 int stall_rounds{};
 int escalate{};
 std::atomic_int pending_submit{-1};
+std::atomic_int run_mode{0};
 struct View {
     std::string status;
     std::string detail;
@@ -623,8 +624,8 @@ void ANOMALY_CALL Update(void*, double) noexcept {
                 std::to_string(value.money), std::to_string(value.playsLeft)});
         auto decision = tycoon::Decide({value.phase, value.canFinish, value.canSkip, value.pendingPack,
             value.pickCount, value.handCount, value.cellCount});
-        if (value.phase == tycoon::Phase::Playing) {
-            if (escalate < 3) {
+        if (value.phase == tycoon::Phase::Playing && run_mode.load() == 0) {
+            {
                 // 先把本地分数抬到达标线，让游戏自己的判定通过，再由它结算。
                 if (value.score < value.target) {
                     const auto offset = Field(r, value.component, "CurrentBlindScore", 4, "IntProperty");
@@ -647,8 +648,7 @@ void ANOMALY_CALL Update(void*, double) noexcept {
         const auto signature = Signature(value);
         if (last_action == static_cast<int32_t>(decision.action) && signature == last_signature) ++stall_rounds;
         else { stall_rounds = 0; escalate = 0; last_signature = signature; last_action = static_cast<int32_t>(decision.action); }
-        if (stall_rounds >= 2 && escalate < 8) { ++escalate; stall_rounds = 0; DebugLog("escalate=" + std::to_string(escalate % 3)); }
-        if (escalate >= 9) {
+        if (stall_rounds >= 6) {
             Publish(localizer.Text("status.stalled", "The game stopped accepting the action; automation stopped."), state_text);
             enabled.store(false);
             MarkDirty();
@@ -695,6 +695,16 @@ void DrawControls(const AnomalyUiServiceV1* ui) noexcept {
                 StringView(localizer.Label("option.fast", "End blinds directly when allowed", "tycoondeck-fast")), &fast)) {
             fast_finish.store(fast != 0);
             MarkDirty();
+        }
+        if (ui->button && ui->same_line) {
+            if (ui->button(ui->user, StringView(localizer.Label("button.direct", "Complete now", "tycoondeck-direct")), 150.0f, 0.0f)) {
+                enabled.store(true); run_mode.store(0); ++intent; MarkDirty();
+            }
+            ui->same_line(ui->user, 0.0f, 8.0f);
+            if (ui->button(ui->user, StringView(localizer.Label("button.fallback", "Play fallback", "tycoondeck-fallback")), 150.0f, 0.0f)) {
+                enabled.store(true); run_mode.store(1); ++intent; MarkDirty();
+            }
+            ui->separator(ui->user);
         }
         if (!entries.empty() && ui->button && ui->same_line) {
             ui->text(ui->user, StringView(localizer.Format("label.entries", "Challenge entries: {0}",

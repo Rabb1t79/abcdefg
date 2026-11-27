@@ -36,6 +36,8 @@
     "status.opening": "正在打开活动场景。",
     "label.entries": "挑战入口：{0}",
     "button.submit": "上报完成",
+    "button.direct": "直接完成本局",
+    "button.fallback": "放牌兜底",
     "status.data_changed": "牌局数据发生变化，自动推进已停止；重新开关一次即可重试。",
     "label.state": "阶段 {0} · 幕 {1} · 层 {2}",
     "label.score": "分数 {0} / 目标 {1} · 资金 {2} · 出牌 {3}",
