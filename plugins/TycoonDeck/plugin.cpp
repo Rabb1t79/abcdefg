@@ -614,6 +614,8 @@ void ANOMALY_CALL Update(void*, double) noexcept {
         static_cast<void>(ReadPlayer(r, player));
         if (entries.empty() && now >= next_scan) {
             entries = ScanChallenges(r);
+        static Clock::time_point next_diag{};
+        if (now >= next_diag) { next_diag = now + std::chrono::seconds(15); Diagnose(r, 0, 0); }
             DebugLog("scan entries=" + std::to_string(entries.size()));
             next_scan = now + std::chrono::seconds(10);
         }
