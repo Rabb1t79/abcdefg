@@ -148,17 +148,13 @@ int ReadPhase(const Reader& r, uintptr_t object, uintptr_t fn, tycoon::Phase& va
 
 enum class Stage { Ok, NoWorld, NoPlayer, NoComponent, NoInterface };
 bool ReadPlayer(const Reader& r, uintptr_t& player) {
-    uintptr_t asset = Find(r, "/Script/HTGame.Default__HTBalatroLikeDataAsset");
-    if (!asset || (asset & 7)) {
-        const auto util = Find(r, "/Script/HTGame.Default__HTUtil");
-        const auto get = Checked(r, "HTGame", "HTUtil", "GetBalatroLikeDataAsset", 1, 8, {{"ReturnValue", 0, 8, "ObjectProperty"}});
-        uintptr_t called{};
-        if (util && get) static_cast<void>(Invoke(r, util, get, &called));
-        if (called > 0x10000 && (called & 7) == 0) asset = called;
-    }
-    if (!asset || (asset & 7)) return out;
+    const auto world = World(r);
+    const auto util = Find(r, "/Script/HTGame.Default__HTUtil");
+    const auto fn = Checked(r, "HTGame", "HTUtil", "GetMainPlayerState", 2, 16,
+        {{"WorldContextObject", 0, 8, "ObjectProperty"}, {"ReturnValue", 8, 8, "ObjectProperty"}});
+    ObjectQuery query{world};
     player = 0;
-    if (!util || !fn || !Invoke(r, util, fn, &query) || !query.result) return false;
+    if (!world || !util || !fn || !Invoke(r, util, fn, &query) || !query.result) return false;
     player = query.result;
     return r.IsA(player, "HTPlayerState");
 }
