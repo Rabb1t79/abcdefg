@@ -53,6 +53,7 @@ int stall_rounds{};
 int escalate{};
 std::atomic_int pending_submit{-1};
 std::atomic_int run_mode{0};
+std::vector<std::pair<int32_t,int32_t>> used_cells;
 struct View {
     std::string status;
     std::string detail;
@@ -117,11 +118,17 @@ int ReadCell(const Reader& r, uintptr_t object, int32_t& x, int32_t& y) {
     int32_t count{};
     if (offset < 0) return -1;
     if (!r.Read(object + offset, data) || !r.Read(object + offset + 8, count) || !data || count <= 0) return 0;
-    int32_t cell[2]{};
-    if (!r.Read(data, cell)) return -1;
-    x = cell[0];
-    y = cell[1];
-    return count;
+    for (int32_t i = 0; i < count && i < 256; ++i) {
+        int32_t cell[2]{};
+        if (!r.Read(data + 8u * static_cast<uintptr_t>(i), cell)) return -1;
+        bool taken = false;
+        for (const auto& used : used_cells) if (used.first == cell[0] && used.second == cell[1]) { taken = true; break; }
+        if (taken) continue;
+        x = cell[0];
+        y = cell[1];
+        return count - static_cast<int32_t>(used_cells.size());
+    }
+    return 0;
 }int ReadBool(const Reader& r, uintptr_t object, uintptr_t fn, bool& value) {
     uint8_t raw{};
     if (!fn || !Invoke(r, object, fn, &raw) || raw > 1) return 0;
@@ -243,7 +250,9 @@ Dispatch Submit(const Reader& r, const State& value, tycoon::Action action) {
     std::array<int32_t, 3> place{0, value.cellX, value.cellY};
     const auto parameters = action == tycoon::Action::ConfirmPack ? static_cast<void*>(&picks)
         : action == tycoon::Action::PlaceBuilding ? static_cast<void*>(place.data()) : nullptr;
-    return Invoke(r, value.component, fn, parameters) ? Dispatch::Sent : Dispatch::Failed;
+    const auto sent = Invoke(r, value.component, fn, parameters);
+    if (sent && action == tycoon::Action::PlaceBuilding) used_cells.emplace_back(value.cellX, value.cellY);
+    return sent ? Dispatch::Sent : Dispatch::Failed;
 }
 
 // 调试日志：只在插件 state 目录追加小行，便于在没有控制台时定位请求被拒的原因。
@@ -550,7 +559,7 @@ void ANOMALY_CALL Update(void*, double) noexcept {
         }
         if (!framework->is_game_thread || !framework->is_game_thread(framework->user)) return;
         const auto token = intent.load();
-        if (applied_intent != token) { applied_intent = token; next_poll = {}; }
+        if (applied_intent != token) { applied_intent = token; next_poll = {}; used_cells.clear(); }
         const auto now = Clock::now();
         if (now < next_poll) return;
         next_poll = now + std::chrono::milliseconds(400);
@@ -624,20 +633,12 @@ void ANOMALY_CALL Update(void*, double) noexcept {
                 std::to_string(value.money), std::to_string(value.playsLeft)});
         auto decision = tycoon::Decide({value.phase, value.canFinish, value.canSkip, value.pendingPack,
             value.pickCount, value.handCount, value.cellCount});
-        if (value.phase == tycoon::Phase::Playing && run_mode.load() == 0) {
-            {
-                // 先把本地分数抬到达标线，让游戏自己的判定通过，再由它结算。
-                if (value.score < value.target) {
-                    const auto offset = Field(r, value.component, "CurrentBlindScore", 4, "IntProperty");
-                    auto target = value.target;
-                    if (offset >= 0 && core && core->write_memory &&
-                        core->write_memory(core->user, value.component + offset,
-                            {reinterpret_cast<const uint8_t*>(&target), sizeof(target)}).code == ANOMALY_STATUS_V1_OK)
-                        DebugLog("boost score -> " + std::to_string(target));
-                }
-                decision = {tycoon::Action::FinishBlind, "status.finish_blind", "Ending the current blind."};
-            }
-            // escalate >= 3 时保留 Decide() 的结果，退回放牌/结算兜底。
+        // Legal actions: place buildings, then settle; finish the blind once the target is met.
+        if (value.phase != tycoon::Phase::Playing) used_cells.clear();
+        if (value.phase == tycoon::Phase::Playing) {
+            if (value.canFinish) decision = {tycoon::Action::FinishBlind, "status.finish_blind", "Ending the current blind."};
+            else if (value.handCount > 0 && value.cellCount > 0) decision = {tycoon::Action::PlaceBuilding, "status.place_building", "Placing a building card."};
+            else decision = {tycoon::Action::Settle, "status.settle", "Settling the current board."};
         }
         if (decision.action == tycoon::Action::None) {
             if (value.phase == tycoon::Phase::Idle)
