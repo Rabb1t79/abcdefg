@@ -50,6 +50,7 @@ Clock::time_point next_bootstrap{};
 int32_t last_action{-1};
 uint64_t last_signature{};
 int stall_rounds{};
+int escalate{};
 std::atomic_int pending_submit{-1};
 struct View {
     std::string status;
@@ -205,7 +206,14 @@ Dispatch Submit(const Reader& r, const State& value, tycoon::Action action) {
     case tycoon::Action::StartGame: fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestStartGame", 0, 0, {}); break;
     case tycoon::Action::StartBlind: fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestStartCurrentBlind", 0, 0, {}); break;
     case tycoon::Action::SkipBlind: fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestSkipCurrentBlind", 0, 0, {}); break;
-    case tycoon::Action::FinishBlind: fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestFinishCurrentBlind", 0, 0, {}); break;
+    case tycoon::Action::FinishBlind: {
+        const auto pick = escalate % 3;
+        if (pick == 0) fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestFinishCurrentBlind", 0, 0, {});
+        else if (pick == 1) fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestManualSettlement", 0, 0, {});
+        else fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestEndGame", 0, 0, {});
+        DebugLog("finish attempt=" + std::to_string(pick) + " fn=" + std::to_string(fn != 0));
+        break;
+    }
     case tycoon::Action::PlaceBuilding:
         fn = Checked(r, "HTGame", "HTBalatroLikeComponent", "RequestPlaceBuilding", 3, 12,
             {{"InHandIndex", 0, 4, "IntProperty"}, {"InGridX", 4, 4, "IntProperty"}, {"InGridY", 8, 4, "IntProperty"}});
@@ -615,9 +623,8 @@ void ANOMALY_CALL Update(void*, double) noexcept {
                 std::to_string(value.money), std::to_string(value.playsLeft)});
         auto decision = tycoon::Decide({value.phase, value.canFinish, value.canSkip, value.pendingPack,
             value.pickCount, value.handCount, value.cellCount});
-        if (!fast_finish.load() && decision.action == tycoon::Action::FinishBlind &&
-            value.phase == tycoon::Phase::Playing && value.handCount > 0 && value.cellCount > 0)
-            decision = {tycoon::Action::PlaceBuilding, "status.place_building", "Placing a building card."};
+        if (value.phase == tycoon::Phase::Playing)
+            decision = {tycoon::Action::FinishBlind, "status.finish_blind", "Ending the current blind."};
         if (decision.action == tycoon::Action::None) {
             if (value.phase == tycoon::Phase::Idle)
                 Publish(localizer.Text("status.waiting_play", "Press play in the game to start a run."), state_text);
@@ -626,8 +633,9 @@ void ANOMALY_CALL Update(void*, double) noexcept {
         }
         const auto signature = Signature(value);
         if (last_action == static_cast<int32_t>(decision.action) && signature == last_signature) ++stall_rounds;
-        else { stall_rounds = 0; last_signature = signature; last_action = static_cast<int32_t>(decision.action); }
-        if (stall_rounds >= 4) {
+        else { stall_rounds = 0; escalate = 0; last_signature = signature; last_action = static_cast<int32_t>(decision.action); }
+        if (stall_rounds >= 2 && escalate < 8) { ++escalate; stall_rounds = 0; DebugLog("escalate=" + std::to_string(escalate % 3)); }
+        if (escalate >= 9) {
             Publish(localizer.Text("status.stalled", "The game stopped accepting the action; automation stopped."), state_text);
             enabled.store(false);
             MarkDirty();
