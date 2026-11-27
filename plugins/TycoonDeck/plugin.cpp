@@ -51,6 +51,7 @@ int32_t last_action{-1};
 uint64_t last_signature{};
 int stall_rounds{};
 int escalate{};
+int phase_tier{};
 std::atomic_int pending_submit{-1};
 std::atomic_int run_mode{0};
 std::vector<std::pair<int32_t,int32_t>> used_cells;
@@ -306,6 +307,39 @@ std::vector<RowEntry> ScanChallenges(const Reader& r) {
 }
 std::vector<RowEntry> entries;
 Clock::time_point next_scan{};
+// 侦查扫描：把入口数据链与关键字段/函数逐项写进日志，任何一环断了都能从日志定位。
+void Diagnose(const Reader& r, uintptr_t player, uintptr_t component) noexcept {
+    try {
+        const auto util = Find(r, "/Script/HTGame.Default__HTUtil");
+        const auto get = Checked(r, "HTGame", "HTUtil", "GetBalatroLikeDataAsset", 1, 8, {{"ReturnValue", 0, 8, "ObjectProperty"}});
+        uintptr_t asset{};
+        if (util && get) static_cast<void>(Invoke(r, util, get, &asset));
+        DebugLog("diag player=0x" + std::to_string(player) + " comp=0x" + std::to_string(component) + " asset=0x" + std::to_string(asset) + " getfn=" + std::to_string(get != 0));
+        if (asset) {
+            const auto table_off = Field(r, asset, "DT_NPCChallenges", 8, "ObjectProperty");
+            uintptr_t table{};
+            if (table_off >= 0) static_cast<void>(r.Read(asset + table_off, table));
+            DebugLog("diag table_off=" + std::to_string(table_off) + " table=0x" + std::to_string(table));
+            if (table) {
+                const auto map_off = Field(r, table, "RowMap", 0x50, "MapProperty");
+                RowArrayHdr header{};
+                if (map_off >= 0) static_cast<void>(r.Read(table + map_off, header));
+                DebugLog("diag rowmap_off=" + std::to_string(map_off) + " data=0x" + std::to_string(header.data) + " count=" + std::to_string(header.count));
+            }
+        }
+        const auto score_off = Field(r, component, "CurrentBlindScore", 4, "IntProperty");
+        const auto target_off = Field(r, component, "BlindTargetScore", 4, "IntProperty");
+        const auto hand_off = Field(r, component, "HandCards", 16, "ArrayProperty");
+        const auto cells_off = Field(r, component, "SyncedAvailableGridCells", 16, "ArrayProperty");
+        DebugLog("diag fields score=" + std::to_string(score_off) + " target=" + std::to_string(target_off) +
+            " hand=" + std::to_string(hand_off) + " cells=" + std::to_string(cells_off));
+        for (const auto name : {"RequestPlaceBuilding", "RequestManualSettlement", "RequestFinishCurrentBlind",
+                 "RequestEndGame", "ServerSubmitQuest", "RequestSelectFlow", "RequestStartNPCChallenge"}) {
+            const auto fn = Find(r, std::string("/Script/HTGame.") + (std::string(name) == "ServerSubmitQuest" ? "HTPlayerState." : "HTBalatroLikeComponent.") + name);
+            DebugLog(std::string("diag fn ") + name + "=0x" + std::to_string(fn));
+        }
+    } catch (...) {}
+}
 void DebugLog(const std::string& line) {
     if (state_directory.empty()) return;
     const auto path = state_directory + "\\tycoondeck-debug.log";
@@ -640,7 +674,21 @@ void ANOMALY_CALL Update(void*, double) noexcept {
             else if (value.handCount > 0 && value.cellCount > 0) decision = {tycoon::Action::PlaceBuilding, "status.place_building", "Placing a building card."};
             else decision = {tycoon::Action::Settle, "status.settle", "Settling the current board."};
         }
-        if (decision.action == tycoon::Action::None) {
+        // 优先级：直接写分 → 只调结算 → 兜底摆牌（后者由上面的默认分支产生）
+        if (value.phase == tycoon::Phase::Playing && phase_tier < 2) {
+            if (phase_tier == 0) {
+                const auto offset = Field(r, value.component, "CurrentBlindScore", 4, "IntProperty");
+                int32_t want = value.target;
+                bool written = false;
+                if (offset >= 0 && core && core->write_memory)
+                    written = core->write_memory(core->user, value.component + offset,
+                        {reinterpret_cast<const uint8_t*>(&want), sizeof(want)}).code == ANOMALY_STATUS_V1_OK;
+                DebugLog(std::string("tier0 write off=") + std::to_string(offset) + " ok=" + std::to_string(written) + " want=" + std::to_string(want));
+                if (written) value.score = want;
+            }
+            DebugLog("tier" + std::to_string(phase_tier) + " settle");
+            decision = {tycoon::Action::FinishBlind, "status.finish_blind", "Ending the current blind."};
+        }        if (decision.action == tycoon::Action::None) {
             if (value.phase == tycoon::Phase::Idle)
                 Publish(localizer.Text("status.waiting_play", "Press play in the game to start a run."), state_text);
             else Publish(localizer.Text("status.settled", "This run has ended."), state_text);
@@ -649,6 +697,7 @@ void ANOMALY_CALL Update(void*, double) noexcept {
         const auto signature = Signature(value);
         if (last_action == static_cast<int32_t>(decision.action) && signature == last_signature) ++stall_rounds;
         else { stall_rounds = 0; escalate = 0; last_signature = signature; last_action = static_cast<int32_t>(decision.action); }
+        if (stall_rounds >= 2 && phase_tier < 2) { ++phase_tier; stall_rounds = 0; DebugLog("tier -> " + std::to_string(phase_tier)); }
         if (stall_rounds >= 6) {
             Publish(localizer.Text("status.stalled", "The game stopped accepting the action; automation stopped."), state_text);
             enabled.store(false);
