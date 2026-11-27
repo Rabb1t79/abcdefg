@@ -623,8 +623,21 @@ void ANOMALY_CALL Update(void*, double) noexcept {
                 std::to_string(value.money), std::to_string(value.playsLeft)});
         auto decision = tycoon::Decide({value.phase, value.canFinish, value.canSkip, value.pendingPack,
             value.pickCount, value.handCount, value.cellCount});
-        if (value.phase == tycoon::Phase::Playing)
-            decision = {tycoon::Action::FinishBlind, "status.finish_blind", "Ending the current blind."};
+        if (value.phase == tycoon::Phase::Playing) {
+            if (escalate < 3) {
+                // 先把本地分数抬到达标线，让游戏自己的判定通过，再由它结算。
+                if (value.score < value.target) {
+                    const auto offset = Field(r, value.component, "CurrentBlindScore", 4, "IntProperty");
+                    auto target = value.target;
+                    if (offset >= 0 && core && core->write_memory &&
+                        core->write_memory(core->user, value.component + offset,
+                            {reinterpret_cast<const uint8_t*>(&target), sizeof(target)}).code == ANOMALY_STATUS_V1_OK)
+                        DebugLog("boost score -> " + std::to_string(target));
+                }
+                decision = {tycoon::Action::FinishBlind, "status.finish_blind", "Ending the current blind."};
+            }
+            // escalate >= 3 时保留 Decide() 的结果，退回放牌/结算兜底。
+        }
         if (decision.action == tycoon::Action::None) {
             if (value.phase == tycoon::Phase::Idle)
                 Publish(localizer.Text("status.waiting_play", "Press play in the game to start a run."), state_text);
